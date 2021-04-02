@@ -16,7 +16,8 @@ void printScreen()
    ((machinestate == 90)  && OFFLINEGLOGO == 0) 
   ) 
   {
-  
+      //DEBUG_println(weight);
+      //DEBUG_println(digitalRead(PINBREWSWITCH));
       u8g2.clearBuffer();
       u8g2.setFont(u8g2_font_profont11_tf); // set font
       u8g2.drawXBMP(0, 0, logo_width, logo_height, logo_bits_u8g2);   //draw temp icon
