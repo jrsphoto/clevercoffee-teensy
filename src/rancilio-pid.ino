@@ -348,7 +348,7 @@ std::vector<editable_t> editableVars = {
     {"AP_WIFI_KEY", "AP WiFi Password", kCString, (void *)AP_WIFI_KEY},
     {"START_KP", "Start P", kDouble, (void *)&startKp},
     {"START_TN", "Start I", kDouble, (void *)&startTn},
-    {"STEAM_MODE", "Steam mode", kInteger, (void *)&SteamON}
+    {"STEAM_MODE", "STEAM MODE", rInteger, (void *)&SteamON}
 };
 
 unsigned long lastTempEvent = 0;
@@ -2004,6 +2004,7 @@ void setup()
         {
             setEepromWriteFcn(writeSysParamsToStorage);
             setBlynkWriteFcn(writeSysParamsToBlynk);
+            setSteammodeFcn(setSteammode);
             if (readSysParamsFromStorage() != 0)
               {
                 #if DISPLAY != 0
@@ -2545,6 +2546,27 @@ int readSysParamsFromStorage(void)
  * \return  0 - succeed
  *         <0 - failed
  ******************************************************************************/
+int setSteammode(void)
+{
+  if(SteamON == 0) 
+  {
+    SteamON = 1;
+    Serial.printf("Steammode was 0, is 1 now\n");
+    return 1;
+  }
+  if(SteamON == 1) 
+  {
+    SteamON = 0;
+    Serial.printf("Steammode was 1, is 0 now\n");
+    return 1;
+  }
+   if ( BLYNK == 1 && Blynk.connected())
+   {
+      Blynk.virtualWrite(V15, SteamON);
+   }
+
+}
+
 int writeSysParamsToStorage(void)
 {
   storageSet(STO_ITEM_PID_KP_REGULAR, aggKp);
@@ -2569,6 +2591,7 @@ int writeSysParamsToStorage(void)
 int writeSysParamsToBlynk(void)
 {
  if ( BLYNK == 1 && Blynk.connected())
+ {
   Blynk.virtualWrite(V2, Input);
   Blynk.virtualWrite(V4, aggKp);
   Blynk.virtualWrite(V5, aggTn);
@@ -2590,6 +2613,6 @@ int writeSysParamsToBlynk(void)
     Blynk.virtualWrite(V11, startKp);
     Blynk.virtualWrite(V14, startTn);
   #endif
-
+  }
   return 1;
 }
