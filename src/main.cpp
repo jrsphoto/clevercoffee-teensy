@@ -1170,9 +1170,6 @@ void loopPid() {
         shotTimerScale(); // Calculation of weight of shot while brew is running
     }
 
-    brew();
-    manualFlush();
-
     if (config.get<bool>("hardware.sensors.pressure.enabled")) {
         if (const unsigned long currentMillisPressure = millis(); currentMillisPressure - previousMillisPressure >= intervalPressure) {
             previousMillisPressure = currentMillisPressure;
