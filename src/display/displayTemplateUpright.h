@@ -25,7 +25,6 @@ inline void printScreen() {
         return;
     }
 
-    // If no specific machine state was printed, print default:
     u8g2->clearBuffer();
     if (machineState == kWaterTankEmpty) {
         u8g2->drawXBMP(8, 50, Water_Tank_Empty_Logo_width, Water_Tank_Empty_Logo_height, Water_Tank_Empty_Logo);
@@ -34,15 +33,14 @@ inline void printScreen() {
         u8g2->setFont(u8g2_font_profont11_tf);
         displayMessage(langstring_error_tsensor_ur[0], langstring_error_tsensor_ur[1], String(temperature), langstring_error_tsensor_ur[2], langstring_error_tsensor_ur[3], langstring_error_tsensor_ur[4]);
     }
-
     else if (config.get<bool>("display.pid_off_logo") && machineState == kStandby) {
         u8g2->drawXBMP(6, 50, Off_Logo_width, Off_Logo_height, Off_Logo);
         u8g2->setCursor(1, 110);
         u8g2->setFont(u8g2_font_profont10_tf);
         u8g2->print("Standby mode");
     }
-
     else {
+        // no fullscreen states
         u8g2->setFont(u8g2_font_profont11_tf);
         u8g2->setCursor(1, 14);
         u8g2->print(langstring_current_temp_ur);
@@ -58,15 +56,12 @@ inline void printScreen() {
         u8g2->print("C");
 
         // Draw heat bar
-        u8g2->drawLine(0, 124, 63, 124);
-        u8g2->drawLine(0, 124, 0, 127);
-        u8g2->drawLine(64, 124, 63, 127);
-        u8g2->drawLine(0, 127, 63, 127);
-        u8g2->drawLine(1, 125, pidOutput / 16.13 + 1, 125);
-        u8g2->drawLine(1, 126, pidOutput / 16.13 + 1, 126);
+        u8g2->drawFrame(0, 124, 64, 4);
+        u8g2->drawLine(1, 125, (pidOutput / 16.13) + 1, 125);
+        u8g2->drawLine(1, 126, (pidOutput / 16.13) + 1, 126);
 
+        // logos that only fill the lower half leaving temperatures, top and bottom boxes
         if (config.get<bool>("display.pid_off_logo") && machineState == kPidDisabled) {
-
             u8g2->drawXBMP(6, 50, Off_Logo_width, Off_Logo_height, Off_Logo);
             u8g2->setCursor(1, 110);
             u8g2->setFont(u8g2_font_profont10_tf);
@@ -81,14 +76,13 @@ inline void printScreen() {
         // Show the heating logo when we are in regular PID mode
         else if (config.get<bool>("display.heating_logo") && machineState == kPidNormal && setpoint - temperature > 0.3) {
             // For status info
-
             u8g2->drawXBMP(12, 50, Heating_Logo_width, Heating_Logo_height, Heating_Logo);
             u8g2->setFont(u8g2_font_fub17_tf);
             u8g2->setCursor(8, 90);
             u8g2->print(temperature, 1);
         }
         else {
-            // print heating status
+            // print status
             if (scaleEnabled && pressureEnabled) {
                 u8g2->setCursor(1, 65);
             }
@@ -101,18 +95,14 @@ inline void printScreen() {
 
             u8g2->setFont(u8g2_font_profont22_tf);
 
-            if (fabs(temperature - setpoint) < 0.3) {
-                if (isrCounter < 500) {
-                    if (featureBrewControl && machineState == kManualFlush) {
-                        u8g2->print("FLUSH"); // no flush function if optocoupler? manual flush is still triggered if momentary
-                    }
-                    else if (shouldDisplayBrewTimer()) {
-                        u8g2->print("BREW");
-                    }
-                    else {
-                        u8g2->print("OK");
-                    }
-                }
+            if (featureBrewControl && machineState == kManualFlush) {
+                u8g2->print("FLUSH");
+            }
+            else if (shouldDisplayBrewTimer()) {
+                u8g2->print("BREW");
+            }
+            else if ((fabs(temperature - setpoint) < 0.3) && (isrCounter < 500)) {
+                u8g2->print("OK");
             }
             else {
                 u8g2->print("WAIT");
@@ -212,8 +202,9 @@ inline void printScreen() {
             }
         }
 
-        // For status info
+        // Status info in top bar
         u8g2->drawFrame(0, 0, 64, 12);
+        u8g2->setFont(u8g2_font_profont11_tf);
 
         if (offlineMode == 0) {
             getSignalStrength();
@@ -225,15 +216,18 @@ inline void printScreen() {
                     u8g2->drawVLine(13 + b * 2, 10 - b * 2, b * 2);
                 }
             }
-            else {
-                u8g2->setCursor(24, 2);
-                u8g2->print("");
+            if (config.get<bool>("mqtt.enabled")) {
+                if (mqtt.connected() == 1) {
+                    u8g2->setCursor(24, 1);
+                    u8g2->print("MQTT");
+                }
             }
         }
         else {
             u8g2->setCursor(4, 1);
             u8g2->print("Offline");
         }
+        displayWaterIcon(55, 2);
     }
 
     u8g2->sendBuffer();

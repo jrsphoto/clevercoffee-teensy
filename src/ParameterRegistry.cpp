@@ -32,7 +32,6 @@ extern double backflushFlushTime;
 extern bool standbyModeOn;
 extern double standbyModeTime;
 extern bool featureBrewControl;
-extern bool featureInvertDisplay;
 extern bool featureFullscreenBrewTimer;
 extern bool featureFullscreenManualFlushTimer;
 extern double postBrewTimerDuration;
@@ -517,7 +516,7 @@ void ParameterRegistry::initialize(Config& config) {
         "Invert Display",
         sDisplaySection,
         902,
-        &featureInvertDisplay,
+        nullptr,
         "Set the display rotation, changes require a reboot"
     );
 

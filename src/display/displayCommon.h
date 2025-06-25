@@ -9,8 +9,6 @@
 #include "bitmaps.h"
 #include "languages.h"
 
-inline bool featureInvertDisplay = false;
-
 inline const u8g2_cb_t* getU8G2Rotation(const int rotationValue) {
     switch (rotationValue) {
         case 0:
@@ -37,7 +35,7 @@ inline void u8g2_prepare() {
     u8g2->setDrawColor(1);
     u8g2->setFontPosTop();
     u8g2->setFontDirection(0);
-    if (featureInvertDisplay) {
+    if (config.get<bool>("display.inverted")) {
         rotation += 2;
     }
     if (config.get<int>("display.template") == 4) {
@@ -484,7 +482,7 @@ inline bool displayFullscreenBrewTimer() {
             else {
                 displayBrewtimeFs(1, 80, currBrewTime);
             }
-            displayWaterIcon(55, 1);
+            displayWaterIcon(55, 2);
         }
         else {
             u8g2->drawXBMP(-1, 11, Brew_Cup_Logo_width, Brew_Cup_Logo_height, Brew_Cup_Logo);
@@ -525,7 +523,7 @@ inline bool displayFullscreenManualFlushTimer() {
         if (config.get<int>("display.template") == 4) {
             u8g2->drawXBMP(12, 12, Manual_Flush_Logo_width, Manual_Flush_Logo_height, Manual_Flush_Logo);
             displayBrewtimeFs(1, 80, currBrewTime);
-            displayWaterIcon(55, 1);
+            displayWaterIcon(55, 2);
         }
         else {
             u8g2->drawXBMP(0, 12, Manual_Flush_Logo_width, Manual_Flush_Logo_height, Manual_Flush_Logo);
