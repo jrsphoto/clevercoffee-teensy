@@ -94,8 +94,6 @@ inline void displayUptime(const int x, const int y, const char* format) {
  * @brief Draw a WiFi signal strength indicator at the given coordinates
  */
 inline void displayWiFiStatus(const int x, const int y) {
-    getSignalStrength();
-
     if (WiFi.status() == WL_CONNECTED) {
         u8g2->drawXBMP(x, y, 8, 8, Antenna_OK_Icon);
 
@@ -105,7 +103,7 @@ inline void displayWiFiStatus(const int x, const int y) {
     }
     else {
         u8g2->drawXBMP(x, y, 8, 8, Antenna_NOK_Icon);
-        u8g2->setCursor(x + 5, y + 10);
+        u8g2->setCursor(x + 12, y - 1);
         u8g2->setFont(u8g2_font_profont11_tf);
         u8g2->print("RC: ");
         u8g2->print(wifiReconnects);
@@ -121,6 +119,9 @@ inline void displayMQTTStatus(const int x, const int y) {
             u8g2->setCursor(x, y);
             u8g2->setFont(u8g2_font_profont11_tf);
             u8g2->print("MQTT");
+            if (getSignalStrength() <= 1) {
+                u8g2->print("!");
+            }
         }
         else {
             u8g2->setCursor(x, y);
@@ -537,9 +538,25 @@ inline bool displayFullscreenManualFlushTimer() {
 }
 
 /**
+ * @brief display offline message
+ */
+inline bool displayOfflineMode() {
+    if (displayOffline > 0 && displayOffline < 20) {
+        displayMessage("", "", "", "", "Begin Fallback,", "No Wifi");
+        displayOffline++;
+        return true;
+    }
+    return false;
+}
+
+/**
  * @brief display heating logo
  */
 inline bool displayMachineState() {
+    if (displayOfflineMode()) {
+        return true;
+    }
+
     // Show the heating logo when we are in regular PID mode and more than 5degC below the set point
     if (featureHeatingLogo > 0 && (machineState == kPidNormal || machineState == kSteam) && setpoint - temperature > 5.) {
         // For status info

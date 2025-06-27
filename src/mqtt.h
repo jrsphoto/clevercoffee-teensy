@@ -301,7 +301,9 @@ inline int writeSysParamsToMQTT(const bool continueOnError = true) {
                     LOGF(WARNING, "Failed to publish parameter %s to MQTT, error: %d", mqttTopic, errorState);
                 }
                 else {
-                    LOGF(DEBUG, "Published %s = %s to MQTT", mqttTopic, data);
+                    IFLOG(DEBUG) {
+                        LOGF(DEBUG, "Published %s = %s to MQTT", mqttTopic, data);
+                    }
                 }
             }
 

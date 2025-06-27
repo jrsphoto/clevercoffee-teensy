@@ -82,6 +82,7 @@ MachineState lastmachinestate = kInit;
 int lastmachinestatepid = -1;
 
 bool offlineMode = false;
+int displayOffline = 0;
 
 // Display
 U8G2* u8g2 = nullptr;
@@ -303,7 +304,7 @@ void testEmergencyStop() {
  */
 void initOfflineMode() {
     if (config.get<bool>("hardware.oled.enabled")) {
-        displayMessage("", "", "", "", "Begin Fallback,", "No Wifi");
+        displayOffline = 1;
     }
 
     LOG(INFO, "Start offline mode with eeprom values, no wifi :(");
@@ -314,45 +315,50 @@ void initOfflineMode() {
  * @brief Check if Wifi is connected, if not reconnect abort function if offline, or brew is running
  */
 void checkWifi() {
+    static int wifiConnectCounter = 1;
+    static bool wifiConnectedHandled = false;
     if (offlineMode || currBrewState > kBrewIdle) return;
 
-    // There was no WIFI connection at boot -> connect and if it does not succeed, enter offline mode
-    do {
-        if ((millis() - lastWifiConnectionAttempt >= wifiConnectionDelay) && (wifiReconnects <= maxWifiReconnects)) {
-            int statusTemp = WiFi.status();
+    // Try to connect and if it does not succeed, enter offline mode
 
-            if (statusTemp != WL_CONNECTED) { // check WiFi connection status
-                lastWifiConnectionAttempt = millis();
+    if ((millis() - lastWifiConnectionAttempt >= wifiConnectionDelay) && (wifiReconnects <= maxWifiReconnects)) {
+        if (WiFi.status() != WL_CONNECTED) { // check WiFi connection status
+            wifiConnectedHandled = false;
+            if (wifiConnectCounter == 1) {
                 wifiReconnects++;
                 LOGF(INFO, "Attempting WIFI (re-)connection: %i", wifiReconnects);
-
-                if (!setupDone) {
-                    if (config.get<bool>("hardware.oled.enabled")) {
-                        displayMessage("", "", "", "", langstring_wifirecon, String(wifiReconnects));
-                    }
-                }
-
                 wm.disconnect();
-                wm.autoConnect();
-
-                int count = 1;
-
-                while (WiFi.status() != WL_CONNECTED && count <= 20) {
-                    delay(100); // give WIFI some time to connect
-                    count++;    // reconnect counter, maximum waiting time for reconnect = 20*100ms
+                WiFi.begin();
+            }
+            delay(20);                // give WIFI some time to connect
+            if (WiFi.status() != WL_CONNECTED && wifiConnectCounter < 100) {
+                wifiConnectCounter++; // reconnect counter, maximum waiting time for reconnect = 20*100ms plus loop times
+            }
+            else {
+                if (wifiConnectCounter == 100) {
+                    LOGF(INFO, "Wifi Reconnection failed - %i loops", wifiConnectCounter);
+                    lastWifiConnectionAttempt = millis();
+                    wifiConnectCounter = 1;
                 }
             }
         }
-
-        yield(); // Prevent WDT trigger
-    } while (!setupDone && wifiReconnects < maxWifiReconnects && WiFi.status() != WL_CONNECTED);
+        else {
+            if (wifiConnectedHandled == false) {
+                LOGF(INFO, "Wifi Reconnected - %i loops", wifiConnectCounter);
+                wifiConnectedHandled = true;
+                wifiConnectCounter = 1;
+            }
+        }
+    }
 
     if (wifiReconnects >= maxWifiReconnects && WiFi.status() != WL_CONNECTED) {
         // no wifi connection after trying connection, initiate offline mode
         initOfflineMode();
     }
     else {
-        wifiReconnects = 0;
+        if (WiFi.status() == WL_CONNECTED) {
+            wifiReconnects = 0;
+        }
     }
 }
 
@@ -739,17 +745,19 @@ void wiFiSetup() {
     bool oledEnabled = config.get<bool>("hardware.oled.enabled");
 
     if (wm.getWiFiIsSaved()) {
-        LOGF(INFO, "Connecting to WiFi: %s", hostname.c_str());
-
-        if (oledEnabled) {
-            displayLogo("Connecting to: ", hostname.c_str());
-        }
+        LOG(INFO, "Connecting to WiFi");
     }
-
     wm.setHostname(hostname.c_str());
-
-    if (wm.autoConnect(hostname.c_str(), pass)) {
-
+    wm.setEnableConfigPortal(false); // doesnt start config portal within autoconnect
+    wm.setDisableConfigPortal(true); // disables config portal on wifi save
+    bool wifiConnected = wm.autoConnect(hostname.c_str(), pass);
+    if (!wifiConnected) {
+        if (oledEnabled) {
+            displayLogo("Starting Portal AP", hostname.c_str());
+        }
+        wifiConnected = wm.startConfigPortal(hostname.c_str(), pass);
+    }
+    if (wifiConnected) {
         if (!config.save()) {
             LOG(ERROR, "Failed to save config to filesystem!");
         }
@@ -767,6 +775,9 @@ void wiFiSetup() {
         const String completemac = macaddr0 + macaddr1 + macaddr2 + macaddr3 + macaddr4 + macaddr5;
 
         LOGF(DEBUG, "MAC-ADDRESS: %s", completemac.c_str());
+        if (oledEnabled) {
+            displayLogo(langstring_connectwifi1, wm.getWiFiSSID(true));
+        }
     }
     else {
         LOG(INFO, "WiFi connection timed out...");
@@ -779,10 +790,6 @@ void wiFiSetup() {
         delay(1000);
 
         offlineMode = true;
-    }
-
-    if (oledEnabled) {
-        displayLogo(langstring_connectwifi1, wm.getWiFiSSID(true));
     }
 }
 
@@ -1087,11 +1094,18 @@ void loop() {
 }
 
 void loopPid() {
+    static bool wifiWasConnected = false;
     // Only do Wifi stuff, if Wifi is connected
     if (WiFi.status() == WL_CONNECTED && !offlineMode) {
+        if (wifiWasConnected == false) {
+            LOG(INFO, "WiFi Connected");
+            wifiWasConnected = true;
+        }
         if (mqtt_enabled) {
-            checkMQTT();
-            writeSysParamsToMQTT(true); // Continue on error
+            if (getSignalStrength() > 1) {
+                checkMQTT();
+                writeSysParamsToMQTT(true); // Continue on error
+            }
 
             if (mqtt.connected() == 1) {
                 mqtt.loop();
@@ -1125,6 +1139,7 @@ void loopPid() {
         wifiReconnects = 0; // reset wifi reconnects if connected
     }
     else {
+        wifiWasConnected = false;
         checkWifi();
     }
 
@@ -1142,7 +1157,9 @@ void loopPid() {
 
     if ((millis() - lastTempEvent) > tempEventInterval) {
         // send temperatures to website endpoint
-        sendTempEvent(temperature, brewSetpoint, pidOutput / 10); // pidOutput is promill, so /10 to get percent value
+        if (WiFi.status() == WL_CONNECTED && !offlineMode) {
+            sendTempEvent(temperature, brewSetpoint, pidOutput / 10); // pidOutput is promill, so /10 to get percent value
+        }
         lastTempEvent = millis();
 
         if (pidON) {

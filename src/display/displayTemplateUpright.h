@@ -25,6 +25,11 @@ inline void printScreen() {
         return;
     }
 
+    if (displayOfflineMode()) {
+        // Display was updated, end here
+        return;
+    }
+
     u8g2->clearBuffer();
     if (machineState == kWaterTankEmpty) {
         u8g2->drawXBMP(8, 50, Water_Tank_Empty_Logo_width, Water_Tank_Empty_Logo_height, Water_Tank_Empty_Logo);
@@ -204,28 +209,14 @@ inline void printScreen() {
 
         // Status info in top bar
         u8g2->drawFrame(0, 0, 64, 12);
-        u8g2->setFont(u8g2_font_profont11_tf);
-
-        if (offlineMode == 0) {
-            getSignalStrength();
-
-            if (WiFi.status() == WL_CONNECTED) {
-                u8g2->drawXBMP(4, 2, 8, 8, Antenna_OK_Icon);
-
-                for (int b = 0; b <= getSignalStrength(); b++) {
-                    u8g2->drawVLine(13 + b * 2, 10 - b * 2, b * 2);
-                }
-            }
-            if (config.get<bool>("mqtt.enabled")) {
-                if (mqtt.connected() == 1) {
-                    u8g2->setCursor(24, 1);
-                    u8g2->print("MQTT");
-                }
-            }
+        if (!offlineMode) {
+            displayWiFiStatus(4, 2);
+            displayMQTTStatus(21, 0);
         }
         else {
             u8g2->setCursor(4, 1);
-            u8g2->print("Offline");
+            u8g2->setFont(u8g2_font_profont11_tf);
+            u8g2->print(langstring_offlinemode);
         }
         displayWaterIcon(55, 2);
     }
