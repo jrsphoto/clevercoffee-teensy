@@ -553,7 +553,7 @@ inline bool displayFullscreenManualFlushTimer() {
 /**
  * @brief display fullscreen hot water on timer
  */
-inline bool displayFullscreenHotWaterOnTimer() {
+inline bool displayFullscreenHotWaterTimer() {
     if (!featureFullscreenHotWaterTimer) {
         return false;
     }
