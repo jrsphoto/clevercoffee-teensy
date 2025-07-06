@@ -32,9 +32,8 @@ We recommend you have a look at the manual before starting a build, you can find
 ## Chat and Support
 You will find more information, discussions, and support on our [Discord](https://discord.gg/Kq5RFznuU4) server.
 If you want to be part of the project and help with development of hardware, software and documentation you will also find the right channels there.
-**Please keep in mind that we only can give support for our own pcbs. We will not help with any hardware solutions that are not based on our own pcbs.**
-**Please do not offer any kind of pcb derivatives of our design or own developments without contacting us before.
-This can cause a ban on our discord server.**
+**Please keep in mind that we primarily give support for our own pcbs. We may not be able to help with any hardware solutions that are not based on our own pcbs.**
+**Please do not offer any kind of pcb derivatives of our design or own developments without contacting us before.**
 
 Video tutorial on how to flash the firmware (a little outdated but mostly still valid):<br>
 https://youtu.be/KZPjisOEcQ4
