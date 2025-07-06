@@ -1197,11 +1197,14 @@ void loopPid() {
     temperatureUpdateRunning = false;
 
     if (tempSensor != nullptr) {
-        temperature = tempSensor->getCurrentTemperature();
-    }
 
-    if (machineState != kSteam) {
-        temperature -= brewTempOffset;
+        if (machineState != kSteam) {
+            temperature = tempSensor->getCurrentTemperature();
+            temperature -= brewTempOffset;
+        }
+        else {
+            temperature = tempSensor->getCurrentTemperature();
+        }
     }
 
     static bool wifiWasConnected = false;
