@@ -1502,6 +1502,15 @@ void performSafeShutdown() {
         brewSwitchWasOff = false;
     }
 
+    // Reset manual flush states
+    if (currManualFlushState != kManualFlushIdle) {
+        LOG(INFO, "Stopping manual group head flush");
+        currManualFlushState = kManualFlushIdle;
+        currBrewSwitchState = kBrewSwitchIdle;
+        currBrewTime = 0;
+        startingTime = 0;
+    }
+
     // Reset backflush state
     if (currBackflushState != kBackflushIdle) {
         LOG(INFO, "Stopping active backflush");
