@@ -204,7 +204,7 @@ double aggbKd = aggbTv * aggbKp;
 double aggKi = (aggTn == 0) ? 0 : aggKp / aggTn;
 double aggKd = aggTv * aggKp;
 
-double brewPIDDelay = BREW_PID_DELAY; // Time PID will be disabled after brew started
+double brewPidDelay = BREW_PID_DELAY; // Time PID will be disabled after brew started
 
 bool standbyModeOn = false;
 double standbyModeTime = STANDBY_MODE_TIME;
@@ -1308,7 +1308,7 @@ void loopPid() {
             // Brew
             LOGF(TRACE, "currBrewTime %f", currBrewTime);
             LOGF(TRACE, "Brew detected %i", checkBrewActive());
-            LOGF(TRACE, "brewPIDdisabled %i", brewPIDDisabled);
+            LOGF(TRACE, "brewPidDisabled %i", brewPidDisabled);
         }
     }
 
@@ -1367,7 +1367,7 @@ void loopPid() {
 
     // Check if PID should run or not. If not, set to manual and force output to zero
     if (machineState == kPidDisabled || machineState == kWaterTankEmpty || machineState == kSensorError || machineState == kEmergencyStop || machineState == kEepromError || machineState == kStandby ||
-        machineState == kBackflush || brewPIDDisabled) {
+        machineState == kBackflush || brewPidDisabled) {
         if (bPID.GetMode() == 1) {
             // Force PID shutdown
             bPID.SetMode(0);
@@ -1388,22 +1388,22 @@ void loopPid() {
 
     // Brew PID
     if (machineState == kBrew) {
-        if (brewPIDDelay > 0 && currBrewTime > 0 && currBrewTime < brewPIDDelay * 1000) {
-            // disable PID for brewPIDDelay seconds, enable PID again with new tunings after that
-            if (!brewPIDDisabled) {
-                brewPIDDisabled = true;
+        if (brewPidDelay > 0 && currBrewTime > 0 && currBrewTime < brewPidDelay * 1000) {
+            // disable PID for brewPidDelay seconds, enable PID again with new tunings after that
+            if (!brewPidDisabled) {
+                brewPidDisabled = true;
                 bPID.SetMode(MANUAL);
                 pidOutput = 0;
                 heaterRelay->off();
-                LOGF(DEBUG, "disabled PID, waiting for %.0f seconds before enabling PID again", brewPIDDelay);
+                LOGF(DEBUG, "disabled PID, waiting for %.0f seconds before enabling PID again", brewPidDelay);
             }
         }
         else {
-            if (brewPIDDisabled) {
+            if (brewPidDisabled) {
                 // enable PID again
                 bPID.SetMode(AUTOMATIC);
-                brewPIDDisabled = false;
-                LOG(DEBUG, "Enabled PID again after delay");
+                brewPidDisabled = false;
+                LOGF(DEBUG, "Enabled PID again after %.0f seconds of brew pid delay", brewPidDelay);
             }
 
             if (useBDPID) {
@@ -1414,11 +1414,11 @@ void loopPid() {
             }
         }
     }
-    // Reset brewPIDdisabled if brew was aborted
-    if (machineState != kBrew && brewPIDDisabled) {
+    // Reset brewPidDisabled if brew was aborted
+    if (machineState != kBrew && brewPidDisabled) {
         // enable PID again
         bPID.SetMode(AUTOMATIC);
-        brewPIDDisabled = false;
+        brewPidDisabled = false;
         LOG(DEBUG, "Enabled PID again after brew was manually stopped");
     }
 

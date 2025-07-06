@@ -16,7 +16,7 @@ extern double aggIMax;
 extern double steamKp;
 extern double brewSetpoint;
 extern double brewTempOffset;
-extern double brewPIDDelay;
+extern double brewPidDelay;
 extern bool useBDPID;
 extern double aggbKp;
 extern double aggbTn;
@@ -435,7 +435,7 @@ void ParameterRegistry::initialize(Config& config) {
             kDouble,
             sBrewPidSection,
             711,
-            &brewPIDDelay,
+            &brewPidDelay,
             BREW_PID_DELAY_MIN,
             BREW_PID_DELAY_MAX,
             "Delay time in seconds during which the PID will be disabled once a brew is detected. This prevents too high brew temperatures with boiler machines like Rancilio Silvia. Set to 0 for thermoblock machines."
@@ -587,7 +587,7 @@ void ParameterRegistry::initialize(Config& config) {
         &featureFullscreenManualFlushTimer,
         "Enable fullscreen overlay during manual flush"
     );
-    
+
     addBoolConfigParam(
         "display.fullscreen_hot_water_timer",
         "Enable Fullscreen Hot Water Timer",
@@ -852,7 +852,7 @@ void ParameterRegistry::initialize(Config& config) {
         2,
         "Relay trigger type for valve control"
     );
-    
+
     addEnumConfigParam(
         "hardware.relays.pump.trigger_type",
         "Pump Relay Trigger Type",

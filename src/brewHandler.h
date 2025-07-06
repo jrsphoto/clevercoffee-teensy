@@ -57,7 +57,7 @@ inline double preinfusionPause = PRE_INFUSION_PAUSE_TIME; // preinfusion pause t
 inline double totalTargetBrewTime = 0;                    // total target brew time including preinfusion and preinfusion pause
 inline double currBrewTime = 0;                           // current running total brewed time
 inline unsigned long startingTime = 0;                    // start time of brew
-inline bool brewPIDDisabled = false;                      // is PID disabled for delay after brew has started?
+inline bool brewPidDisabled = false;                      // is PID disabled for delay after brew has started?
 
 // Backflush values
 inline int backflushCycles = BACKFLUSH_CYCLES;
