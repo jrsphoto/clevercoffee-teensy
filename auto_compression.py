@@ -9,8 +9,9 @@ import sys
 This script compresses specific files from the frontend directory into the data directory.
 Files listed in FILES_TO_COMPRESS will be compressed using gzip and saved with a .gz extension.
 Other files will be copied as-is to the data directory.
-TODO: Handle the files which are templated. Think they are read by embeddedWebserver.
+TODO: Handle the files which are templated.
 """
+
 FILES_TO_COMPRESS = [
     "css/bootstrap-5.2.3.min.css",
     "css/fontawesome-6.2.1.min.css",
@@ -45,7 +46,9 @@ def main():
         for file in files:
             rel_dir = os.path.relpath(root, FRONTEND_DIR)
             rel_file = os.path.join(rel_dir, file) if rel_dir != "." else file
+            rel_file = rel_file.replace(os.sep, "/")
             src_path = os.path.join(root, file)
+
             if rel_file in compress_set:
                 dest_file = rel_file + ".gz"
                 dest_path = os.path.join(DATA_DIR, dest_file)
@@ -63,3 +66,4 @@ if "buildfs" in sys.argv:
 
 if os.environ.get("PROJECT_TASK") == "buildfs":
     main()
+

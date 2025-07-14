@@ -1,7 +1,7 @@
-# ignore config file in filesystem image
-data/config.json
+# ignore data directory
+data/*
 
-# ignore PlatformIO build folder
+# ignore PlatformIO build directory
 .pio/*
 
 # ignore configuration files
