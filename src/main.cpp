@@ -1005,7 +1005,7 @@ void setup() {
 
     if (config.get<bool>("hardware.sensors.watertank.enabled")) {
         const auto mode = static_cast<Switch::Mode>(config.get<int>("hardware.sensors.watertank.mode"));
-        waterTankSensor = new IOSwitch(PIN_WATERTANKSENSOR, (mode == Switch::NORMALLY_OPEN ? GPIOPin::IN_PULLDOWN : GPIOPin::IN_PULLUP), Switch::TOGGLE, mode, mode);
+        waterTankSensor = new IOSwitch(PIN_WATERTANKSENSOR, (mode == Switch::NORMALLY_OPEN ? GPIOPin::IN_PULLDOWN : GPIOPin::IN_PULLUP), Switch::TOGGLE, mode, !mode);
     }
 
     if (!config.get<bool>("system.offline_mode")) { // WiFi Mode
