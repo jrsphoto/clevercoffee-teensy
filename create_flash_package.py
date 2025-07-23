@@ -21,10 +21,10 @@ def create_flash_package():
 
     # Files with addresses from your partitions_4M.csv
     files = {
-        "bootloader.bin": "0x1000",
-        "partitions.bin": "0x8000",
-        "firmware.bin": "0x10000",
-        "littlefs.bin": "0x310000"
+        "bootloader.bin": "0x1000",      # Standard ESP32 bootloader location
+        "partitions.bin": "0x8000",      # Standard ESP32 partition table location
+        "firmware.bin": "0x10000",       # app0 partition
+        "littlefs.bin": "0x350000"       # file system image partition
     }
 
     # Copy files
