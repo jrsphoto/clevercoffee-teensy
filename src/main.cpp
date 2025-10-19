@@ -141,13 +141,12 @@ LED* statusLed = nullptr;
 LED* brewLed = nullptr;
 LED* steamLed = nullptr;
 
-GPIOPin heaterRelayPin(PIN_HEATER, GPIOPin::OUT);
+GPIOPin* heaterRelayPin = nullptr;
+GPIOPin* pumpRelayPin = nullptr;
+GPIOPin* valveRelayPin = nullptr;
+
 Relay* heaterRelay = nullptr;
-
-GPIOPin pumpRelayPin(PIN_PUMP, GPIOPin::OUT);
 Relay* pumpRelay = nullptr;
-
-GPIOPin valveRelayPin(PIN_VALVE, GPIOPin::OUT);
 Relay* valveRelay = nullptr;
 
 Switch* powerSwitch = nullptr;
@@ -950,16 +949,19 @@ void setup() {
 
     initTimer1();
 
+    heaterRelayPin = new GPIOPin(PIN_HEATER, GPIOPin::OUT);
     const auto heaterTriggerType = static_cast<Relay::TriggerType>(config.get<int>("hardware.relays.heater.trigger_type"));
-    heaterRelay = new Relay(heaterRelayPin, heaterTriggerType);
+    heaterRelay = new Relay(*heaterRelayPin, heaterTriggerType);
     heaterRelay->off();
 
+    valveRelayPin = new GPIOPin(PIN_VALVE, GPIOPin::OUT);
     const auto valveTriggerType = static_cast<Relay::TriggerType>(config.get<int>("hardware.relays.valve.trigger_type"));
-    valveRelay = new Relay(valveRelayPin, valveTriggerType);
+    valveRelay = new Relay(*valveRelayPin, valveTriggerType);
     valveRelay->off();
 
+    pumpRelayPin = new GPIOPin(PIN_PUMP, GPIOPin::OUT);
     const auto pumpTriggerType = static_cast<Relay::TriggerType>(config.get<int>("hardware.relays.pump.trigger_type"));
-    pumpRelay = new Relay(pumpRelayPin, pumpTriggerType);
+    pumpRelay = new Relay(*pumpRelayPin, pumpTriggerType);
     pumpRelay->off();
 
     if (config.get<bool>("hardware.switches.power.enabled")) {
