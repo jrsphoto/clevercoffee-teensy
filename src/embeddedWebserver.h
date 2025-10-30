@@ -484,6 +484,9 @@ inline void serverSetup() {
 
         request->send(200, "text/plain", "WiFi settings are being reset. Rebooting...");
 
+        if (u8g2 != nullptr) {
+            u8g2->setPowerSave(1);
+        }
         // Defer slightly so the response gets sent before reboot
         delay(1000);
 
@@ -581,6 +584,11 @@ inline void serverSetup() {
         }
 
         request->send(200, "text/plain", "Restarting...");
+
+        if (u8g2 != nullptr) {
+            u8g2->setPowerSave(1);
+        }
+
         delay(100);
         ESP.restart();
     });
@@ -593,6 +601,10 @@ inline void serverSetup() {
         const bool removed = LittleFS.remove("/config.json");
 
         request->send(200, "text/plain", removed ? "Factory reset. Restarting..." : "Could not delete config.json. Restarting...");
+
+        if (u8g2 != nullptr) {
+            u8g2->setPowerSave(1);
+        }
 
         delay(100);
         ESP.restart();

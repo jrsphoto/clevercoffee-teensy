@@ -37,7 +37,10 @@ inline void checkPowerSwitch() {
                     machineState = kPidNormal;
                     resetStandbyTimer(kPidNormal);
                     setRuntimePidState(true);
-                    u8g2->setPowerSave(0);
+
+                    if (u8g2 != nullptr) {
+                        u8g2->setPowerSave(0);
+                    }
                 }
             }
             else {
@@ -65,7 +68,10 @@ inline void checkPowerSwitch() {
                     machineState = kPidNormal;
                     resetStandbyTimer(kPidNormal);
                     setRuntimePidState(true);
-                    u8g2->setPowerSave(0);
+
+                    if (u8g2 != nullptr) {
+                        u8g2->setPowerSave(0);
+                    }
                 }
                 else {
                     performSafeShutdown();
@@ -90,7 +96,10 @@ inline void checkPowerSwitch() {
         if (powerSwitchPressed && systemInitialized && (currentMillis - systemInitializedTime > 5000) && trackingPressTime && (currentMillis - firstSwitchPressTime > 1000) && // Minimum 1 second actual press
             powerSwitch->longPressDetected()) {
             LOG(INFO, "Power switch long press detected - initiating system reboot");
-            u8g2->setPowerSave(0);
+
+            if (u8g2 != nullptr) {
+                u8g2->setPowerSave(0);
+            }
 
             // Display reboot message
             displayWrappedMessage("REBOOTING\nPlease wait...");
@@ -99,6 +108,15 @@ inline void checkPowerSwitch() {
             performSafeShutdown();
 
             LOG(INFO, "System reboot initiated");
+
+            if (u8g2 != nullptr) {
+                // if user has disabled display since last boot
+                if (!config.get<bool>("hardware.oled.enabled")) {
+                    delay(2000);
+                    u8g2->setPowerSave(1);
+                }
+            }
+
             delay(500);
 
             ESP.restart();
