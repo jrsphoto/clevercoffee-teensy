@@ -538,7 +538,11 @@ inline DiscoveryObject GenerateSensorDevice(const char* name, const char* displa
     sensorConfigDoc["state_topic"] = String(topic_buffer);
     snprintf(topic_buffer, sizeof(topic_buffer), "%s-%s", unique_id, name);
     sensorConfigDoc["unique_id"] = String(topic_buffer);
-    sensorConfigDoc["unit_of_measurement"] = unit_of_measurement;
+
+    if (device_class != "enum") {
+        sensorConfigDoc["unit_of_measurement"] = unit_of_measurement;
+    }
+
     sensorConfigDoc["device_class"] = device_class;
     sensorConfigDoc["payload_available"] = "online";
     sensorConfigDoc["payload_not_available"] = "offline";
