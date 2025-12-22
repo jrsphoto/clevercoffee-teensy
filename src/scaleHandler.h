@@ -306,9 +306,17 @@ inline void shotTimerScale() {
             if (currBrewState != kBrewIdle) {
                 // For Bluetooth scales with auto-tare, wait a bit before capturing pre-brew weight
                 if (isBluetoothScale && autoTareInProgress) {
-                    // Wait at least 2 seconds for Bluetooth tare to complete
-                    if (millis() - autoTareStartTime < 2000) {
-                        break;
+                    // Wait for up to 3 seconds for Bluetooth tare to complete
+                    if (millis() - autoTareStartTime < 3000) {
+                        // Wait for scales to be near zero
+                        if (abs(currReadingWeight) > 0.2) {
+                            break;
+                        }
+
+                        LOGF(DEBUG, "Weight within target range, measured: %0.1fg", currReadingWeight);
+                    }
+                    else {
+                        LOGF(DEBUG, "Weight tare timer expired, current weight: %0.1fg", currReadingWeight);
                     }
 
                     autoTareInProgress = false;
