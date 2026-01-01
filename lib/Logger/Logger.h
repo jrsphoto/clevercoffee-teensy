@@ -92,7 +92,7 @@ class Logger {
         }
 
     private:
-        static Logger& getInstanceImpl(const uint16_t port = 23);
+        static Logger& getInstanceImpl(uint16_t port = 23);
 
         /**
          * @brief Constructor for a logger
@@ -104,7 +104,7 @@ class Logger {
 
         void current_time(char* timestamp);
 
-        String get_level_identifier(Level lvl);
+        static String get_level_identifier(Level lvl);
 
         // Logging level
         Level level_{Level::INFO};

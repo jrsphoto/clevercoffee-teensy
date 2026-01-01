@@ -10,18 +10,18 @@
 
 class GPIOPin;
 
-class StandardLED : public LED {
+class StandardLED final : public LED {
     public:
-        StandardLED(GPIOPin& gpioInstance, int featureFlag);
+        StandardLED(GPIOPin& gpioInstance, bool inverted);
 
         void turnOn() override;
         void turnOff() override;
-        void setColor(int red, int green, int blue);
-        void setBrightness(int value);
+        void setColor(int red, int green, int blue) override;
+        void setBrightness(int value) override;
         void setGPIOState(bool state) override;
 
     private:
         GPIOPin& gpio;
-        bool inverted; // If true, invert on/off behavior
-        bool enabled;  // If false, the LED will be disabled
+        bool inverted;  // If true, invert on/off behavior
+        bool enabled{}; // If false, the LED will be disabled
 };

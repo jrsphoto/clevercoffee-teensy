@@ -7,16 +7,10 @@
 
 #pragma once
 
-// Define some Displayoptions
-int blinkingtemp = 1;           // 0: blinking near setpoint, 1: blinking far away from setpoint
-float blinkingtempoffset = 0.3; // offset for blinking
-
-#include "displayCommon.h"
-
 /**
  * @brief Send data to display
  */
-void printScreen() {
+inline void printScreen() {
 
     // Show fullscreen brew timer:
     if (displayFullscreenBrewTimer()) {
@@ -30,6 +24,12 @@ void printScreen() {
         return;
     }
 
+    // Show fullscreen hot water timer:
+    if (displayFullscreenHotWaterTimer()) {
+        // Display was updated, end here
+        return;
+    }
+
     // Print the machine state
     if (displayMachineState()) {
         // Display was updated, end here
@@ -37,41 +37,25 @@ void printScreen() {
     }
 
     // If no specific machine state was printed, print default:
-    u8g2.clearBuffer();
+    u8g2->clearBuffer();
 
-    // draw (blinking) temp
-    if (((fabs(temperature - setpoint) < blinkingtempoffset && blinkingtemp == 0) || (fabs(temperature - setpoint) >= blinkingtempoffset && blinkingtemp == 1)) && !FEATURE_STATUS_LED) {
-        if (isrCounter < 500) {
-            if (temperature < 99.999) {
-                u8g2.setCursor(8, 22);
-                u8g2.setFont(u8g2_font_fub35_tf);
-                u8g2.print(temperature, 1);
-                u8g2.drawCircle(116, 27, 4);
-            }
-            else {
-                u8g2.setCursor(24, 22);
-                u8g2.setFont(u8g2_font_fub35_tf);
-                u8g2.print(temperature, 0);
-                u8g2.drawCircle(116, 27, 4);
-            }
-        }
-    }
-    else {
-        if (temperature < 99.999) {
-            u8g2.setCursor(8, 22);
-            u8g2.setFont(u8g2_font_fub35_tf);
-            u8g2.print(temperature, 1);
-            u8g2.drawCircle(116, 27, 4);
+    bool nearSetpoint = fabs(temperature - setpoint) <= config.get<float>("display.blinking.delta");
+
+    if (!(isrCounter < 500 && ((nearSetpoint && config.get<int>("display.blinking.mode") == 1) || (!nearSetpoint && config.get<int>("display.blinking.mode") == 2)))) {
+        u8g2->setFont(u8g2_font_fub35_tn);
+        u8g2->drawCircle(116, 27, 4);
+
+        if (temperature < 99.95) {
+            u8g2->setCursor(8, 22);
+            u8g2->print(temperature, 1);
         }
         else {
-            u8g2.setCursor(24, 22);
-            u8g2.setFont(u8g2_font_fub35_tf);
-            u8g2.print(temperature, 0);
-            u8g2.drawCircle(116, 27, 4);
+            u8g2->setCursor(24, 22);
+            u8g2->print(temperature, 0);
         }
     }
 
     displayStatusbar();
 
-    u8g2.sendBuffer();
+    displayBufferReady = true;
 }

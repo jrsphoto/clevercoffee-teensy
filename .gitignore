@@ -1,7 +1,7 @@
-# ignore actual user config
-src/userConfig.h
+# ignore data directory
+data/*
 
-# ignore PlatformIO build folder
+# ignore PlatformIO build directory
 .pio/*
 
 # ignore configuration files
@@ -13,3 +13,6 @@ src/userConfig.h
 **/.DS_Store
 
 platformio_extra.ini
+
+# ignore flash package
+CleverCoffee_Flash_Package

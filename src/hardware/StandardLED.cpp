@@ -7,19 +7,12 @@
 #include "StandardLED.h"
 #include "GPIOPin.h"
 
-StandardLED::StandardLED(GPIOPin& gpioInstance, int featureFlag) :
-    gpio(gpioInstance), enabled(featureFlag != 0), inverted(featureFlag == 2) {
+StandardLED::StandardLED(GPIOPin& gpioInstance, const bool inverted) :
+    gpio(gpioInstance), inverted(inverted) {
 }
 
-void StandardLED::setGPIOState(bool state) {
-    if (enabled) {
-        if (inverted) {
-            gpio.write(state ? LOW : HIGH); // Inverted logic
-        }
-        else {
-            gpio.write(state ? HIGH : LOW); // Normal logic
-        }
-    }
+void StandardLED::setGPIOState(const bool state) {
+    gpio.write(state != inverted ? HIGH : LOW);
 }
 
 void StandardLED::turnOn() {
