@@ -22,7 +22,8 @@ enum ParameterSection {
     sHardwareRelaySection = 12,
     sHardwareSwitchSection = 13,
     sHardwareLedSection = 14,
-    sHardwareSensorSection = 15
+    sHardwareSensorSection = 15,
+    sHardwareEncoderSection = 16
 };
 
 inline const char* getSectionName(const int sectionId) {
@@ -59,6 +60,8 @@ inline const char* getSectionName(const int sectionId) {
             return "LEDs";
         case sHardwareSensorSection:
             return "Sensors";
+        case sHardwareEncoderSection:
+            return "Encoder";
         default:
             return "Unknown Section";
     }

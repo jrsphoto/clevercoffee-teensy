@@ -49,6 +49,7 @@ class Config {
             }
 
             initializeConfigDefs();
+            backfillMissingDefaults();
 
             return true;
         }
@@ -225,6 +226,17 @@ class Config {
             return navigatePath(_doc.as<JsonVariant>(), path, std::forward<Func>(leafHandler), createMissing);
         }
 
+    public:
+        /**
+         * @brief Check whether a config path has a stored value (as opposed to being absent
+         * from the loaded JSON - e.g. a key added to the firmware after this device's config
+         * file was last saved).
+         */
+        bool has(const String& path) const {
+            return navigatePath(path, [](JsonVariantConst parent, const String& leafKey) -> bool { return !leafKey.isEmpty() && !parent.isNull() && !parent[leafKey].isNull(); });
+        }
+
+    private:
         inline static auto CONFIG_FILE = "/config.json";
 
         JsonDocument _doc;
@@ -320,8 +332,19 @@ class Config {
 
             // Hardware - OLED
             _configDefs.emplace("hardware.oled.enabled", ConfigDef::forBool(true));
-            _configDefs.emplace("hardware.oled.type", ConfigDef::forInt(0, 0, 1));
+            _configDefs.emplace("hardware.oled.type", ConfigDef::forInt(0, 0, 2));
             _configDefs.emplace("hardware.oled.address", ConfigDef::forInt(0, 0, 1));
+
+            // Hardware - Encoder
+            _configDefs.emplace("hardware.encoder.enabled", ConfigDef::forBool(true));
+            _configDefs.emplace("hardware.encoder.i2c_address", ConfigDef::forInt(0x66, 1, 127));
+            _configDefs.emplace("hardware.encoder.rgb_led", ConfigDef::forBool(true));
+            _configDefs.emplace("hardware.encoder.color_effects.enabled", ConfigDef::forBool(true));
+            _configDefs.emplace("hardware.encoder.color.idle", ConfigDef::forInt(0x101010, 0, 0xFFFFFF));
+            _configDefs.emplace("hardware.encoder.color.error", ConfigDef::forInt(0xFF0000, 0, 0xFFFFFF));
+            _configDefs.emplace("hardware.encoder.color.heating", ConfigDef::forInt(0xFF4000, 0, 0xFFFFFF));
+            _configDefs.emplace("hardware.encoder.color.ready", ConfigDef::forInt(0x00FF00, 0, 0xFFFFFF));
+            _configDefs.emplace("hardware.encoder.color.active", ConfigDef::forInt(0x0000FF, 0, 0xFFFFFF));
 
             // Hardware - Relays
             _configDefs.emplace("hardware.relays.heater.trigger_type", ConfigDef::forInt(Relay::HIGH_TRIGGER, 0, 1));
@@ -451,6 +474,55 @@ class Config {
             String jsonStr;
             serializeJsonPretty(_doc, jsonStr);
             LOGF(DEBUG, "Final JSON structure:\n%s", jsonStr.c_str());
+        }
+
+        /**
+         * @brief Add any config key that's registered in _configDefs but missing from the
+         * loaded file, using its default value. Covers a config key added by a firmware
+         * update landing on a device that already has a saved config.json from before that
+         * key existed - without this, get<T>() on a missing key silently returns a
+         * zero-value (false/0) instead of the intended default, which can disable hardware
+         * that was previously working (e.g. an "enabled" flag defaulting to true).
+         */
+        void backfillMissingDefaults() {
+            int addedCount = 0;
+
+            for (const auto& [path, configDef] : _configDefs) {
+                const auto pathStr = String(path.c_str());
+
+                if (has(pathStr)) {
+                    continue;
+                }
+
+                switch (configDef.type) {
+                    case ConfigDef::BOOL:
+                        set<bool>(pathStr, configDef.boolVal);
+                        break;
+
+                    case ConfigDef::INT:
+                        set<int>(pathStr, configDef.intVal);
+                        break;
+
+                    case ConfigDef::DOUBLE:
+                        set<double>(pathStr, configDef.doubleVal);
+                        break;
+
+                    case ConfigDef::STRING:
+                        set<String>(pathStr, configDef.stringVal);
+                        break;
+                }
+
+                addedCount++;
+                LOGF(INFO, "Config: %s missing from saved config, added with default value", pathStr.c_str());
+            }
+
+            if (addedCount > 0) {
+                LOGF(INFO, "Config: backfilled %d key(s) new to this firmware version", addedCount);
+
+                if (!save()) {
+                    LOG(ERROR, "Config: failed to save backfilled defaults");
+                }
+            }
         }
 
         bool validateAndApplyConfig(const JsonDocument& doc) {

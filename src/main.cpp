@@ -14,6 +14,7 @@
 #include <ArduinoOTA.h>
 #include <LittleFS.h>
 #include <PID_v1.h>  // for PID calculation
+#include <SPI.h>     // shared bus for the SPI OLED + the two MAX31865 RTDs
 #include <U8g2lib.h> // i2c display
 #include <WiFiManager.h>
 #include <os.h>
@@ -33,8 +34,9 @@
 #include "hardware/StandardLED.h"
 #include "hardware/Switch.h"
 #include "hardware/pinmapping.h"
-#include "hardware/tempsensors/TempSensorDallas.h"
-#include "hardware/tempsensors/TempSensorTSIC.h"
+#include "hardware/tempsensors/TempSensor.h" // base interface only - TempSensorDallas.h / TempSensorTSIC.h
+                                              // removed, both used PIN_TEMPSENSOR (IO16), which this board
+                                              // wires to PIN_OLED_CS instead. See tempSensor's construction below.
 
 // User configuration & defaults
 #include "defaults.h"
@@ -297,6 +299,7 @@ void u8g2_prepare();
 
 Timer printDisplayTimer(&DisplayTemplateManager::printScreen, 100);
 
+#include "encoderHandler.h"
 #include "powerHandler.h"
 #include "scaleHandler.h"
 #include "steamHandler.h"
@@ -925,26 +928,42 @@ void setup() {
         ParameterRegistry::getInstance().syncGlobalVariables();
     }
 
+    i2cBusRecovery(); // must run before Wire.begin() claims PIN_I2CSDA/SCL for hardware I2C
+
     Wire.begin();
 
+    encoderSetup();
+
     if (config.get<bool>("hardware.oled.enabled")) {
-        switch (config.get<int>("hardware.oled.type")) {
+        const int oledType = config.get<int>("hardware.oled.type");
+
+        switch (oledType) {
             case 0:
                 u8g2 = new U8G2_SH1106_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE, PIN_I2CSCL, PIN_I2CSDA);  // e.g. 1.3"
                 break;
             case 1:
                 u8g2 = new U8G2_SSD1306_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE, PIN_I2CSCL, PIN_I2CSDA); // e.g. 0.96"
                 break;
+            case 2:
+                // Shares the hardware SPI bus with the two MAX31865 RTDs (firmware-plan.md item 2, not yet
+                // ported in) - remap the default VSPI pins to this board's custom SCK/MOSI/MISO first.
+                // Reset is omitted (defaults to U8X8_PIN_NONE): OLED_RST ties to the ESP32's own EN/RST pin,
+                // so the display resets with the board rather than needing its own GPIO.
+                SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_OLED_CS);
+                u8g2 = new U8G2_SSD1309_128X64_NONAME2_1_4W_HW_SPI(U8G2_R0, PIN_OLED_CS, PIN_OLED_DC); // 2.42"
+                break;
             default:
                 break;
         }
 
         if (u8g2 != nullptr) {
-            if (const int i2cAddress = config.get<int>("hardware.oled.i2c_address"); i2cAddress == 0) {
-                u8g2->setI2CAddress(0x3C * 2);
-            }
-            else {
-                u8g2->setI2CAddress(0x3D * 2);
+            if (oledType != 2) { // SPI display has no I2C address to set
+                if (const int i2cAddress = config.get<int>("hardware.oled.i2c_address"); i2cAddress == 0) {
+                    u8g2->setI2CAddress(0x3C * 2);
+                }
+                else {
+                    u8g2->setI2CAddress(0x3D * 2);
+                }
             }
 
             u8g2->begin();
@@ -993,48 +1012,17 @@ void setup() {
     pumpRelay = new Relay(*pumpRelayPin, pumpTriggerType);
     pumpRelay->off();
 
-    if (config.get<bool>("hardware.switches.power.enabled")) {
-        const auto type = static_cast<Switch::Type>(config.get<int>("hardware.switches.power.type"));
-        const auto mode = static_cast<Switch::Mode>(config.get<int>("hardware.switches.power.mode"));
-        powerSwitch = new IOSwitch(PIN_POWERSWITCH, GPIOPin::IN_HARDWARE, type, mode, mode);
-    }
-
-    if (config.get<bool>("hardware.switches.steam.enabled")) {
-        const auto type = static_cast<Switch::Type>(config.get<int>("hardware.switches.steam.type"));
-        const auto mode = static_cast<Switch::Mode>(config.get<int>("hardware.switches.steam.mode"));
-        steamSwitch = new IOSwitch(PIN_STEAMSWITCH, GPIOPin::IN_HARDWARE, type, mode, mode);
-    }
+    // Power/steam/hot-water physical switches and the three standalone status/brew/steam
+    // LEDs do not exist on this board - their old pins are now the encoder interrupt, SPI
+    // MISO, the boiler-level probe, and the two RTD chip-selects (see pinmapping.h). Status
+    // now lives on the Duppa encoder's RGB LED (firmware-plan.md item 9). powerSwitch/
+    // steamSwitch/hotWaterSwitch/statusLed/brewLed/steamLed stay nullptr permanently until
+    // that replacement lands - every call site already null-checks before use.
 
     if (config.get<bool>("hardware.switches.brew.enabled")) {
         const auto type = static_cast<Switch::Type>(config.get<int>("hardware.switches.brew.type"));
         const auto mode = static_cast<Switch::Mode>(config.get<int>("hardware.switches.brew.mode"));
         brewSwitch = new IOSwitch(PIN_BREWSWITCH, GPIOPin::IN_HARDWARE, type, mode, mode);
-    }
-
-    if (config.get<bool>("hardware.switches.hot_water.enabled")) {
-        const auto type = static_cast<Switch::Type>(config.get<int>("hardware.switches.hot_water.type"));
-        const auto mode = static_cast<Switch::Mode>(config.get<int>("hardware.switches.hot_water.mode"));
-        hotWaterSwitch = new IOSwitch(PIN_WATERSWITCH, GPIOPin::IN_HARDWARE, type, mode, mode);
-    }
-
-    if (config.get<bool>("hardware.leds.status.enabled")) {
-        const bool inverted = config.get<bool>("hardware.leds.status.inverted");
-        statusLedPin = new GPIOPin(PIN_STATUSLED, GPIOPin::OUT);
-        statusLed = new StandardLED(*statusLedPin, inverted);
-        statusLed->turnOff();
-    }
-
-    if (config.get<bool>("hardware.leds.brew.enabled")) {
-        const bool inverted = config.get<bool>("hardware.leds.brew.inverted");
-        brewLedPin = new GPIOPin(PIN_BREWLED, GPIOPin::OUT);
-        brewLed = new StandardLED(*brewLedPin, inverted);
-        brewLed->turnOff();
-    }
-    if (config.get<bool>("hardware.leds.steam.enabled")) {
-        const bool inverted = config.get<bool>("hardware.leds.steam.inverted");
-        steamLedPin = new GPIOPin(PIN_STEAMLED, GPIOPin::OUT);
-        steamLed = new StandardLED(*steamLedPin, inverted);
-        steamLed->turnOff();
     }
 
     if (config.get<bool>("hardware.sensors.watertank.enabled")) {
@@ -1151,14 +1139,10 @@ void setup() {
     bPID.SetSmoothingFactor(emaFactor);
     bPID.SetMode(AUTOMATIC);
 
-    const int tempSensorType = config.get<int>("hardware.sensors.temperature.type");
-
-    if (tempSensorType == 0) {
-        tempSensor = new TempSensorTSIC(PIN_TEMPSENSOR);
-    }
-    else if (tempSensorType == 1) {
-        tempSensor = new TempSensorDallas(PIN_TEMPSENSOR);
-    }
+    // TSIC/Dallas removed: both used IO16, which this board wires to PIN_OLED_CS instead.
+    // Boiler temperature is PT100 RTD + MAX31865 on this build (firmware-plan.md item 2,
+    // not yet ported in) - tempSensor stays nullptr until then, which is already a safe,
+    // proven state: "Temperature sensor not connected" warning, heater held off fail-safe.
 
     if (tempSensor != nullptr) {
         temperature = tempSensor->getCurrentTemperature();
@@ -1367,6 +1351,7 @@ void loopPid() {
 
     checkSteamSwitch();
     checkPowerSwitch();
+    encoderLoop();
 
     // set setpoint depending on steam or brew mode
     if (steamON == 1) {

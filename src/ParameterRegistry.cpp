@@ -55,7 +55,7 @@ static constexpr const char* const displayTemplates[] = {"Standard", "Minimal", 
 static constexpr const char* const displayLanguages[] = {"Deutsch", "English", "Español"};
 static constexpr const char* const blinkingModes[] = {"Off", "Near Setpoint", "Away From Setpoint"};
 static constexpr const char* const logLevels[] = {"TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "FATAL", "SILENT"};
-static constexpr const char* const oledTypes[] = {"SH1106 (1.3\")", "SSD1306 (0.96\")"};
+static constexpr const char* const oledTypes[] = {"SH1106 (1.3\")", "SSD1306 (0.96\")", "SSD1309 SPI (2.42\")"};
 static constexpr const char* const oledAddresses[] = {"0x3C", "0x3D"};
 static constexpr const char* const tempSensorTypes[] = {"TSIC306", "Dallas DS18B20"};
 static constexpr const char* const scaleTypes[] = {"HX711 (2 load cell controllers)", "HX711 (1 load cell controller)", "Bluetooth"};
@@ -858,7 +858,7 @@ void ParameterRegistry::initialize(Config& config) {
         2002,
         nullptr,
         oledTypes,
-        2,
+        3,
         "Select your OLED display type",
         [] { return true; },
         true
@@ -1253,6 +1253,120 @@ void ParameterRegistry::initialize(Config& config) {
         SCALE_KNOWN_WEIGHT_MIN, SCALE_KNOWN_WEIGHT_MAX,
         "Weight in grams of the known calibration weight used for scale setup",
         [&config] { return config.get<int>("hardware.sensors.scale.type") < 2; }
+    );
+
+    // Encoder
+    addBoolConfigParam(
+        "hardware.encoder.enabled",
+        "Enable Rotary Encoder",
+        sHardwareEncoderSection,
+        2501,
+        nullptr,
+        "Enable the Duppa I2C rotary encoder",
+        [] { return true; },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.i2c_address",
+        "I2C Address",
+        kInteger,
+        sHardwareEncoderSection,
+        2502,
+        nullptr,
+        1, 127,
+        "I2C address of the encoder. This is set by jumpers on the encoder board - use the \"Scan for I2C Devices\" button below "
+        "rather than trusting the datasheet's jumper chart, which doesn't always match real hardware. Default 102 is 0x66 in hex. "
+        "If more than one device is detected, the encoder is the one that isn't the button board or anything else already on this bus.",
+        [&config] { return config.get<bool>("hardware.encoder.enabled"); },
+        true
+    );
+
+    addBoolConfigParam(
+        "hardware.encoder.rgb_led",
+        "RGB LED",
+        sHardwareEncoderSection,
+        2503,
+        nullptr,
+        "Enable if the encoder has the RGB LED variant",
+        [&config] { return config.get<bool>("hardware.encoder.enabled"); },
+        true
+    );
+
+    addBoolConfigParam(
+        "hardware.encoder.color_effects.enabled",
+        "Status Color Effects",
+        sHardwareEncoderSection,
+        2504,
+        nullptr,
+        "Light the encoder's RGB LED a different color depending on machine status (heating, ready, brewing, error)",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led"); },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.color.idle",
+        "Idle Color",
+        kColor,
+        sHardwareEncoderSection,
+        2505,
+        nullptr,
+        0, 0xFFFFFF,
+        "LED color while the machine is idle (PID disabled / standby)",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led") && config.get<bool>("hardware.encoder.color_effects.enabled"); },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.color.heating",
+        "Heating Color",
+        kColor,
+        sHardwareEncoderSection,
+        2506,
+        nullptr,
+        0, 0xFFFFFF,
+        "LED color while the PID is heating toward the setpoint",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led") && config.get<bool>("hardware.encoder.color_effects.enabled"); },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.color.ready",
+        "Ready Color",
+        kColor,
+        sHardwareEncoderSection,
+        2507,
+        nullptr,
+        0, 0xFFFFFF,
+        "LED color once the machine is at temperature",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led") && config.get<bool>("hardware.encoder.color_effects.enabled"); },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.color.active",
+        "Active Color",
+        kColor,
+        sHardwareEncoderSection,
+        2508,
+        nullptr,
+        0, 0xFFFFFF,
+        "LED color while brewing, steaming, flushing, or backflushing",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led") && config.get<bool>("hardware.encoder.color_effects.enabled"); },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.encoder.color.error",
+        "Error Color",
+        kColor,
+        sHardwareEncoderSection,
+        2509,
+        nullptr,
+        0, 0xFFFFFF,
+        "LED color for a sensor error, emergency stop, or empty water tank",
+        [&config] { return config.get<bool>("hardware.encoder.enabled") && config.get<bool>("hardware.encoder.rgb_led") && config.get<bool>("hardware.encoder.color_effects.enabled"); },
+        true
     );
 
     // clang-format on
