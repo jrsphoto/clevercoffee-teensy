@@ -57,7 +57,7 @@ static constexpr const char* const blinkingModes[] = {"Off", "Near Setpoint", "A
 static constexpr const char* const logLevels[] = {"TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "FATAL", "SILENT"};
 static constexpr const char* const oledTypes[] = {"SH1106 (1.3\")", "SSD1306 (0.96\")", "SSD1309 SPI (2.42\")"};
 static constexpr const char* const oledAddresses[] = {"0x3C", "0x3D"};
-static constexpr const char* const tempSensorTypes[] = {"TSIC306", "Dallas DS18B20"};
+static constexpr const char* const tempSensorTypes[] = {"TSIC306", "Dallas DS18B20", "MAX31865 (PT100 RTD)"};
 static constexpr const char* const scaleTypes[] = {"HX711 (2 load cell controllers)", "HX711 (1 load cell controller)", "Bluetooth"};
 
 void ParameterRegistry::initialize(Config& config) {
@@ -1141,9 +1141,49 @@ void ParameterRegistry::initialize(Config& config) {
         2401,
         nullptr,
         tempSensorTypes,
-        2,
-        "Type of temperature sensor connected",
+        3,
+        "Type of temperature sensor connected. This board uses MAX31865 (PT100 RTD); TSIC/Dallas are not wired on it.",
         [] { return true; },
+        true
+    );
+
+    // MAX31865 RTD electrical details - only relevant when the MAX31865 sensor type is selected.
+    addNumericConfigParam<int>(
+        "hardware.sensors.temperature.rtd_nominal",
+        "RTD Nominal Resistance (ohm)",
+        kInteger,
+        sHardwareSensorSection,
+        2402,
+        nullptr,
+        100, 1000,
+        "RTD nominal resistance: 100 for a PT100, 1000 for a PT1000.",
+        [&config] { return config.get<int>("hardware.sensors.temperature.type") == 2; },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.sensors.temperature.rtd_reference",
+        "MAX31865 Reference Resistor (ohm)",
+        kInteger,
+        sHardwareSensorSection,
+        2403,
+        nullptr,
+        100, 5000,
+        "The reference resistor fitted on the MAX31865 board: about 430 for a PT100 board, about 4300 for a PT1000.",
+        [&config] { return config.get<int>("hardware.sensors.temperature.type") == 2; },
+        true
+    );
+
+    addNumericConfigParam<int>(
+        "hardware.sensors.temperature.rtd_wires",
+        "RTD Wires",
+        kInteger,
+        sHardwareSensorSection,
+        2404,
+        nullptr,
+        2, 4,
+        "Number of wires on the RTD probe: 2, 3 or 4.",
+        [&config] { return config.get<int>("hardware.sensors.temperature.type") == 2; },
         true
     );
 
