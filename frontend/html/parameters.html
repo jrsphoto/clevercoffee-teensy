@@ -31,8 +31,11 @@
                 </div>
             </div>
 
-            <!-- Hardware Configuration Warning - Only shown when filter=hardware -->
-            <div v-if="filter === 'hardware'" class="alert alert-warning alert-dismissible mb-4 shadow-sm" role="alert">
+            <!-- Top tabs (Settings/Hardware/System/About) now live in the main navbar; the
+                 active one is chosen from the ?tab= URL param in mounted(). -->
+
+            <!-- Hardware Configuration Warning -->
+            <div v-if="activeTopTab === 'hardware'" class="alert alert-warning alert-dismissible mb-4 shadow-sm" role="alert">
                 <div class="d-flex align-items-center">
                     <span class="fa-solid fa-triangle-exclamation me-2 fs-4"></span>
                     <div class="flex-grow-1">
@@ -43,102 +46,149 @@
                             <p class="mb-2">
                                 <strong>Incorrect hardware settings can cause dangerous behavior!</strong>
                             </p>
-                            <div id="hardwareWarningDetails">
-                                <div class="small">
-                                    <ul class="mb-2">
-                                        <li><strong>Wrong relay or switch configurations</strong> could cause the pump, heater, or valve to activate unexpectedly</li>
-                                        <li><strong>Incorrect sensor configuration </strong>may prevent the machine from starting up normally</li>
-                                        <li>Using the <strong>wrong OLED type or i2c address</strong> may lead to graphics errors or the display not working at all</li>
-                                    </ul>
-                                    <p class="mb-2">
-                                        <strong>Before saving and restarting:</strong> Double-check all your settings, only enable features if you understand their
-                                        functionality and hardware-related prerequisites
-                                    </p>
-                                    <p class="mb-0">
-                                        <strong>When in doubt:</strong> Read or re-read the documentation or consult the community via our <a href="https://discord.gg/Kq5RFznuU4">Discord server</a>.
-                                    </p>
-                                </div>
+                            <div class="small">
+                                <ul class="mb-2">
+                                    <li><strong>Wrong relay or switch configurations</strong> could cause the pump, heater, or valve to activate unexpectedly</li>
+                                    <li><strong>Incorrect sensor configuration </strong>may prevent the machine from starting up normally</li>
+                                    <li>Using the <strong>wrong OLED type or i2c address</strong> may lead to graphics errors or the display not working at all</li>
+                                </ul>
+                                <p class="mb-2">
+                                    <strong>Before saving and restarting:</strong> Double-check all your settings, only enable features if you understand their
+                                    functionality and hardware-related prerequisites
+                                </p>
+                                <p class="mb-0">
+                                    <strong>When in doubt:</strong> Read or re-read the documentation or consult the community via our <a href="https://discord.gg/Kq5RFznuU4">Discord server</a>.
+                                </p>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="card card-accent-dark mb-5 shadow-sm rounded">
-                <form @submit.prevent="postParameters">
-                    <template v-for="(section, sectionKey) in parameterSectionsComputed">
-                        <div class="card-body bg-light pb-1 rounded">
-                            <h5 class="card-title"> {{ sectionName(sectionKey) }} </h5>
-                        </div>
-                        <div class="card-body">
-                            <template v-for="(group, groupKey) in section">
-                                <!-- Start a new row for each group -->
-                                <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 mb-3">
-                                    <template v-for="param in group">
-                                        <template v-if="param.show">
-                                            <div class="col mb-3">
-                                                <label class="form-label me-1" :for="'var'+param.name">{{param.displayName}}</label>
-                                                <template v-if="param.hasHelpText || param.reboot">
-                                                    <a href="#" role="button" @mouseover="fetchHelpText(param.name)" data-bs-toggle="popover" data-bs-html="true" :data-bs-original-title="parametersHelpTexts[param.name]">
-                                                        <span class="fa-solid fa-question-circle"></span>
-                                                    </a>
-                                                </template>
+            <!-- Settings + Hardware share one form, so edits on one survive switching to the other -->
+            <form v-show="activeTopTab === 'settings' || activeTopTab === 'hardware'" @submit.prevent="postParameters">
+                <div class="card card-accent-dark mb-5 shadow-sm rounded">
+                    <div class="card-header bg-light">
+                        <ul class="nav nav-pills">
+                            <li class="nav-item" v-for="(group, sectionKey) in (activeTopTab === 'hardware' ? hardwareSectionsComputed : behaviorSectionsComputed)" :key="sectionKey">
+                                <a class="nav-link" :class="{active: activeSection == sectionKey}" href="#" @click.prevent="activeSection = sectionKey">{{ sectionName(sectionKey) }}</a>
+                            </li>
+                        </ul>
+                    </div>
 
-                                                <div v-if="isBoolean(param)">
-                                                    <input type="hidden" :id="'var'+param.name" :name="'var'+param.name" :value="0">
-                                                    <input type="checkbox"
-                                                           class="form-check-input form-control-lg"
-                                                           :id="'var'+param.name"
-                                                           :name="'var'+param.name"
-                                                           value="1"
-                                                           @change="param.value = 1-param.value"
-                                                           :checked="param.value != 0 ? 'checked' : null">
-                                                </div>
-
-                                                <div v-else-if="param.type === 5 && param.options">
-                                                    <select class="form-select form-control-lg"
-                                                            :id="'var'+param.name"
-                                                            :name="'var'+param.name"
-                                                            v-model="param.value">
-                                                        <option v-for="option in param.options"
-                                                                :key="option.value"
-                                                                :value="option.value">
-                                                            {{ option.label }}
-                                                        </option>
-                                                    </select>
-                                                    <span v-if="param.value < param.min" class="text-danger small">Value is too small!</span>
-                                                    <span v-if="param.value > param.max" class="text-danger small">Value is too large!</span>
-                                                </div>
-
-                                                <!-- String parameters -->
-                                                <div v-else-if="param.type === 4">
-                                                    <input class="form-control form-control-lg"
-                                                           :type="param.name.toLowerCase().includes('password') ? 'password' : 'text'"
-                                                           :id="'var'+param.name"
-                                                           :name="'var'+param.name"
-                                                           v-model="param.value"
-                                                           :maxlength="param.max > 0 ? param.max : 64">
-                                                    <span v-if="param.max > 0 && param.value && param.value.length > param.max" class="text-danger small">Value is too long!</span>
-                                                </div>
-
-                                                <!-- Numeric parameters (integer, uint8, double, float) -->
-                                                <div v-else>
-                                                    <input class="form-control form-control-lg"
-                                                           :type="getInputType(param)"
-                                                           :step="getNumberStep(param)"
-                                                           :min="param.min"
-                                                           :max="param.max"
-                                                           :id="'var'+param.name"
-                                                           :name="'var'+param.name"
-                                                           v-model="param.value">
-                                                    <span v-if="param.value < param.min" class="text-danger small">Value is too small!</span>
-                                                    <span v-if="param.value > param.max" class="text-danger small">Value is too large!</span>
-                                                </div>
-                                            </div>
-                                        </template>
-                                    </template>
+                    <template v-for="(section, sectionKey) in (activeTopTab === 'hardware' ? hardwareSectionsComputed : behaviorSectionsComputed)" :key="sectionKey">
+                        <div v-show="activeSection == sectionKey">
+                            <div v-if="sectionKey == 16" class="card-body pb-0">
+                                <button type="button" class="btn btn-outline-secondary btn-sm mb-2" @click="scanI2C" :disabled="i2cScanning">
+                                    <span v-if="i2cScanning" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    {{ i2cScanning ? 'Scanning...' : 'Scan for I2C Devices' }}
+                                </button>
+                                <div v-if="i2cScanHasRun && !i2cScanning" class="small text-muted mb-2">
+                                    <span v-if="i2cScanDevices.length">Detected I2C devices: {{ i2cScanDevices.map(formatI2CAddress).join(', ') }}</span>
+                                    <span v-else>No I2C devices detected - check wiring and power before saving an address.</span>
                                 </div>
-                            </template>
+                            </div>
+                            <div class="card-body">
+                                <template v-for="(group, groupKey) in section">
+                                    <!-- Start a new row for each group -->
+                                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 mb-3">
+                                        <template v-for="param in group">
+                                            <template v-if="param.show">
+                                                <div class="col mb-3">
+                                                    <label class="form-label me-1" :for="'var'+param.name">{{param.displayName}}</label>
+                                                    <template v-if="param.hasHelpText || param.reboot">
+                                                        <a href="#" role="button" @mouseover="fetchHelpText(param.name)" data-bs-toggle="popover" data-bs-html="true" :data-bs-original-title="parametersHelpTexts[param.name]">
+                                                            <span class="fa-solid fa-question-circle"></span>
+                                                        </a>
+                                                    </template>
+
+                                                    <div v-if="isBoolean(param)">
+                                                        <input type="hidden" :id="'var'+param.name" :name="'var'+param.name" :value="0">
+                                                        <input type="checkbox"
+                                                               class="form-check-input form-control-lg"
+                                                               :id="'var'+param.name"
+                                                               :name="'var'+param.name"
+                                                               value="1"
+                                                               @change="param.value = 1-param.value"
+                                                               :checked="param.value != 0 ? 'checked' : null">
+                                                    </div>
+
+                                                    <div v-else-if="param.type === 5 && param.options">
+                                                        <select class="form-select form-control-lg"
+                                                                :id="'var'+param.name"
+                                                                :name="'var'+param.name"
+                                                                v-model="param.value">
+                                                            <option v-for="option in param.options"
+                                                                    :key="option.value"
+                                                                    :value="option.value">
+                                                                {{ option.label }}
+                                                            </option>
+                                                        </select>
+                                                        <span v-if="param.value < param.min" class="text-danger small">Value is too small!</span>
+                                                        <span v-if="param.value > param.max" class="text-danger small">Value is too large!</span>
+                                                    </div>
+
+                                                    <!-- String parameters -->
+                                                    <div v-else-if="param.type === 4">
+                                                        <input class="form-control form-control-lg"
+                                                               :type="param.name.toLowerCase().includes('password') ? 'password' : 'text'"
+                                                               :id="'var'+param.name"
+                                                               :name="'var'+param.name"
+                                                               v-model="param.value"
+                                                               :maxlength="param.max > 0 ? param.max : 64">
+                                                        <span v-if="param.max > 0 && param.value && param.value.length > param.max" class="text-danger small">Value is too long!</span>
+                                                    </div>
+
+                                                    <!-- Color parameters -->
+                                                    <div v-else-if="param.type === 6">
+                                                        <input class="form-control form-control-lg form-control-color"
+                                                               type="color"
+                                                               :id="'var'+param.name"
+                                                               :name="'var'+param.name"
+                                                               :value="colorIntToHex(param.value)"
+                                                               @input="param.value = colorHexToInt($event.target.value)">
+                                                    </div>
+
+                                                    <!-- Encoder I2C address: a dropdown fed by the live bus scan rather than a
+                                                         typed number, so the hex address can be picked from what's actually on the
+                                                         bus (and never mis-entered as a decimal). Keyed on the param name because its
+                                                         choices come from the scan at runtime, not a fixed list from the firmware. -->
+                                                    <div v-else-if="param.name === 'hardware.encoder.i2c_address'">
+                                                        <select class="form-select form-control-lg"
+                                                                :id="'var'+param.name"
+                                                                :name="'var'+param.name"
+                                                                v-model="param.value">
+                                                            <option v-for="option in i2cAddressOptions(param)"
+                                                                    :key="option.value"
+                                                                    :value="option.value">
+                                                                {{ option.label }}
+                                                            </option>
+                                                        </select>
+                                                        <div v-if="i2cScanning" class="small text-muted mt-1">
+                                                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Scanning bus...
+                                                        </div>
+                                                        <span v-if="i2cScanHasRun && !i2cScanning && !i2cScanDevices.length" class="text-danger small">No I2C devices found - check wiring and power.</span>
+                                                    </div>
+
+                                                    <!-- Numeric parameters (integer, uint8, double, float) -->
+                                                    <div v-else>
+                                                        <input class="form-control form-control-lg"
+                                                               :type="getInputType(param)"
+                                                               :step="getNumberStep(param)"
+                                                               :min="param.min"
+                                                               :max="param.max"
+                                                               :id="'var'+param.name"
+                                                               :name="'var'+param.name"
+                                                               v-model="param.value">
+                                                        <span v-if="param.value < param.min" class="text-danger small">Value is too small!</span>
+                                                        <span v-if="param.value > param.max" class="text-danger small">Value is too large!</span>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
                         </div>
                     </template>
 
@@ -151,34 +201,142 @@
                             </button>
                         </div>
                     </div>
-                </form>
+                </div>
+            </form>
+
+            <!-- System tab -->
+            <div v-show="activeTopTab === 'system'">
+                <ul class="nav nav-pills mb-4">
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: activeSection === 'system-control'}" href="#" @click.prevent="activeSection = 'system-control'">Control</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: activeSection === 'system-backup'}" href="#" @click.prevent="activeSection = 'system-backup'">Backup &amp; Restore</a>
+                    </li>
+                </ul>
+
+                <div v-show="activeSection === 'system-control'" class="row mb-4">
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-warning mb-3">Restart Machine</h5>
+                                <p class="card-text text-muted">Restart the machine to apply changes or resolve issues.</p>
+                                <button @click="confirmRestart" class="btn btn-warning btn-lg">
+                                    <span class="fa-solid fa-power-off me-2"></span>
+                                    Restart
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-danger mb-3">Reset Options</h5>
+                                <p class="card-text text-muted">
+                                    <strong>Warning:</strong> These actions cannot be undone.
+                                </p>
+                                <div class="d-grid gap-2 d-md-block">
+                                    <button class="btn btn-danger btn-lg me-2" @click="confirmFactoryReset">
+                                        <span class="fa-solid fa-exclamation-triangle me-2"></span>
+                                        Factory Reset
+                                    </button>
+                                    <button class="btn btn-warning btn-lg" @click="confirmReset">
+                                        <span class="fa-solid fa-wifi me-2"></span>
+                                        Reset WiFi
+                                    </button>
+                                </div>
+                                <div v-if="factoryResetMessage"
+                                     class="mt-2 alert"
+                                     :class="factoryResetSuccess ? 'alert-success' : 'alert-danger'">
+                                    {{ factoryResetMessage }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-show="activeSection === 'system-backup'" class="row">
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-success mb-3">Configuration Backup</h5>
+                                <p class="card-text text-muted">Download your current configuration as a backup file.</p>
+                                <a href="/download/config" class="btn btn-success btn-lg" download="clevercoffee-config.json">
+                                    <span class="fa-solid fa-download me-2"></span>
+                                    Download Config
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-warning mb-3">Configuration Upload</h5>
+                                <p class="card-text text-muted">Upload a previously downloaded configuration file to restore
+                                    settings.</p>
+                                <div class="mb-3">
+                                    <input type="file"
+                                           class="form-control"
+                                           id="configFileInput"
+                                           accept=".json"
+                                           @change="handleFileSelect">
+                                </div>
+                                <button @click="uploadConfig"
+                                        class="btn btn-warning btn-lg"
+                                        :disabled="!selectedFile || isUploading">
+                                    <span class="fa-solid fa-upload me-2"></span>
+                                    <span v-if="isUploading">Uploading...</span>
+                                    <span v-else>Upload Config</span>
+                                </button>
+                                <div v-if="uploadMessage"
+                                     class="mt-2 alert"
+                                     :class="uploadSuccess ? 'alert-success' : 'alert-danger'">
+                                    {{ uploadMessage }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- About tab -->
+            <div v-show="activeTopTab === 'about'">
+                <div class="card mb-5">
+                    <div class="card-body">
+                        <h5 class="card-title mb-3">Version</h5>
+                        <p class="card-text text-muted">%VAR_SHOW_VERSION%</p>
+                    </div>
+                </div>
+
+                <div class="card mb-5">
+                    <div class="card-body">
+                        <h5 class="card-title mb-3">Community & Resources</h5>
+                        <div class="row">
+                            <div class="col-md-4 mb-2">
+                                <a href="https://clevercoffee.de/" class="btn btn-outline-primary w-100" target="_blank">
+                                    <span class="fa-solid fa-globe me-2"></span>
+                                    Project Website
+                                </a>
+                            </div>
+                            <div class="col-md-4 mb-2">
+                                <a href="https://github.com/rancilio-pid/clevercoffee" class="btn btn-outline-dark w-100" target="_blank">
+                                    <span class="fa-solid fa-globe me-2"></span>
+                                    GitHub Repository
+                                </a>
+                            </div>
+                            <div class="col-md-4 mb-2">
+                                <a href="https://discord.gg/Kq5RFznuU4" class="btn btn-outline-info w-100" target="_blank">
+                                    <span class="fa-solid fa-globe me-2"></span>
+                                    Discord Community
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const collapseElement = document.getElementById('hardwareWarningDetails');
-        if (collapseElement) {
-            collapseElement.addEventListener('show.bs.collapse', function () {
-                const button = document.querySelector('[data-bs-target="#hardwareWarningDetails"]');
-                if (button) {
-                    button.querySelector('.collapse-toggle-text').textContent = 'Hide Details';
-                    button.querySelector('.fa-chevron-down').classList.replace('fa-chevron-down', 'fa-chevron-up');
-                }
-            });
-
-            collapseElement.addEventListener('hide.bs.collapse', function () {
-                const button = document.querySelector('[data-bs-target="#hardwareWarningDetails"]');
-                if (button) {
-                    button.querySelector('.collapse-toggle-text').textContent = 'Show Details';
-                    button.querySelector('.fa-chevron-up').classList.replace('fa-chevron-up', 'fa-chevron-down');
-                }
-            });
-        }
-    });
-</script>
 
 </div>
 

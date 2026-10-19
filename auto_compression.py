@@ -16,6 +16,7 @@ FILES_TO_COMPRESS = [
     "css/bootstrap-5.2.3.min.css",
     "css/fontawesome-6.2.1.min.css",
     "css/uPlot.min.css",
+    "css/dark-mode.css",
     "js/app.js",
     "js/vue.3.2.47.min.js",
     "js/bootstrap.bundle.5.2.3.min.js",

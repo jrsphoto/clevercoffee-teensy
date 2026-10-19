@@ -8,7 +8,12 @@ const vueApp = Vue.createApp({
             parametersHelpTexts: [],
             isPostingForm: false,
             showPostSucceeded: false,
-            filter: '',
+
+            // Settings page tabs (Settings/Hardware/System/About, each with its own
+            // sub-tabs) - only used on parameters.html, see mounted()
+            activeTopTab: 'settings',
+            activeSection: null,
+            currentFetchFilter: '',
 
             // Reboot notification
             showRebootBanner: false,
@@ -22,26 +27,44 @@ const vueApp = Vue.createApp({
 
             // Factory reset properties
             factoryResetMessage: '',
-            factoryResetSuccess: false
+            factoryResetSuccess: false,
+
+            // I2C scan (Encoder section)
+            i2cScanning: false,
+            i2cScanHasRun: false,
+            i2cScanDevices: []
         }
     },
 
-    mounted() {
-        // Get filter from URL parameter if available
-        const urlParams = new URLSearchParams(window.location.search);
-        let filter = urlParams.get('filter');
+    async mounted() {
+        const pathname = window.location.pathname;
+        const isSettingsPage = pathname === '/parameters.html' || pathname === '/parameters';
 
-        // If no filter specified and we're on index page, use empty filter to get all parameters
-        if (!filter && (window.location.pathname === '/' || window.location.pathname === '/index.html')) {
-            filter = '';
-        } else if (!filter) {
-            filter = this.filter; // use default
+        if (!isSettingsPage) {
+            // Home page (and anywhere else this app mounts) - unchanged narrow fetch, no tabs.
+            this.currentFetchFilter = '';
+            this.fetchParameters('');
+            return;
         }
 
-        this.filter = filter;
+        // Settings/Hardware tabs share one combined fetch, so switching between them (or
+        // editing one, then the other) never loses anything or needs a second round trip.
+        const urlParams = new URLSearchParams(window.location.search);
+        const validTabs = ['settings', 'hardware', 'system', 'about'];
+        let tab = urlParams.get('tab');
 
-        // Fetch parameters with the determined filter
-        this.fetchParameters(this.filter);
+        // Honor old bookmarks/links using the previous ?filter= scheme.
+        if (!tab) {
+            const legacyFilter = urlParams.get('filter');
+            if (legacyFilter === 'hardware') tab = 'hardware';
+            else if (legacyFilter === 'behavior') tab = 'settings';
+        }
+
+        this.activeTopTab = validTabs.includes(tab) ? tab : 'settings';
+
+        this.currentFetchFilter = 'all';
+        await this.fetchParameters('all');
+        this.resetActiveSectionForCurrentTab();
     },
 
     methods: {
@@ -156,7 +179,7 @@ const vueApp = Vue.createApp({
                 })
                 .then(data => {
                     // Parameters saved successfully - now re-fetch to get updated show conditions
-                    this.fetchParameters(this.filter);
+                    this.fetchParameters(this.currentFetchFilter);
 
                     // Show reboot banner only if reboot-required params actually changed
                     if (rebootParamsChanged.length > 0) {
@@ -214,10 +237,30 @@ const vueApp = Vue.createApp({
                 12: 'Relays',
                 13: 'Switches',
                 14: 'LEDs',
-                15: 'Sensors'
+                15: 'Sensors',
+                16: 'Encoder'
             }
 
             return sectionNames[sectionId]
+        },
+
+        // Pick the first available sub-tab for whichever top tab is active. Called on load
+        // and whenever the top tab changes - sub-tab choice isn't remembered per top-tab,
+        // it just resets to the first one each time.
+        resetActiveSectionForCurrentTab() {
+            if (this.activeTopTab === 'system') {
+                this.activeSection = 'system-control';
+                return;
+            }
+
+            if (this.activeTopTab === 'about') {
+                this.activeSection = null;
+                return;
+            }
+
+            const sections = this.activeTopTab === 'hardware' ? this.hardwareSectionsComputed : this.behaviorSectionsComputed;
+            const firstKey = Object.keys(sections)[0];
+            this.activeSection = firstKey !== undefined ? firstKey : null;
         },
 
         // Extract group number from position (second digit)
@@ -232,6 +275,8 @@ const vueApp = Vue.createApp({
                     return 'select';
                 case 4: // string
                     return 'text';
+                case 6: // color
+                    return 'color';
                 case 0: // integer
                 case 1: // uint8
                 case 2: // double
@@ -254,6 +299,75 @@ const vueApp = Vue.createApp({
                 default:
                     return '1';
             }
+        },
+
+        // Convert a stored 0-0xFFFFFF color value to a "#rrggbb" string for <input type="color">
+        colorIntToHex(value) {
+            const n = Math.max(0, Math.min(0xFFFFFF, Math.round(Number(value) || 0)));
+            return '#' + n.toString(16).padStart(6, '0');
+        },
+
+        // Convert a "#rrggbb" string from <input type="color"> back to the stored integer value
+        colorHexToInt(hex) {
+            return parseInt(String(hex).replace('#', ''), 16) || 0;
+        },
+
+        formatI2CAddress(addr) {
+            return '0x' + Number(addr).toString(16).padStart(2, '0').toUpperCase();
+        },
+
+        // Options for the encoder I2C address dropdown: every device the live bus scan found,
+        // plus the currently-saved address (so the field always shows its real value even
+        // before a scan runs or if the scan misses it). Each is labeled in hex (0xNN) the way
+        // I2C addresses are always written, while the stored value stays a plain integer.
+        i2cAddressOptions(param) {
+            const addresses = [...this.i2cScanDevices];
+            const current = Number(param.value);
+
+            if (current > 0 && !addresses.includes(current)) {
+                addresses.push(current);
+            }
+
+            return addresses
+                .sort((a, b) => a - b)
+                .map(addr => ({ value: addr, label: this.formatI2CAddress(addr) }));
+        },
+
+        // Kick off an I2C bus scan on the device and poll briefly for the result. The scan
+        // itself runs on the device's main loop (not instantly), so this isn't a single
+        // request/response - start it, then check back a few times until it's done.
+        async scanI2C() {
+            this.i2cScanning = true;
+
+            try {
+                await fetch('/api/i2cscan', { method: 'POST' });
+            }
+            catch (err) {
+                console.error('Error starting I2C scan:', err);
+                this.i2cScanning = false;
+                return;
+            }
+
+            for (let attempt = 0; attempt < 10; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                try {
+                    const response = await fetch('/api/i2cscan');
+                    const json = await response.json();
+
+                    if (!json.scanning) {
+                        this.i2cScanHasRun = !!json.hasRun;
+                        this.i2cScanDevices = json.devices || [];
+                        break;
+                    }
+                }
+                catch (err) {
+                    console.error('Error checking I2C scan status:', err);
+                    break;
+                }
+            }
+
+            this.i2cScanning = false;
         },
 
         // Helper method to check if parameter is a boolean (displayed as checkbox)
@@ -519,6 +633,27 @@ const vueApp = Vue.createApp({
             })
 
             return result
+        },
+
+        // Settings tab: PID/Temperature/Brew/Scale/Display/Maintenance/Power/MQTT/System Settings
+        behaviorSectionsComputed() {
+            return filterSectionsByRange(this.parameterSectionsComputed, 0, 9)
+        },
+
+        // Hardware tab: OLED/Relays/Switches/LEDs/Sensors/Encoder
+        hardwareSectionsComputed() {
+            return filterSectionsByRange(this.parameterSectionsComputed, 11, 16)
+        }
+    },
+
+    watch: {
+        // Auto-scan the I2C bus the first time the Encoder section (16) is opened, so its
+        // address dropdown fills with live devices without the user pressing Scan. Guarded so
+        // it runs once; the Scan button is still there for a manual re-scan.
+        activeSection(section) {
+            if (Number(section) === 16 && !this.i2cScanHasRun && !this.i2cScanning) {
+                this.scanI2C();
+            }
         }
     }
 })
@@ -531,6 +666,23 @@ if (typeof VueNumberInput !== 'undefined') {
 window.vueApp = vueApp
 window.dispatchEvent(appCreatedEvent)
 window.appCreated = true
+
+/**
+ * Keeps only the section keys within [min, max] from a parameterSectionsComputed-shaped object.
+ */
+function filterSectionsByRange(sections, min, max) {
+    const result = {}
+
+    Object.keys(sections).forEach(sectionKey => {
+        const n = Number(sectionKey)
+
+        if (n >= min && n <= max) {
+            result[sectionKey] = sections[sectionKey]
+        }
+    })
+
+    return result
+}
 
 /**
  * Takes an array of objects and returns an object of arrays where the value of key is the same
