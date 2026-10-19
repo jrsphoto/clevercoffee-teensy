@@ -34,9 +34,10 @@
 #include "hardware/StandardLED.h"
 #include "hardware/Switch.h"
 #include "hardware/pinmapping.h"
-#include "hardware/tempsensors/TempSensor.h" // base interface only - TempSensorDallas.h / TempSensorTSIC.h
-                                              // removed, both used PIN_TEMPSENSOR (IO16), which this board
-                                              // wires to PIN_OLED_CS instead. See tempSensor's construction below.
+#include "hardware/tempsensors/TempSensor.h"          // base interface. TempSensorDallas/TSIC not included:
+                                                       // both used PIN_TEMPSENSOR (IO16), which this board wires
+                                                       // to PIN_OLED_CS. Boiler temp is a PT100 RTD instead:
+#include "hardware/tempsensors/TempSensorMAX31865.h"   // PT100/MAX31865 on the shared SPI bus (see below).
 
 // User configuration & defaults
 #include "defaults.h"
@@ -934,6 +935,12 @@ void setup() {
 
     encoderSetup();
 
+    // Start the shared hardware SPI bus once, with this board's custom pins. Both the SPI
+    // display and the two MAX31865 RTDs ride this bus, each picked by its own chip-select, so
+    // it must be up before either is initialized - and regardless of whether the display is
+    // enabled, since the RTDs need it too.
+    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
+
     if (config.get<bool>("hardware.oled.enabled")) {
         const int oledType = config.get<int>("hardware.oled.type");
 
@@ -945,11 +952,10 @@ void setup() {
                 u8g2 = new U8G2_SSD1306_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE, PIN_I2CSCL, PIN_I2CSDA); // e.g. 0.96"
                 break;
             case 2:
-                // Shares the hardware SPI bus with the two MAX31865 RTDs (firmware-plan.md item 2, not yet
-                // ported in) - remap the default VSPI pins to this board's custom SCK/MOSI/MISO first.
-                // Reset is omitted (defaults to U8X8_PIN_NONE): OLED_RST ties to the ESP32's own EN/RST pin,
-                // so the display resets with the board rather than needing its own GPIO.
-                SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_OLED_CS);
+                // Rides the shared hardware SPI bus (started above) alongside the two MAX31865 RTDs,
+                // with its own chip-select. Reset is omitted (defaults to U8X8_PIN_NONE): OLED_RST ties
+                // to the ESP32's own EN/RST pin, so the display resets with the board rather than
+                // needing its own GPIO.
                 u8g2 = new U8G2_SSD1309_128X64_NONAME2_1_4W_HW_SPI(U8G2_R0, PIN_OLED_CS, PIN_OLED_DC); // 2.42"
                 break;
             default:
@@ -1139,10 +1145,17 @@ void setup() {
     bPID.SetSmoothingFactor(emaFactor);
     bPID.SetMode(AUTOMATIC);
 
-    // TSIC/Dallas removed: both used IO16, which this board wires to PIN_OLED_CS instead.
-    // Boiler temperature is PT100 RTD + MAX31865 on this build (firmware-plan.md item 2,
-    // not yet ported in) - tempSensor stays nullptr until then, which is already a safe,
-    // proven state: "Temperature sensor not connected" warning, heater held off fail-safe.
+    // Boiler temperature is a PT100 RTD read through a MAX31865 on the shared SPI bus
+    // (type 2). TSIC (0) and Dallas (1) are not built on this board - they used IO16, now
+    // PIN_OLED_CS - so any other type leaves tempSensor null, which is the safe fail state
+    // (sensor-error warning, heater held off). The group RTD (PIN_RTD_CS_GROUP) is a second,
+    // separate sensor for flush/readiness and is not wired in yet - that's the next step.
+    if (config.get<int>("hardware.sensors.temperature.type") == 2) {
+        tempSensor = new TempSensorMAX31865(PIN_RTD_CS_BOILER,
+                                            config.get<int>("hardware.sensors.temperature.rtd_nominal"),
+                                            config.get<int>("hardware.sensors.temperature.rtd_reference"),
+                                            config.get<int>("hardware.sensors.temperature.rtd_wires"));
+    }
 
     if (tempSensor != nullptr) {
         temperature = tempSensor->getCurrentTemperature();

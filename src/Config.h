@@ -374,7 +374,10 @@ class Config {
             _configDefs.emplace("hardware.leds.steam.inverted", ConfigDef::forBool(false));
 
             // Hardware - Sensors
-            _configDefs.emplace("hardware.sensors.temperature.type", ConfigDef::forInt(0, 0, 1));
+            _configDefs.emplace("hardware.sensors.temperature.type", ConfigDef::forInt(2, 0, 2)); // default MAX31865 on this board
+            _configDefs.emplace("hardware.sensors.temperature.rtd_nominal", ConfigDef::forInt(100, 100, 1000));   // PT100 vs PT1000
+            _configDefs.emplace("hardware.sensors.temperature.rtd_reference", ConfigDef::forInt(430, 100, 5000)); // MAX31865 board's Rref (430 for PT100)
+            _configDefs.emplace("hardware.sensors.temperature.rtd_wires", ConfigDef::forInt(3, 2, 4));            // 2-, 3- or 4-wire RTD
             _configDefs.emplace("hardware.sensors.pressure.enabled", ConfigDef::forBool(false));
             _configDefs.emplace("hardware.sensors.watertank.enabled", ConfigDef::forBool(false));
             _configDefs.emplace("hardware.sensors.watertank.mode", ConfigDef::forInt(Switch::NORMALLY_CLOSED, 0, 1));
