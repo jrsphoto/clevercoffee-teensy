@@ -9,7 +9,8 @@ enum EditableKind {
     kDouble,
     kFloat,
     kCString,
-    kEnum
+    kEnum,
+    kColor // stored as a plain int, 0x000000-0xFFFFFF; web UI renders it as a color picker
 };
 
 class Parameter {

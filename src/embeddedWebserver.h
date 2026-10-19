@@ -18,6 +18,7 @@
 #include <ESPAsyncWebServer.h>
 
 #include "LittleFS.h"
+#include <vector>
 
 inline AsyncWebServer server(80);
 inline AsyncEventSource events("/events");
@@ -130,6 +131,10 @@ inline void paramToJson(const String& name, const std::shared_ptr<Parameter>& pa
 
         case kFloat:
             doc["value"] = round2(static_cast<float>(param->getValue()));
+            break;
+
+        case kColor:
+            doc["value"] = static_cast<int>(param->getValue());
             break;
 
         case kCString:
@@ -306,7 +311,7 @@ inline void serverSetup() {
                 bool includeParam = false;
 
                 if (filterType == "hardware") {
-                    includeParam = param->getSection() >= 11 && param->getSection() <= 15;
+                    includeParam = param->getSection() >= 11 && param->getSection() <= 16;
                 }
                 else if (filterType == "behavior") {
                     includeParam = param->getSection() >= 0 && param->getSection() <= 9;
@@ -395,6 +400,43 @@ inline void serverSetup() {
             response->addHeader("Connection", "close");
             request->send(response);
         }
+    });
+
+    // On-demand I2C bus scan for the Encoder config section - POST starts a scan (it actually
+    // runs on the main loop's next pass, not synchronously here, since I2C access has to stay
+    // off the web server's own task), GET returns whatever the last scan found. Defined in
+    // encoderHandler.h, which is included later in main.cpp than this file.
+    extern bool i2cScanRequested;
+    extern bool i2cScanInProgress;
+    extern bool i2cScanHasRun;
+    extern std::vector<uint8_t> i2cScanResults;
+
+    server.on("/api/i2cscan", [](AsyncWebServerRequest* request) {
+        if (!authenticate(request)) {
+            return request->requestAuthentication();
+        }
+
+        if (request->method() == 2) { // HTTP_POST
+            i2cScanRequested = true;
+        }
+
+        AsyncResponseStream* response = request->beginResponseStream("application/json");
+        response->print("{\"hasRun\":");
+        response->print(i2cScanHasRun ? "true" : "false");
+        response->print(",\"scanning\":");
+        response->print((i2cScanRequested || i2cScanInProgress) ? "true" : "false");
+        response->print(",\"devices\":[");
+
+        for (size_t i = 0; i < i2cScanResults.size(); i++) {
+            if (i > 0) {
+                response->print(",");
+            }
+
+            response->print(i2cScanResults[i]);
+        }
+
+        response->print("]}");
+        request->send(response);
     });
 
     server.on("/parameterHelp", HTTP_GET, [](AsyncWebServerRequest* request) {
