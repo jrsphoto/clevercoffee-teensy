@@ -1,0 +1,199 @@
+/* Dark mode overrides, toggled via [data-theme="dark"] on <html>.
+ * Bootstrap 5.2 doesn't have the built-in dark mode that landed in 5.3, so this hand-rolls
+ * just what this site actually uses rather than pulling in a newer Bootstrap.
+ */
+
+html[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+html[data-theme="dark"] body {
+    background-color: #1a1d23;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .card {
+    background-color: #242830;
+    border-color: #383d47;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .bg-light {
+    background-color: #2d323c !important;
+    color: #e4e6eb !important;
+}
+
+html[data-theme="dark"] .card-header {
+    background-color: #2d323c;
+    border-color: #383d47;
+}
+
+html[data-theme="dark"] .text-muted {
+    color: #9098a4 !important;
+}
+
+html[data-theme="dark"] hr {
+    border-color: #383d47;
+    opacity: 1;
+}
+
+/* Tabs */
+html[data-theme="dark"] .nav-tabs {
+    border-color: #383d47;
+}
+
+html[data-theme="dark"] .nav-tabs .nav-link {
+    color: #9098a4;
+}
+
+html[data-theme="dark"] .nav-tabs .nav-link:hover {
+    border-color: #383d47 #383d47 #383d47;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .nav-tabs .nav-link.active {
+    background-color: #242830;
+    border-color: #383d47 #383d47 #242830;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .nav-pills .nav-link {
+    color: #9098a4;
+}
+
+html[data-theme="dark"] .nav-pills .nav-link.active {
+    background-color: #0d6efd;
+    color: #fff;
+}
+
+/* Forms */
+html[data-theme="dark"] .form-control,
+html[data-theme="dark"] .form-select {
+    background-color: #2d323c;
+    border-color: #454b57;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .form-control:focus,
+html[data-theme="dark"] .form-select:focus {
+    background-color: #2d323c;
+    color: #e4e6eb;
+    border-color: #0d6efd;
+}
+
+html[data-theme="dark"] .form-control::placeholder {
+    color: #6b7280;
+}
+
+html[data-theme="dark"] .form-control-color {
+    background-color: #2d323c;
+    border-color: #454b57;
+}
+
+html[data-theme="dark"] .form-check-input {
+    background-color: #2d323c;
+    border-color: #454b57;
+}
+
+html[data-theme="dark"] .form-label {
+    color: #e4e6eb;
+}
+
+/* Alerts - darkened background, kept enough of the semantic tint to still read as info/warning/etc */
+html[data-theme="dark"] .alert-info {
+    background-color: #0d3a4d;
+    border-color: #114a63;
+    color: #9fd3e8;
+}
+
+html[data-theme="dark"] .alert-warning {
+    background-color: #4d3b0d;
+    border-color: #634c11;
+    color: #e8d39f;
+}
+
+html[data-theme="dark"] .alert-success {
+    background-color: #0d4d2a;
+    border-color: #116339;
+    color: #9fe8bf;
+}
+
+html[data-theme="dark"] .alert-danger {
+    background-color: #4d0d16;
+    border-color: #63111d;
+    color: #e89fa9;
+}
+
+/* Popovers (the help-text "?" icons) */
+html[data-theme="dark"] .popover {
+    background-color: #242830;
+    border-color: #383d47;
+}
+
+html[data-theme="dark"] .popover-header {
+    background-color: #2d323c;
+    border-color: #383d47;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .popover-body {
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .bs-popover-top > .popover-arrow::after {
+    border-top-color: #242830;
+}
+
+html[data-theme="dark"] .bs-popover-bottom > .popover-arrow::after {
+    border-bottom-color: #242830;
+}
+
+html[data-theme="dark"] .bs-popover-start > .popover-arrow::after {
+    border-left-color: #242830;
+}
+
+html[data-theme="dark"] .bs-popover-end > .popover-arrow::after {
+    border-right-color: #242830;
+}
+
+/* Outline buttons that assume a light background */
+html[data-theme="dark"] .btn-outline-secondary {
+    color: #9098a4;
+    border-color: #454b57;
+}
+
+html[data-theme="dark"] .btn-outline-secondary:hover {
+    background-color: #454b57;
+    color: #e4e6eb;
+}
+
+html[data-theme="dark"] .btn-outline-dark {
+    color: #e4e6eb;
+    border-color: #454b57;
+}
+
+html[data-theme="dark"] .btn-outline-dark:hover {
+    background-color: #454b57;
+    color: #fff;
+}
+
+html[data-theme="dark"] a {
+    color: #6ea8fe;
+}
+
+html[data-theme="dark"] a:hover {
+    color: #9ec5fe;
+}
+
+html[data-theme="dark"] .table {
+    color: #e4e6eb;
+}
+
+/* Theme toggle button in the navbar */
+#theme-toggle {
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+#theme-toggle:hover {
+    border-color: rgba(255, 255, 255, 0.6);
+}

@@ -170,7 +170,7 @@ runSingleCDNProbe("https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstr
 })
 .then(src => {
   console.log(`Bootstrap loaded from ${src}`);
-  return waitForHeap(minHeap).then(() => import('/js/app.js?v=1'));
+  return waitForHeap(minHeap).then(() => import('/js/app.js?v=2'));
 })
 .then(() => {
   console.log("App loaded");

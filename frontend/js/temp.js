@@ -21,6 +21,12 @@ var heaterDiv = 'chart-heater'
 let uplotTemp = null;
 let uplotHeater = null;
 
+// Chart axis/grid colors aren't CSS-stylable (uPlot draws them to canvas), so pick them
+// once here based on the theme set at page load (see header.html's theme-init script).
+const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
+const chartAxisStroke = isDarkTheme ? '#9098a4' : 'rgba(0,0,0,0.5)';
+const chartGridStroke = isDarkTheme ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
+
 function addTempData(jsonValue, isSingleValue=false) {
     // add new value(s) to global data arrays and return in a
     // format that uPlot can use
@@ -237,9 +243,13 @@ function makeTempChart(data) {
         ],
         axes: [
             {
+                stroke: chartAxisStroke,
+                grid: { stroke: chartGridStroke },
                 values: (u, vals, space) => vals.map(v => uPlot.tzDate(new Date(v * 1e3), localTz).toLocaleString("de-DE", tzdateOptions)),
             },
             {
+                stroke: chartAxisStroke,
+                grid: { stroke: chartGridStroke },
                 scale: 'C',
                 values: (u, vals, space) => vals.map(v => +v + "°C"),
             }
@@ -281,9 +291,13 @@ function makeHeaterChart(data) {
         ],
         axes: [
             {
+                stroke: chartAxisStroke,
+                grid: { stroke: chartGridStroke },
                 values: (u, vals, space) => vals.map(v => uPlot.tzDate(new Date(v * 1e3), localTz).toLocaleString("de-DE", tzdateOptions)),
             },
             {
+                stroke: chartAxisStroke,
+                grid: { stroke: chartGridStroke },
                 side: 3,
                 scale: '%',
                 values: (u, vals, space) => vals.map(v => +v.toFixed(0) + "%"),
