@@ -300,7 +300,26 @@ void u8g2_prepare();
 
 Timer printDisplayTimer(&DisplayTemplateManager::printScreen, 100);
 
-#include "encoderHandler.h"
+// The Duppa encoder has MOVED TO THE TEENSY (see TEENSY-PORT-BRIEF.md). It
+// carries both the control gestures and the machine-status RGB LED, and both
+// belong to the side that owns the machine state - so an ESP32 or display
+// failure can never take the encoder with it. src/encoderHandler.* is now the
+// Teensy driver; this head no longer touches the encoder at all.
+// #include "encoderHandler.h"
+
+// The web UI still offers an I2C bus scan, and those globals used to live in
+// encoderHandler.h. The bus itself is now on the Teensy, so in the finished
+// two-chip design this page will ask the Teensy over the UART and render what
+// comes back. Until that link exists (phase 6) these stand in, so the head
+// still builds and the endpoint reports honestly that it has nothing to show
+// rather than silently returning stale results.
+#include <vector>
+// Plain definitions, not inline: embeddedWebserver.h declares these 'extern',
+// so they need ordinary external-linkage definitions to resolve against.
+bool i2cScanRequested = false;
+bool i2cScanInProgress = false;
+bool i2cScanHasRun = false;
+std::vector<uint8_t> i2cScanResults;
 #include "powerHandler.h"
 #include "scaleHandler.h"
 #include "steamHandler.h"
@@ -929,11 +948,11 @@ void setup() {
         ParameterRegistry::getInstance().syncGlobalVariables();
     }
 
-    i2cBusRecovery(); // must run before Wire.begin() claims PIN_I2CSDA/SCL for hardware I2C
-
+    // i2cBusRecovery() and encoderSetup() lived here when this firmware owned
+    // the encoder. Both now live on the Teensy side (src/i2cHandler.cpp and
+    // src/encoderHandler.cpp). This head keeps Wire only for its own on-module
+    // peripherals.
     Wire.begin();
-
-    encoderSetup();
 
     // Start the shared hardware SPI bus once, with this board's custom pins. Both the SPI
     // display and the two MAX31865 RTDs ride this bus, each picked by its own chip-select, so
@@ -1364,7 +1383,7 @@ void loopPid() {
 
     checkSteamSwitch();
     checkPowerSwitch();
-    encoderLoop();
+    // encoderLoop() removed - the encoder is Teensy-owned now.
 
     // set setpoint depending on steam or brew mode
     if (steamON == 1) {
