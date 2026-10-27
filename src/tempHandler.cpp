@@ -193,6 +193,8 @@ namespace temps {
         Serial.println("):");
 
         if (boilerSensor != nullptr) {
+            boilerSensor->testSpiWrites();
+            boilerSensor->dumpRegisters();
             boilerSensor->printDiagnostics();
         }
 
