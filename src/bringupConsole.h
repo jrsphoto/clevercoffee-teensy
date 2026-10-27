@@ -35,6 +35,15 @@
 void bringupConsoleBegin();
 
 /**
+ * @brief Print the command list.
+ *
+ * Exposed so the main loop can re-print it whenever a monitor attaches. The
+ * board boots and starts talking long before anyone opens a serial monitor, so
+ * anything printed only at startup is invisible in practice.
+ */
+void bringupConsolePrintHelp();
+
+/**
  * @brief Service the console. Call every pass of the main loop.
  *
  * Non-blocking: reads whatever characters are waiting, acts only on a completed
