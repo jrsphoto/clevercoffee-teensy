@@ -1,6 +1,34 @@
 #pragma once
 
+/**
+ * Two platforms share this logger.
+ *
+ * On the ESP32 it logs to serial AND to a WiFi client, which is how CleverCoffee
+ * has always offered remote logging. The Teensy has no WiFi, so there it logs to
+ * the USB serial console only.
+ *
+ * The public API and the LOG/LOGF/IFLOG macros below are deliberately identical
+ * on both, so every ported CleverCoffee file keeps logging exactly as it does
+ * upstream, with no per-platform spelling.
+ */
+#if defined(ARDUINO_TEENSY41) || defined(__IMXRT1062__)
+#define CC_LOGGER_SERIAL_ONLY 1
+
+#include <Arduino.h>
+
+#ifndef FPSTR
+/**
+ * The ESP cores define FPSTR; Teensy does not. Flash is memory-mapped on the
+ * i.MX RT, so there is nothing to copy - the cast is the whole job.
+ */
+#define FPSTR(p) (reinterpret_cast<const __FlashStringHelper*>(p))
+#endif
+
+#else
+#define CC_LOGGER_SERIAL_ONLY 0
+
 #include <WiFiManager.h>
+#endif
 
 #include <stdint.h>
 
@@ -112,9 +140,11 @@ class Logger {
         // Port of this logger
         uint16_t port_;
 
-        // Server and client
+#if !CC_LOGGER_SERIAL_ONLY
+        // Server and client (ESP32 only - the Teensy logs to serial alone)
         WiFiClient client_;
         WiFiServer server_;
+#endif
 };
 
 #ifndef __FILE_NAME__

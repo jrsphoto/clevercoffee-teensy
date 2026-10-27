@@ -26,7 +26,28 @@ bool TempSensorMAX31865::sample_temperature(double& temperature) const {
     const uint8_t fault = rtd_->readFault();
 
     if (fault) {
-        LOGF(WARNING, "MAX31865 fault 0x%02X", fault);
+        // Decode rather than print a bare hex code. 0x18 (both FORCE- open bits)
+        // is by far the most common and simply means nothing is connected, which
+        // is worth saying in words at 2am.
+        const char* meaning = "unknown";
+
+        if (fault & MAX31865_FAULT_HIGHTHRESH) {
+            meaning = "RTD resistance above high threshold";
+        }
+        else if (fault & MAX31865_FAULT_LOWTHRESH) {
+            meaning = "RTD resistance below low threshold";
+        }
+        else if (fault & (MAX31865_FAULT_REFINLOW | MAX31865_FAULT_RTDINLOW)) {
+            meaning = "open circuit - probe not connected or a broken lead";
+        }
+        else if (fault & MAX31865_FAULT_REFINHIGH) {
+            meaning = "REFIN- too high - check the reference resistor / wiring";
+        }
+        else if (fault & MAX31865_FAULT_OVUV) {
+            meaning = "over/under voltage on the input";
+        }
+
+        LOGF(WARNING, "MAX31865 fault 0x%02X: %s", fault, meaning);
         rtd_->clearFault();
         return false;
     }

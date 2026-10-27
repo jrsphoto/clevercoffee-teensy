@@ -11,6 +11,7 @@
 
 #include "hardware/outputs.h"
 #include "safetyHandler.h"
+#include "tempHandler.h"
 
 namespace {
 
@@ -45,6 +46,7 @@ namespace {
         Serial.println("  on <channel>      energize one channel (re-issue to extend)");
         Serial.println("  off <channel>     de-energize one channel");
         Serial.println("  off               de-energize everything");
+        Serial.println("  temp              read both RTD temperature sensors");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
         Serial.println("Channels: heater, pump, valve, fill");
@@ -81,6 +83,8 @@ namespace {
             Serial.print(") : ");
             Serial.println(outputs::isOn(channel) ? "ON" : "off");
         }
+
+        temps::printStatus();
 
         Serial.println();
     }
@@ -227,6 +231,9 @@ namespace {
         }
         else if (strcasecmp(command, "status") == 0) {
             printStatus();
+        }
+        else if (strcasecmp(command, "temp") == 0) {
+            temps::printStatus();
         }
         else if (strcasecmp(command, "on") == 0) {
             if (argument == nullptr) {
