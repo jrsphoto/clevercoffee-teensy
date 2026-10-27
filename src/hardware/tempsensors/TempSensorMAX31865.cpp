@@ -94,17 +94,32 @@ void TempSensorMAX31865::printDiagnostics() const {
     Serial.print(rRef_, 0);
     Serial.print(", expect ~110 ohm for a PT100 at room temperature)");
 
+    // Classify against what a PT100 can actually do. The first version of this
+    // band was far too generous and called 362 ohm "plausible" - nonsense at room
+    // temperature, and it masked a real fault. A PT100 is 100 ohm at 0 C, ~110 at
+    // 25 C, 138 at 100 C and ~175 at 200 C. Anything much past 200 ohm is not a
+    // temperature at all, it is resistance that does not belong in the circuit.
     if (ohms < 5.0f) {
-        Serial.println("  -> OPEN or shorted: no current path through the element");
+        Serial.println("  -> OPEN: no current path through the element");
     }
-    else if (ohms < 80.0f) {
-        Serial.println("  -> too low for a PT100: check wiring / wrong pair on the terminals");
+    else if (ohms < 90.0f) {
+        Serial.println("  -> too low for a PT100: partial short, or the matched pair is on the wrong terminals");
     }
-    else if (ohms > 400.0f) {
-        Serial.println("  -> far too high: looks like a PT1000 probe on a PT100 board");
+    else if (ohms <= 200.0f) {
+        // Linear approximation, good to a fraction of a degree over this range.
+        Serial.print("  -> plausible PT100, about ");
+        Serial.print((ohms - 100.0f) / 0.385f, 0);
+        Serial.println(" C");
+    }
+    else if (ohms < 800.0f) {
+        Serial.println("  -> TOO HIGH for a PT100. That is extra series resistance:");
+        Serial.println("       a loose screw terminal or a strand barely touching. Re-seat the leads.");
+    }
+    else if (ohms < 1400.0f) {
+        Serial.println("  -> looks like a PT1000 probe on a PT100 board (wrong Rref)");
     }
     else {
-        Serial.println("  -> plausible for a PT100");
+        Serial.println("  -> far too high: open circuit or badly wrong wiring");
     }
 
     const uint8_t fault = rtd_->readFault();
