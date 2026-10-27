@@ -7,9 +7,10 @@
 #include "TempSensorMAX31865.h"
 #include "Logger.h"
 #include <Arduino.h>
+#include <SPI.h>
 
 TempSensorMAX31865::TempSensorMAX31865(const int csPin, const float rNominal, const float rRef, const int wires) :
-    rNominal_(rNominal), rRef_(rRef) {
+    rNominal_(rNominal), rRef_(rRef), csPin_(csPin) {
     // Hardware SPI: the chip rides the shared bus (started in main.cpp with this
     // board's custom pins) and is selected by its own chip-select, so it coexists
     // cleanly with the SPI display and the other RTD.
@@ -75,6 +76,100 @@ bool TempSensorMAX31865::sample_temperature(double& temperature) const {
 
     temperature = temp;
     return true;
+}
+
+void TempSensorMAX31865::dumpRegisters() const {
+    // Talk to the chip directly rather than through the library, so this reports
+    // the chip's real state instead of the driver's intentions. MAX31865 is SPI
+    // mode 1 (CPOL=0, CPHA=1); a read is the register address with bit 7 clear.
+    auto readReg = [this](const uint8_t addr) -> uint8_t {
+        SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+        digitalWrite(csPin_, LOW);
+        SPI.transfer(addr & 0x7F);
+        const uint8_t value = SPI.transfer(0xFF);
+        digitalWrite(csPin_, HIGH);
+        SPI.endTransaction();
+
+        return value;
+    };
+
+    // Ask the library for a conversion first, so the registers below reflect a
+    // real attempt rather than an idle chip.
+    rtd_->readRTD();
+
+    const uint8_t config = readReg(0x00);
+    const uint8_t rtdMsb = readReg(0x01);
+    const uint8_t rtdLsb = readReg(0x02);
+    const uint8_t fault = readReg(0x07);
+
+    Serial.print("    CONFIG=0x");
+    Serial.print(config, HEX);
+    Serial.print("  RTD=0x");
+    Serial.print(rtdMsb, HEX);
+    Serial.print(rtdLsb < 0x10 ? "0" : "");
+    Serial.print(rtdLsb, HEX);
+    Serial.print("  FAULT=0x");
+    Serial.println(fault, HEX);
+
+    // The two config bits that decide whether a measurement is even possible.
+    Serial.print("      VBIAS  = ");
+    Serial.println((config & 0x80) ? "ON" : "OFF  <<< cannot drive current without this");
+    Serial.print("      3-WIRE = ");
+    Serial.println((config & 0x10) ? "yes" : "no (2/4-wire)");
+    Serial.print("      auto   = ");
+    Serial.println((config & 0x40) ? "yes" : "no (one-shot)");
+
+    if (config == 0x00 || config == 0xFF) {
+        Serial.println("      CONFIG reads all-zero/all-ones - the chip is not responding properly");
+    }
+}
+
+bool TempSensorMAX31865::testSpiWrites() const {
+    // Threshold registers are plain read/write storage with no effect on a
+    // measurement, which makes them a safe place to prove the write path.
+    const uint16_t savedLow = rtd_->getLowerThreshold();
+    const uint16_t savedHigh = rtd_->getUpperThreshold();
+
+    // A pattern with bits set in both bytes, so a stuck-low or stuck-high line
+    // cannot accidentally match.
+    constexpr uint16_t kTestLow = 0x2A55;
+    constexpr uint16_t kTestHigh = 0x55AA;
+
+    rtd_->setThresholds(kTestLow, kTestHigh);
+    delay(5);
+
+    const uint16_t readLow = rtd_->getLowerThreshold();
+    const uint16_t readHigh = rtd_->getUpperThreshold();
+
+    const bool ok = (readLow == kTestLow) && (readHigh == kTestHigh);
+
+    Serial.print("    SPI write test: wrote 0x");
+    Serial.print(kTestLow, HEX);
+    Serial.print("/0x");
+    Serial.print(kTestHigh, HEX);
+    Serial.print(", read back 0x");
+    Serial.print(readLow, HEX);
+    Serial.print("/0x");
+    Serial.print(readHigh, HEX);
+
+    if (ok) {
+        Serial.println("  -> WRITES OK (SDI/MOSI is good)");
+    }
+    else if (readLow == 0 && readHigh == 0) {
+        Serial.println("  -> WRITES FAILING, reads return zero");
+        Serial.println("       Check SDI (chip) to Teensy pin 11, and that the chip is selected.");
+    }
+    else {
+        Serial.println("  -> WRITES FAILING - reads work but writes do not land");
+        Serial.println("       SDI/MOSI (Teensy pin 11) is the prime suspect: a broken write");
+        Serial.println("       path leaves VBIAS off, so the chip reports an open circuit");
+        Serial.println("       that is indistinguishable from a disconnected probe.");
+    }
+
+    // Put the thresholds back where they were.
+    rtd_->setThresholds(savedLow, savedHigh);
+
+    return ok;
 }
 
 void TempSensorMAX31865::printDiagnostics() const {

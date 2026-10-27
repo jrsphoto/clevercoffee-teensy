@@ -37,11 +37,42 @@ class TempSensorMAX31865 final : public TempSensor {
          */
         void printDiagnostics() const;
 
+        /**
+         * @brief Bring-up aid: prove SPI WRITES reach the chip, not just reads.
+         *
+         * Reads and writes fail independently. If SDO/MISO is good but SDI/MOSI
+         * is not, every register read returns believable data while every write
+         * is silently discarded - so the chip never gets VBIAS enabled and never
+         * measures anything, reporting raw=0 and an open-circuit fault that looks
+         * exactly like a disconnected probe.
+         *
+         * Writes a known pattern to the threshold registers and reads it back.
+         * They are ordinary read/write registers that have no effect on the
+         * measurement, so this is safe to run at any time. Restores them after.
+         *
+         * @return true if writes land.
+         */
+        bool testSpiWrites() const;
+
+        /**
+         * @brief Bring-up aid: dump every MAX31865 register, read raw over SPI.
+         *
+         * Bypasses the library entirely and talks to the chip directly, so what
+         * is printed is the chip's actual state rather than what the driver
+         * believes it set. Decodes the config register, which is the one that
+         * matters: it shows whether VBIAS is actually on and whether the chip is
+         * really in 3-wire mode. Without VBIAS the chip cannot drive current
+         * through the RTD and will report an open circuit no matter how good the
+         * wiring is.
+         */
+        void dumpRegisters() const;
+
     protected:
         bool sample_temperature(double& temperature) const override;
 
     private:
         Adafruit_MAX31865* rtd_;
+        int csPin_; // kept so dumpRegisters() can talk to the chip directly
         float rNominal_;
         float rRef_;
 };
