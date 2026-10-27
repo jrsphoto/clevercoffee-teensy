@@ -101,4 +101,9 @@ namespace temps {
      */
     void printStatus();
 
+    /**
+     * @brief Bring-up aid: dump raw measured resistance for both probes.
+     */
+    void printDiagnostics();
+
 } // namespace temps

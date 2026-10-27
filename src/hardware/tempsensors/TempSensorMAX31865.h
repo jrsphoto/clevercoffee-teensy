@@ -27,6 +27,16 @@ class TempSensorMAX31865 final : public TempSensor {
          */
         explicit TempSensorMAX31865(int csPin, float rNominal = 100.0f, float rRef = 430.0f, int wires = 3);
 
+        /**
+         * @brief Bring-up aid: report the resistance the chip actually measures.
+         *
+         * The fault register says something is wrong; this says what. An open
+         * probe reads ~0 ohm, a healthy PT100 at room temperature ~110 ohm, and
+         * a specific wrong value points at a specific miswiring. Prints to the
+         * serial console. Not used by the control path.
+         */
+        void printDiagnostics() const;
+
     protected:
         bool sample_temperature(double& temperature) const override;
 
