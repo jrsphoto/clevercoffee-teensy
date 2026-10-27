@@ -22,6 +22,8 @@
 
 #include <Arduino.h>
 
+#include "bringupConsole.h"
+#include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
 
@@ -126,12 +128,19 @@ void setup() {
         Serial.println("SELF-CHECK PASSED");
     }
 
+    // Build the actuator objects. safetyInitOutputs() has already forced these
+    // pins safe with raw writes; this hands ownership to the output layer and
+    // re-asserts off, so there is no window between the two.
+    outputs::init();
+
     // Started last, so a slow but legitimate boot cannot trip it, and before the
     // first loop() so the running machine is always covered.
     safety::noteControlLoopAlive();
     safetyWatchdogInit();
 
     Serial.println("Watchdog armed. Entering main loop.");
+
+    bringupConsoleBegin();
 }
 
 void loop() {
@@ -159,15 +168,23 @@ void loop() {
         safetyHardOff();
     }
 
+    // Bench bring-up: one output at a time, auto-off, nothing while faulted.
+    // Also enforces the auto-off timer, so it must run even when nobody types.
+    bringupConsoleLoop();
+
     // Phase 1 heartbeat so it is obvious on the bench that the loop is running.
-    // Goes away once there is real telemetry.
+    // Suppressed while a channel is energized from the console, so it cannot
+    // scroll an auto-off warning off the screen. Goes away once there is real
+    // telemetry.
     if (const uint32_t now = millis(); now - lastHeartbeatMs >= kHeartbeatIntervalMs) {
         lastHeartbeatMs = now;
 
-        Serial.print("alive, uptime ");
-        Serial.print(now / 1000);
-        Serial.print("s, state ");
-        Serial.println(safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "safe-idle");
+        if (outputs::activeCount() == 0) {
+            Serial.print("alive, uptime ");
+            Serial.print(now / 1000);
+            Serial.print("s, state ");
+            Serial.println(safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "safe-idle");
+        }
     }
 
     // Last statement in the loop on purpose: everything above has to have had a
