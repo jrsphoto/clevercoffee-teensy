@@ -47,6 +47,7 @@ namespace {
         Serial.println("  off <channel>     de-energize one channel");
         Serial.println("  off               de-energize everything");
         Serial.println("  temp              read both RTD temperature sensors");
+        Serial.println("  rtd               raw RTD resistance, for diagnosing wiring");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
         Serial.println("Channels: heater, pump, valve, fill");
@@ -234,6 +235,9 @@ namespace {
         }
         else if (strcasecmp(command, "temp") == 0) {
             temps::printStatus();
+        }
+        else if (strcasecmp(command, "rtd") == 0) {
+            temps::printDiagnostics();
         }
         else if (strcasecmp(command, "on") == 0) {
             if (argument == nullptr) {

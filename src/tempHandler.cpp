@@ -185,4 +185,24 @@ namespace temps {
         }
     }
 
+    void printDiagnostics() {
+        Serial.println("RTD raw diagnostics:");
+
+        Serial.print("  boiler (CS ");
+        Serial.print(PIN_RTD_CS_BOILER);
+        Serial.println("):");
+
+        if (boilerSensor != nullptr) {
+            boilerSensor->printDiagnostics();
+        }
+
+        Serial.print("  group  (CS ");
+        Serial.print(PIN_RTD_CS_GROUP);
+        Serial.println("):");
+
+        if (groupSensor != nullptr) {
+            groupSensor->printDiagnostics();
+        }
+    }
+
 } // namespace temps
