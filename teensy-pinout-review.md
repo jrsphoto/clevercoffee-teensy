@@ -96,6 +96,59 @@ Pin electrical types, in plain terms: "Power output" = supplies a voltage (one p
 "Power input" = consumes a supply, which is every chip VDD and every GND pin; "Passive" =
 a plain connection point and the spare duplicate supply pads of a module.
 
+## Verified on real hardware (2026-10-26)
+
+The output pins were checked physically with a Kingst LA2016 logic analyzer on the
+bench machine (`ssh bench`, `sigrok-cli -d kingst-la2016`), probing a Teensy 4.1
+driven by the phase 2a bring-up console. This is the difference between the firmware
+claiming a pin number and the pin actually moving, and it was done before the PCB was
+fabricated, when a swap still costs nothing.
+
+Probes: CH0 to pin 2, CH1 to pin 3, CH2 to pin 5, CH3 to pin 9, plus a ground lead to
+Teensy GND (essential - the Teensy and the analyzer hang off two different computers,
+so they need a shared ground reference).
+
+**Test 1 - each channel commanded on for 2 s in turn.** Captured 20 s at 100 kHz:
+
+```
+   5.120s  1,0,0,0     on heater -> pin 2       high 2.002 s
+   7.122s  0,0,0,0     off
+   8.123s  0,1,0,0     on fill   -> pin 3       high 2.002 s
+  10.125s  0,0,0,0     off
+  11.126s  0,0,1,0     on valve  -> pin 5       high 2.003 s
+  13.129s  0,0,0,0     off
+  14.130s  0,0,0,1     on pump   -> pin 9       high 2.002 s
+  16.132s  0,0,0,0     off
+```
+
+Every command drove exactly the intended pin and no other. **No pins are swapped**, in
+either the firmware or the schematic. Only ever one channel high at a time, so the
+console's one-at-a-time interlock is confirmed at the physical level rather than just
+in its own status output. Hold times match the commanded 2.000 s to within 3 ms (serial
+latency). Across 20 s on four channels there were exactly eight edges and no spurious
+transitions, glitches or cross-talk.
+
+**Test 2 - outputs across a reset.** Captured 25 s spanning a reset, a full reflash and
+the reboot:
+
+```
+   0.000s  0,0,0,0     ... and nothing else, for the entire capture
+histogram: 2,499,841 samples   all 0,0,0,0
+```
+
+Zero transitions through the running firmware, the reset into the bootloader, the flash
+programming, the reboot, static initialization, `setup()`, and into the main loop. This
+physically confirms the claim made in `outputs.cpp` and `safetyHandler.h`: there is no
+instant at which an output is undefined or momentarily energized. Previously that was
+reasoning about the i.MX RT's GPIO reset state plus the board's pulldowns; now it is
+measured.
+
+Not yet verified this way (needs the hardware): pump PWM frequency and duty, the two RTD
+chip-selects on the shared SPI bus, I2C traffic to the encoder and PCF8574, and DM60
+pulse counting. Note the LA2016 also has two PWM *outputs*, which can inject synthetic
+flow pulses at a known rate into pin 10 - that makes the net-new DM60 flow handler
+testable dry, with no pump or plumbing.
+
 ## KiCad changes made (for the record)
 
 1. Added a Conn_01x04 link connector; global labels UART_TX on Teensy D1, UART_RX on D0;
