@@ -217,6 +217,11 @@ namespace temps {
         Serial.println("):");
 
         if (groupSensor != nullptr) {
+            // Same depth of diagnostics as the boiler. Previously this only
+            // printed the resistance, which cannot distinguish "probe open" from
+            // "chip not responding" - both show as zero.
+            groupSensor->testSpiWrites();
+            groupSensor->dumpRegisters();
             groupSensor->printDiagnostics();
         }
     }
