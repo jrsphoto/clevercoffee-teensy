@@ -10,7 +10,7 @@
 #include <SPI.h>
 
 TempSensorMAX31865::TempSensorMAX31865(const int csPin, const float rNominal, const float rRef, const int wires) :
-    rNominal_(rNominal), rRef_(rRef), csPin_(csPin) {
+    rNominal_(rNominal), rRef_(rRef), csPin_(csPin), wires_(wires) {
     // Hardware SPI: the chip rides the shared bus (started in main.cpp with this
     // board's custom pins) and is selected by its own chip-select, so it coexists
     // cleanly with the SPI display and the other RTD.
@@ -93,14 +93,81 @@ void TempSensorMAX31865::dumpRegisters() const {
         return value;
     };
 
-    // Ask the library for a conversion first, so the registers below reflect a
-    // real attempt rather than an idle chip.
-    rtd_->readRTD();
+    auto writeReg = [this](const uint8_t addr, const uint8_t value) {
+        SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
+        digitalWrite(csPin_, LOW);
+        SPI.transfer(addr | 0x80);
+        SPI.transfer(value);
+        digitalWrite(csPin_, HIGH);
+        SPI.endTransaction();
+    };
 
+    // Drive the conversion by hand rather than calling the library, so VBIAS can
+    // be confirmed ON at the moment the chip measures. The library's readRTD()
+    // enables bias, converts, then disables it again - so reading CONFIG
+    // afterwards ALWAYS shows VBIAS off and tells you nothing. An earlier version
+    // of this dump printed that as though it were a fault, which was actively
+    // misleading.
+    constexpr uint8_t kVbias = 0x80;
+    constexpr uint8_t kOneShot = 0x20;
+    constexpr uint8_t kThreeWire = 0x10;
+
+    // Convert in BOTH 2-wire and 3-wire mode and report them side by side.
+    //
+    // These use different pins inside the chip, so comparing them separates two
+    // faults that otherwise look identical: a probe that is not connected, versus
+    // a board whose 3-wire routing has been broken (e.g. by one cut too many when
+    // converting the breakout). If 2-wire reads a sane resistance and 3-wire does
+    // not, the probe and terminals are fine and the fault is in the 3-wire path.
+    auto convert = [&](const uint8_t wireBit) -> uint16_t {
+        writeReg(0x00, kVbias | wireBit);
+        delay(10);
+        writeReg(0x00, kVbias | kOneShot | wireBit);
+        delay(70);
+
+        const uint16_t msb = readReg(0x01);
+        const uint16_t lsb = readReg(0x02);
+
+        return static_cast<uint16_t>(((msb << 8) | lsb) >> 1);
+    };
+
+    const uint16_t raw2 = convert(0x00); // 2/4-wire
+    const uint16_t raw3 = convert(kThreeWire);
+
+    // Leave bias on just long enough to read a meaningful CONFIG back.
+    writeReg(0x00, kVbias | kThreeWire);
+    delay(5);
     const uint8_t config = readReg(0x00);
+
     const uint8_t rtdMsb = readReg(0x01);
     const uint8_t rtdLsb = readReg(0x02);
     const uint8_t fault = readReg(0x07);
+
+    // Restore the mode the firmware is actually configured for. Leaving the chip
+    // in 3-wire here silently corrupted every subsequent read through the normal
+    // driver path - the diagnostic was changing the thing it was measuring.
+    writeReg(0x00, (wires_ == 3) ? kThreeWire : 0x00); // bias off, configured mode
+
+    const float ohms2 = (static_cast<float>(raw2) / 32768.0f) * rRef_;
+    const float ohms3 = (static_cast<float>(raw3) / 32768.0f) * rRef_;
+
+    Serial.print("    2/4-WIRE mode (FORCE2 at GND): raw=");
+    Serial.print(raw2);
+    Serial.print("  ");
+    Serial.print(ohms2, 2);
+    Serial.println(" ohm");
+
+    Serial.print("    3-WIRE mode (FORCE2 at FORCE+): raw=");
+    Serial.print(raw3);
+    Serial.print("  ");
+    Serial.print(ohms3, 2);
+    Serial.println(" ohm");
+
+    if (ohms2 > 90.0f && ohms2 < 200.0f && ohms3 < 90.0f) {
+        Serial.println("    >>> 2-wire reads a sane PT100 but 3-wire does not.");
+        Serial.println("        The probe and terminals are GOOD; the 3-wire routing on the");
+        Serial.println("        breakout is broken - almost certainly one cut too many.");
+    }
 
     Serial.print("    CONFIG=0x");
     Serial.print(config, HEX);
@@ -111,9 +178,9 @@ void TempSensorMAX31865::dumpRegisters() const {
     Serial.print("  FAULT=0x");
     Serial.println(fault, HEX);
 
-    // The two config bits that decide whether a measurement is even possible.
+    // Read with bias deliberately still enabled, so this is meaningful.
     Serial.print("      VBIAS  = ");
-    Serial.println((config & 0x80) ? "ON" : "OFF  <<< cannot drive current without this");
+    Serial.println((config & 0x80) ? "ON (confirmed during conversion)" : "OFF  <<< chip is not driving current - real fault");
     Serial.print("      3-WIRE = ");
     Serial.println((config & 0x10) ? "yes" : "no (2/4-wire)");
     Serial.print("      auto   = ");

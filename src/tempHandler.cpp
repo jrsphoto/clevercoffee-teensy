@@ -28,8 +28,22 @@ namespace temps {
          * matching leads are the paired end, so these are wired 3-wire.
          */
         constexpr float kRNominal = 100.0f; // PT100
-        constexpr float kRRef = 430.0f;     // reference resistor on a PT100 board
-        constexpr int kWires = 3;
+        constexpr float kRRef = 430.0f;     // reference resistor on a PT100 board (marked 4300)
+
+        /**
+         * 4-wire, not 3-wire, and deliberately so.
+         *
+         * 3-wire needs the breakout's FORCE2 pin strapped to FORCE+ via its
+         * three-pad jumper, which means cutting a trace. On these boards that
+         * conversion left FORCE2 floating and no measurement was possible at all.
+         * 4-wire is the factory state: no cuts, and FORCE2 simply goes to GND.
+         *
+         * A 3-wire probe runs happily on a 4-wire setup by linking RTD- to F- in
+         * the screw terminals. The only cost is losing automatic lead-resistance
+         * compensation, which is about 0.2 ohm here - roughly 0.5 C on a boiler
+         * held to +/-1 C. Not worth a trace cut.
+         */
+        constexpr int kWires = 4;
 
         TempSensorMAX31865* boilerSensor = nullptr;
         TempSensorMAX31865* groupSensor = nullptr;
