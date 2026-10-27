@@ -17,9 +17,9 @@ namespace i2c {
 
         const char* nameFor(const uint8_t addr) {
             switch (addr) {
-                case kAddrDuppaEncoder: return "Duppa i2cEncoder V2";
+                case kAddrDuppaEncoder: return "DuPPa i2cEncoder V2 (A2 jumper = 0x04)";
                 case kAddrPressure: return "ABP2 brew pressure sensor";
-                case 0x04: return "DuPPa encoder (no address jumpers soldered)";
+                case 0x66: return "DuPPa i2cEncoder V2 (the ESP32 board's unit)";
                 default: break;
             }
 
@@ -635,10 +635,13 @@ namespace i2c {
 
         // Reserved ranges first, bit-banged: the hardware peripheral refuses to
         // send these addresses, and this scanner used to skip them entirely.
-        // That is textbook-correct and it hid a working device for hours - a
-        // DuPPa encoder with no address jumpers soldered answers at 0x00-0x07.
-        // A scanner that silently declines to look somewhere is worse than one
-        // that looks and explains what it found.
+        // That is textbook-correct and it hid a working device for hours.
+        //
+        // DuPPa's own address chart offers 0x00-0x07 as ordinary selectable
+        // addresses - this encoder is deliberately set to 0x04 with the A2
+        // jumper - so "the I2C spec reserves it" does not mean "no device will
+        // be there". A scanner that silently declines to look somewhere is
+        // worse than one that looks and explains what it found.
         Wire.end();
 
         for (uint8_t addr = 0x00; addr <= 0x07; addr++) {
@@ -648,7 +651,7 @@ namespace i2c {
                 Serial.print(addr, HEX);
                 Serial.print("  ");
                 Serial.print(nameFor(addr));
-                Serial.println("   [RESERVED - an unjumpered DuPPa encoder lands here]");
+                Serial.println("   [in the I2C spec's reserved range, but a valid DuPPa address]");
             }
         }
 
