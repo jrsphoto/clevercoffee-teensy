@@ -23,6 +23,7 @@
 #include <Arduino.h>
 
 #include "bringupConsole.h"
+#include "flowHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
@@ -156,6 +157,7 @@ namespace {
         Serial.println("s");
         printFaultLine();
         temps::printStatus();
+        flow::printStatus();
         bringupConsolePrintHelp();
     }
 
@@ -185,6 +187,7 @@ void setup() {
     // with a perfectly good probe attached. The ordering is the whole point.
     outputs::init();
     temps::init();
+    flow::init();
 
     if (!runBootSelfCheck()) {
         Serial.print("SELF-CHECK FAILED: ");
@@ -230,6 +233,10 @@ void loop() {
     // implausible boiler reading, an over-temperature, or a boiler reading that
     // has stopped updating.
     temps::loop();
+
+    // DM60 pulse counter -> volume and rate. Counting is interrupt-driven; this
+    // only derives the rate and decides when flow has stopped.
+    flow::loop();
 
     if (safety::isFaulted()) {
         // Belt and braces. The fault path already forced everything off; this

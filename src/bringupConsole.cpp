@@ -7,8 +7,10 @@
 #include "bringupConsole.h"
 
 #include <Arduino.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "flowHandler.h"
 #include "hardware/outputs.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
@@ -49,6 +51,10 @@ namespace {
         Serial.println("  temp              read both RTD temperature sensors");
         Serial.println("  rtd               raw RTD resistance, for diagnosing wiring");
         Serial.println("  failsensor        toggle a simulated boiler sensor failure (safety test)");
+        Serial.println("  flow              flow sensor: volume, rate, pulses, calibration");
+        Serial.println("  flowreset         zero the flow volume accumulator");
+        Serial.println("  flowcal <ml>      calibrate from a measured volume");
+        Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
         Serial.println("Channels: heater, pump, valve, fill");
@@ -87,6 +93,7 @@ namespace {
         }
 
         temps::printStatus();
+        flow::printStatus();
 
         Serial.println();
     }
@@ -249,6 +256,41 @@ namespace {
 
             Serial.print("boiler sensor fault injection ");
             Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
+        }
+        else if (strcasecmp(command, "flow") == 0) {
+            flow::printStatus();
+        }
+        else if (strcasecmp(command, "flowreset") == 0) {
+            flow::reset();
+            Serial.println("flow volume zeroed");
+        }
+        else if (strcasecmp(command, "flowcal") == 0) {
+            if (argument == nullptr) {
+                Serial.println("usage: flowcal <millilitres actually dispensed>");
+            }
+            else if (const double ml = atof(argument); flow::calibrateTo(ml)) {
+                Serial.print("calibrated: ");
+                Serial.print(flow::pulsesPerLitre());
+                Serial.println(" pulses/litre");
+            }
+            else {
+                Serial.println("REFUSED: need at least 100 pulses and a positive volume.");
+                Serial.println("         Run more water through before calibrating.");
+            }
+        }
+        else if (strcasecmp(command, "flowk") == 0) {
+            if (argument == nullptr) {
+                Serial.print("calibration is ");
+                Serial.print(flow::pulsesPerLitre());
+                Serial.println(" pulses/litre");
+                Serial.println("usage: flowk <pulses per litre>   (DM60 Nano is ~36000-49000)");
+            }
+            else {
+                flow::setPulsesPerLitre(static_cast<uint32_t>(atol(argument)));
+                Serial.print("calibration set to ");
+                Serial.print(flow::pulsesPerLitre());
+                Serial.println(" pulses/litre");
+            }
         }
         else if (strcasecmp(command, "rtd") == 0) {
             temps::printDiagnostics();
