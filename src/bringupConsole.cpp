@@ -279,7 +279,9 @@ namespace {
             Serial.print("warning: ");
             Serial.print(outputs::name(activeChannel));
             Serial.print(" auto-off in ");
-            Serial.print((kAutoOffMs - elapsed) / 1000 + 1);
+            // Round to nearest second rather than truncating, so the countdown
+            // reads 3 at exactly 3000 ms left instead of 2.
+            Serial.print((kAutoOffMs - elapsed + 500) / 1000);
             Serial.println("s - re-issue 'on' to extend");
         }
 

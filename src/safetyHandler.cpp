@@ -46,6 +46,49 @@ namespace {
      */
     constexpr uint8_t kWatchdogWarningHalfSeconds = 2;
 
+    /**
+     * Minimum gap between actual services of the watchdog.
+     *
+     * The main loop runs free, so it calls the feed millions of times a second.
+     * That is pointless against a 4 s window, and it is actively harmful: the
+     * service sequence briefly masks interrupts, and doing that at loop speed
+     * starves the USB interrupt badly enough that the serial console never
+     * transmits at all. Found on the bench 2026-10-26 - the symptom was a board
+     * that looked completely dead over USB while actually running fine.
+     *
+     * 100 ms gives a 30x margin on the 3 s warning and 40x on the 4 s reset,
+     * while reducing the masking to something negligible.
+     */
+    constexpr uint32_t kFeedIntervalMs = 100;
+
+    uint32_t lastFedMs = 0;
+
+    /**
+     * @brief The actual WDOG1 service sequence.
+     *
+     * A fixed two-word magic write. Both halves must land, in order, with no
+     * other write to WSR in between, so an interrupt must not be able to land
+     * between them.
+     *
+     * Saves and restores the interrupt-enable state rather than unconditionally
+     * re-enabling, so this stays correct if it is ever called from a context
+     * that already had interrupts masked. This is the same idiom the Teensy core
+     * uses itself (see EventResponder.h) - the CMSIS __get_PRIMASK helpers are
+     * not reliably in scope from a plain Arduino.h include.
+     */
+    void serviceWatchdog() {
+        uint32_t savedPrimask;
+        __asm__ volatile("mrs %0, primask\n" : "=r"(savedPrimask)::);
+        __disable_irq();
+
+        WDOG1_WSR = 0x5555;
+        WDOG1_WSR = 0xAAAA;
+
+        if (savedPrimask == 0) {
+            __enable_irq();
+        }
+    }
+
     // WICR bits. The Teensy core header defines the WCR and WRSR bits but not
     // these, so they are spelled out here against the reference manual.
     constexpr uint16_t kWicrInterruptEnable = (uint16_t)(1u << 15); // WIE
@@ -80,19 +123,22 @@ namespace {
     /**
      * Fires roughly one second before the watchdog resets the chip.
      *
-     * The only job is to drop the actuators earlier than the reset would and
-     * leave a breadcrumb. Deliberately does almost nothing else: by definition we
-     * are already in a state that cannot be trusted, so this must not depend on
-     * any other part of the firmware still working.
+     * The only job is to drop the actuators earlier than the reset would.
+     * Deliberately does nothing else: by definition we are already in a state
+     * that cannot be trusted, so this must not depend on any other part of the
+     * firmware still working.
+     *
+     * NOTHING THAT CAN BLOCK BELONGS HERE. In particular there is no Serial
+     * output: USB writes from an ISR can deadlock against the USB stack this
+     * very interrupt may have pre-empted, which would hang the chip instead of
+     * letting it reset. The stall is reported on the next boot instead, via the
+     * reset-cause check below, which is both safe and more reliable - it works
+     * even when nobody has a console attached.
      */
     void onWatchdogWarning() {
         safetyHardOff();
 
         WDOG1_WICR |= kWicrInterruptStatus; // acknowledge
-
-        // Serial here is best-effort. If it blocks or is not connected, the reset
-        // arrives a second later regardless, which is the actual protection.
-        Serial.println("WATCHDOG: control loop stalled - actuators forced off, reset imminent");
     }
 
 } // namespace
@@ -115,29 +161,25 @@ void safetyWatchdogInit() {
     //          controls that are active-low, so writing 0 would fire them.
     WDOG1_WCR = WDOG_WCR_WT(kWatchdogTimeoutWt) | WDOG_WCR_WDE | WDOG_WCR_WDZST | WDOG_WCR_WDBG | WDOG_WCR_SRS | WDOG_WCR_WDA;
 
-    safetyWatchdogFeed();
+    // Service once directly rather than through the rate limiter, so the first
+    // service is guaranteed regardless of what millis() happens to read here.
+    serviceWatchdog();
+    lastFedMs = millis();
 }
 
 void safetyWatchdogFeed() {
-    // The service sequence is a fixed two-word magic write. Both halves must
-    // land, in order, with no other write to WSR in between - so an interrupt
-    // must not be able to land between them.
-    //
-    // Saves and restores the interrupt-enable state rather than unconditionally
-    // re-enabling, so this stays correct if it is ever called from a context
-    // that already had interrupts masked. This is the same idiom the Teensy core
-    // uses itself (see EventResponder.h) - the CMSIS __get_PRIMASK helpers are
-    // not reliably in scope from a plain Arduino.h include.
-    uint32_t savedPrimask;
-    __asm__ volatile("mrs %0, primask\n" : "=r"(savedPrimask)::);
-    __disable_irq();
+    // Rate-limited on purpose - see kFeedIntervalMs. Calling this every pass of
+    // a free-running loop is expected and correct; this decides when an actual
+    // service is due.
+    const uint32_t now = millis();
 
-    WDOG1_WSR = 0x5555;
-    WDOG1_WSR = 0xAAAA;
-
-    if (savedPrimask == 0) {
-        __enable_irq();
+    if ((now - lastFedMs) < kFeedIntervalMs) {
+        return;
     }
+
+    lastFedMs = now;
+
+    serviceWatchdog();
 }
 
 bool safetyWasWatchdogReset() {
