@@ -31,8 +31,8 @@
 namespace encoder {
 
     /**
-     * I2C address. 0x04 = no address jumpers soldered (factory state).
-     * Change to 0x66 if jumpers A1+A2+A5+A6 are ever fitted.
+     * I2C address, set by solder jumpers on the encoder board itself.
+     * This unit has A2 soldered = 0x04. The ESP32 board's unit is 0x66.
      */
     constexpr uint8_t kAddress = 0x04;
 
