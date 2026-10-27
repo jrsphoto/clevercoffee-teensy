@@ -30,7 +30,7 @@ namespace i2c {
     constexpr uint32_t kBusHz = 100000;
 
     /** Expected addresses, used to name devices in the scan output. */
-    constexpr uint8_t kAddrDuppaEncoder = 0x04; // A2 jumper soldered; the ESP32 board's unit is 0x66
+    constexpr uint8_t kAddrDuppaEncoder = 0x04; // DuPPa factory default (A2); the ESP32 board's unit is 0x66
     constexpr uint8_t kAddrPressure = 0x28;     // Honeywell ABP2
 
     /**
