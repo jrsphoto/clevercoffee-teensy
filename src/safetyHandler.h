@@ -142,6 +142,19 @@ namespace safety {
      */
     inline volatile uint32_t lastControlLoopMs = 0;
 
+    /**
+     * @brief Is the boiler temperature reading currently fresh and believable?
+     *
+     * Published by the temperature handler each loop; consumed by the output
+     * layer to gate the heater. Lives here rather than in tempHandler so the
+     * output layer does not have to depend on the sensor layer - safety is the
+     * common ground between them.
+     *
+     * Starts false: the heater is not permitted until something affirmatively
+     * says the sensor is good, which is the correct default at boot.
+     */
+    inline bool boilerSensorHealthy = false;
+
     inline void noteControlLoopAlive() {
         lastControlLoopMs = millis();
     }

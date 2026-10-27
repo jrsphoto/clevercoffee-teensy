@@ -48,6 +48,7 @@ namespace {
         Serial.println("  off               de-energize everything");
         Serial.println("  temp              read both RTD temperature sensors");
         Serial.println("  rtd               raw RTD resistance, for diagnosing wiring");
+        Serial.println("  failsensor        toggle a simulated boiler sensor failure (safety test)");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
         Serial.println("Channels: heater, pump, valve, fill");
@@ -166,7 +167,13 @@ namespace {
         }
 
         if (!outputs::set(channel, true)) {
-            Serial.println("REFUSED: output layer declined the request");
+            if (channel == outputs::Channel::Heater && !safety::boilerSensorHealthy) {
+                Serial.println("REFUSED: boiler temperature is not fresh/believable right now.");
+                Serial.println("         The heater is never permitted without a live boiler reading.");
+            }
+            else {
+                Serial.println("REFUSED: output layer declined the request");
+            }
 
             return;
         }
@@ -235,6 +242,13 @@ namespace {
         }
         else if (strcasecmp(command, "temp") == 0) {
             temps::printStatus();
+        }
+        else if (strcasecmp(command, "failsensor") == 0) {
+            const bool on = !temps::boilerFaultInjected();
+            temps::injectBoilerFault(on);
+
+            Serial.print("boiler sensor fault injection ");
+            Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
         }
         else if (strcasecmp(command, "rtd") == 0) {
             temps::printDiagnostics();

@@ -67,13 +67,35 @@ class TempSensorMAX31865 final : public TempSensor {
          */
         void dumpRegisters() const;
 
+        /**
+         * @brief Bring-up aid: force this sensor to report failed readings.
+         *
+         * Safety logic that cannot be triggered on demand does not get tested -
+         * it gets assumed. Pulling a probe lead is unreliable (a terminal that
+         * still grips one strand keeps reading perfectly), so the fault paths
+         * need a deterministic way in.
+         *
+         * While set, sample_temperature() returns false exactly as a real sensor
+         * failure does, so every downstream check sees the genuine article: the
+         * error counter climbs, the freshness stamp stops advancing, and the
+         * machine should latch safe.
+         */
+        void setFaultInjection(bool on) const {
+            injectFault_ = on;
+        }
+
+        [[nodiscard]] bool faultInjected() const {
+            return injectFault_;
+        }
+
     protected:
         bool sample_temperature(double& temperature) const override;
 
     private:
         Adafruit_MAX31865* rtd_;
         int csPin_; // kept so dumpRegisters() can talk to the chip directly
-        int wires_; // so the diagnostics can restore the configured mode
+        int wires_;                   // so the diagnostics can restore the configured mode
+        mutable bool injectFault_{false}; // bring-up fault injection, see setFaultInjection()
         float rNominal_;
         float rRef_;
 };
