@@ -10,8 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "encoderHandler.h"
 #include "flowHandler.h"
 #include "hardware/outputs.h"
+#include "i2cHandler.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
 
@@ -55,6 +57,11 @@ namespace {
         Serial.println("  flowreset         zero the flow volume accumulator");
         Serial.println("  flowcal <ml>      calibrate from a measured volume");
         Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
+        Serial.println("  i2c               scan the I2C bus and name what is found");
+        Serial.println("  enc               encoder counter, rotation and LED state");
+        Serial.println("  led <rrggbb>      force the encoder LED to a colour");
+        Serial.println("  encint            watch the encoder INT line while you turn the knob");
+        Serial.println("  i2cslow           SDA electrical test + scan at 10/2/1 kHz");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
         Serial.println("Channels: heater, pump, valve, fill");
@@ -94,6 +101,7 @@ namespace {
 
         temps::printStatus();
         flow::printStatus();
+        encoder::printStatus();
 
         Serial.println();
     }
@@ -291,6 +299,39 @@ namespace {
                 Serial.print(flow::pulsesPerLitre());
                 Serial.println(" pulses/litre");
             }
+        }
+        else if (strcasecmp(command, "i2cslow") == 0) {
+            i2c::probeSdaDrive();
+            i2c::scanSlow();
+        }
+        else if (strcasecmp(command, "encint") == 0) {
+            i2c::watchEncoderInt(12);
+        }
+        else if (strcasecmp(command, "enctest") == 0) {
+            i2c::compareWireVsBitBang(0x04);
+        }
+        else if (strcasecmp(command, "enc") == 0) {
+            encoder::printStatus();
+        }
+        else if (strcasecmp(command, "led") == 0) {
+            if (argument == nullptr) {
+                Serial.println("usage: led <rrggbb hex>   e.g. led ff0000");
+            }
+            else {
+                const uint32_t rgb = static_cast<uint32_t>(strtoul(argument, nullptr, 16));
+                encoder::setLedColor(rgb);
+                Serial.print("LED set to 0x");
+                Serial.println(rgb, HEX);
+            }
+        }
+        else if (strcasecmp(command, "i2c") == 0) {
+            i2c::checkLines();
+            i2c::scan();
+            i2c::probeExpected();
+            i2c::scanReserved();
+            i2c::scanBothOrientations();
+            i2c::scanOtherPinPairs();
+            i2c::reportPullupPins();
         }
         else if (strcasecmp(command, "rtd") == 0) {
             temps::printDiagnostics();

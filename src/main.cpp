@@ -23,9 +23,11 @@
 #include <Arduino.h>
 
 #include "bringupConsole.h"
+#include "encoderHandler.h"
 #include "flowHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
+#include "i2cHandler.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
 
@@ -158,6 +160,7 @@ namespace {
         printFaultLine();
         temps::printStatus();
         flow::printStatus();
+        encoder::printStatus();
         bringupConsolePrintHelp();
     }
 
@@ -186,8 +189,16 @@ void setup() {
     // sensor unavailable and latched the machine safe on every single boot, even
     // with a perfectly good probe attached. The ordering is the whole point.
     outputs::init();
+    i2c::init();
     temps::init();
     flow::init();
+
+    if (encoder::init()) {
+        Serial.println("encoder: found and initialised");
+    }
+    else {
+        Serial.println("encoder: NOT FOUND on the I2C bus");
+    }
 
     if (!runBootSelfCheck()) {
         Serial.print("SELF-CHECK FAILED: ");
@@ -237,6 +248,12 @@ void loop() {
     // DM60 pulse counter -> volume and rate. Counting is interrupt-driven; this
     // only derives the rate and decides when flow has stopped.
     flow::loop();
+
+    // Non-blocking encoder INT watch (bring-up aid).
+    i2c::serviceEncoderIntWatch();
+
+    // Duppa encoder: gestures and the RGB machine-status LED.
+    encoder::loop();
 
     if (safety::isFaulted()) {
         // Belt and braces. The fault path already forced everything off; this
