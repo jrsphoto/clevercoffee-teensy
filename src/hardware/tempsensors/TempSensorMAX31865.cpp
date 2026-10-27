@@ -21,6 +21,12 @@ TempSensorMAX31865::TempSensorMAX31865(const int csPin, const float rNominal, co
 }
 
 bool TempSensorMAX31865::sample_temperature(double& temperature) const {
+    // Fault injection for testing the safety paths. Returns false exactly as a
+    // real failure does, so nothing downstream can tell the difference.
+    if (injectFault_) {
+        return false;
+    }
+
     // temperature() triggers a conversion and applies the Callendar-Van Dusen fit
     const float temp = rtd_->temperature(rNominal_, rRef_);
 

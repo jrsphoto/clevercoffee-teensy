@@ -89,6 +89,7 @@ namespace temps {
                 boilerTempC = c;
                 boilerOk = true;
                 boilerLastGoodMs = millis();
+                safety::boilerSensorHealthy = true;
 
                 return true;
             }
@@ -117,7 +118,23 @@ namespace temps {
         // --- Boiler: the safety-critical sensor --------------------------
         const double boilerReading = boilerSensor->getCurrentTemperature();
 
-        if (boilerSensor->hasError()) {
+        // Staleness FIRST, and taken from the sensor's own record of its last
+        // successful read.
+        //
+        // This check used to come last and used a timestamp this handler
+        // maintained itself - which was worthless. getCurrentTemperature() keeps
+        // returning the last good value while a sensor is failing, so the value
+        // stayed plausible, the handler kept marking it good, and it refreshed
+        // the very timestamp meant to detect the problem. Pulling a probe lead
+        // from a running sensor left the heater permitted for seconds while the
+        // chip reported an open circuit four times a second.
+        const uint32_t sinceGood = boilerSensor->millisSinceLastGoodReading();
+
+        if (sinceGood > kStaleAfterMs) {
+            boilerOk = false;
+            safety::latchFault(FaultCode::SensorStale, "boiler RTD stopped updating");
+        }
+        else if (boilerSensor->hasError()) {
             boilerOk = false;
             safety::latchFault(FaultCode::SensorFault, "boiler RTD fault");
         }
@@ -135,12 +152,12 @@ namespace temps {
             }
         }
 
-        // A sensor that simply stops updating is as dangerous as one reporting a
-        // fault, and it will not trip either check above - so time it explicitly.
-        if ((millis() - boilerLastGoodMs) > kStaleAfterMs) {
-            boilerOk = false;
-            safety::latchFault(FaultCode::SensorStale, "boiler RTD stopped updating");
-        }
+        // Publish freshness for the output layer, so the heater cannot be
+        // energized on a reading nobody is standing behind. Defence in depth:
+        // the fault latch above should already have fired, but the heater is the
+        // one output that can destroy a boiler, so it gets a second gate that
+        // does not depend on a fault having been latched yet.
+        safety::boilerSensorHealthy = boilerOk;
 
         // --- Group: monitoring only, never latches a fault ---------------
         const double groupReading = groupSensor->getCurrentTemperature();
@@ -180,7 +197,11 @@ namespace temps {
 
         if (boilerOk) {
             Serial.print(boilerTempC, 2);
-            Serial.println(" C");
+            Serial.print(" C   (last good reading ");
+            Serial.print(boilerSensor != nullptr ? boilerSensor->millisSinceLastGoodReading() : 0);
+            Serial.print(" ms ago, stale limit ");
+            Serial.print(kStaleAfterMs);
+            Serial.println(" ms)");
         }
         else {
             Serial.println("FAULT / no reading");
@@ -197,6 +218,16 @@ namespace temps {
         else {
             Serial.println("not fitted / no reading (monitoring only, not a fault)");
         }
+    }
+
+    void injectBoilerFault(const bool on) {
+        if (boilerSensor != nullptr) {
+            boilerSensor->setFaultInjection(on);
+        }
+    }
+
+    bool boilerFaultInjected() {
+        return boilerSensor != nullptr && boilerSensor->faultInjected();
     }
 
     void printDiagnostics() {

@@ -57,6 +57,24 @@ class TempSensor {
             return error_;
         }
 
+        /**
+         * @brief Milliseconds since the last SUCCESSFUL reading.
+         *
+         * hasError() only goes true after max_bad_treadings_ consecutive
+         * failures - several seconds at the 400 ms update rate. Until then
+         * getCurrentTemperature() keeps returning the last good value, so a
+         * failing sensor looks perfectly healthy and plausible to a caller.
+         *
+         * Safety-critical callers must use this instead: it is the only way to
+         * tell "this value was just measured" from "this value is a souvenir of
+         * the last time the sensor worked". Found on the bench by pulling a
+         * probe lead from a running sensor, where the heater was still permitted
+         * while the chip was reporting an open circuit four times a second.
+         */
+        [[nodiscard]] uint32_t millisSinceLastGoodReading() const {
+            return millis() - last_good_reading_ms_;
+        }
+
     protected:
         /**
          * @brief Samples the current temperature from the sensor
@@ -75,6 +93,10 @@ class TempSensor {
             // Update temperature and detect errors:
             if (sample_temperature(last_temperature_)) {
                 LOGF(TRACE, "Temperature reading successful: %.1f", last_temperature_);
+
+                // Stamp the time of a genuinely successful read. See
+                // millisSinceLastGoodReading() for why this matters.
+                last_good_reading_ms_ = millis();
 
                 // Reset error counter and error state
                 bad_readings_ = 0;
@@ -98,6 +120,7 @@ class TempSensor {
 
         Timer update_temperature;
         double last_temperature_{};
+        uint32_t last_good_reading_ms_{0};
         int bad_readings_{0};
         int max_bad_treadings_{10};
         bool error_{false};

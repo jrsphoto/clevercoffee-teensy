@@ -112,6 +112,18 @@ namespace outputs {
             return false;
         }
 
+        // The heater gets a second, independent gate: a fresh and believable
+        // boiler temperature. A latched fault should already have caught any
+        // sensor problem, but there is a window between a sensor failing and
+        // the fault latching, and the heater is the one output that can destroy
+        // a boiler in that window. Every other channel is safe to run blind.
+        if (channel == Channel::Heater && !safety::boilerSensorHealthy) {
+            relays[index]->off();
+            commanded[index] = false;
+
+            return false;
+        }
+
         relays[index]->on();
         commanded[index] = true;
 

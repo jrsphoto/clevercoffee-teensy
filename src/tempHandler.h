@@ -53,9 +53,14 @@ namespace temps {
     /**
      * How long the boiler reading may go without a successful update before it
      * is treated as stale. The sensor layer refreshes every 400 ms, so this is
-     * several missed cycles, not a hair trigger.
+     * five missed cycles - enough to ride out a transient SPI glitch, short
+     * enough that the heater is never driven on a stale number for long.
+     *
+     * Deliberately shorter than the sensor base class's own error threshold,
+     * which needs ten consecutive failures (about four seconds) before it
+     * admits to a problem.
      */
-    constexpr uint32_t kStaleAfterMs = 3000;
+    constexpr uint32_t kStaleAfterMs = 2000;
 
     /**
      * @brief Start the SPI bus and both RTD sensors.
@@ -105,5 +110,13 @@ namespace temps {
      * @brief Bring-up aid: dump raw measured resistance for both probes.
      */
     void printDiagnostics();
+
+    /**
+     * @brief Bring-up aid: force the boiler sensor to fail, to test safety paths.
+     */
+    void injectBoilerFault(bool on);
+
+    /** @brief Is boiler fault injection currently active? */
+    bool boilerFaultInjected();
 
 } // namespace temps
