@@ -38,7 +38,7 @@ namespace {
     uint32_t activeSinceMs = 0;
     bool warned = false;
 
-    void printHelp() {
+    void printHelpImpl() {
         Serial.println();
         Serial.println("Bring-up console - commands:");
         Serial.println("  status            show every channel, fault state, uptime");
@@ -223,7 +223,7 @@ namespace {
         char* argument = strtok(nullptr, " \t");
 
         if (strcasecmp(command, "help") == 0 || strcasecmp(command, "?") == 0) {
-            printHelp();
+            printHelpImpl();
         }
         else if (strcasecmp(command, "status") == 0) {
             printStatus();
@@ -297,7 +297,11 @@ void bringupConsoleBegin() {
     haveActive = false;
     warned = false;
 
-    printHelp();
+    printHelpImpl();
+}
+
+void bringupConsolePrintHelp() {
+    printHelpImpl();
 }
 
 void bringupConsoleLoop() {

@@ -81,6 +81,20 @@ namespace {
         return ok;
     }
 
+    /**
+     * Tracks whether a serial monitor is attached, so a fresh connection can be
+     * greeted with the banner.
+     *
+     * The board boots and starts running long before anyone opens a monitor, so
+     * anything printed only once at startup is invisible in practice - which is
+     * exactly what happened on the bench: upload, open the monitor, see nothing
+     * but heartbeats and wonder whether the firmware is alive.
+     *
+     * On Teensy, `(bool)Serial` reports whether the USB host has the port open
+     * (DTR asserted), so a false->true transition is a monitor attaching.
+     */
+    bool consoleWasAttached = false;
+
     void printBanner() {
         Serial.println();
         Serial.println("========================================");
@@ -96,6 +110,37 @@ namespace {
         Serial.print(PIN_VALVE);
         Serial.print(" fill=");
         Serial.println(PIN_FILL);
+    }
+
+    /**
+     * @brief Report the current fault state in one line.
+     */
+    void printFaultLine() {
+        if (safety::isFaulted()) {
+            Serial.print("FAULT LATCHED: ");
+            Serial.print(safetyFaultName(safety::latchedFault));
+            Serial.print(" (");
+            Serial.print(safety::latchedDetail);
+            Serial.println(") - outputs blocked, 'clear' to reset");
+        }
+        else {
+            Serial.println("no fault latched - outputs available");
+        }
+    }
+
+    /**
+     * @brief Greet a monitor that has just attached.
+     *
+     * Re-prints everything a person needs to orient themselves, so opening a
+     * monitor at any point gives the full picture rather than a bare heartbeat.
+     */
+    void onConsoleAttached() {
+        printBanner();
+        Serial.print("uptime ");
+        Serial.print(millis() / 1000);
+        Serial.println("s");
+        printFaultLine();
+        bringupConsolePrintHelp();
     }
 
 } // namespace
@@ -166,6 +211,16 @@ void loop() {
         // Belt and braces. The fault path already forced everything off; this
         // re-asserts it every pass so no later code can quietly undo it.
         safetyHardOff();
+    }
+
+    // Greet a monitor that has just been opened. Without this the banner is
+    // only ever printed at boot, which in practice nobody is connected to see.
+    if (const bool consoleAttached = static_cast<bool>(Serial); consoleAttached != consoleWasAttached) {
+        consoleWasAttached = consoleAttached;
+
+        if (consoleAttached) {
+            onConsoleAttached();
+        }
     }
 
     // Bench bring-up: one output at a time, auto-off, nothing while faulted.
