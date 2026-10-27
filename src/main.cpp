@@ -177,6 +177,15 @@ void setup() {
 
     printBanner();
 
+    // Hardware before the self-check, because the self-check tests it.
+    //
+    // These were previously constructed AFTER runBootSelfCheck(), so the boiler
+    // RTD was always still a null pointer when the check ran - it reported the
+    // sensor unavailable and latched the machine safe on every single boot, even
+    // with a perfectly good probe attached. The ordering is the whole point.
+    outputs::init();
+    temps::init();
+
     if (!runBootSelfCheck()) {
         Serial.print("SELF-CHECK FAILED: ");
         Serial.print(safetyFaultName(safety::latchedFault));
@@ -188,14 +197,6 @@ void setup() {
     else {
         Serial.println("SELF-CHECK PASSED");
     }
-
-    // Build the actuator objects. safetyInitOutputs() has already forced these
-    // pins safe with raw writes; this hands ownership to the output layer and
-    // re-asserts off, so there is no window between the two.
-    outputs::init();
-
-    // Sensors before the self-check, which depends on them.
-    temps::init();
 
     // Started last, so a slow but legitimate boot cannot trip it, and before the
     // first loop() so the running machine is always covered.
