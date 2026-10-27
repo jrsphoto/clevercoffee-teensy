@@ -26,6 +26,7 @@
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
+#include "tempHandler.h"
 
 // Version of the Teensy control firmware specifically. Independent of the
 // upstream CleverCoffee version carried in VERSION.txt.
@@ -76,6 +77,20 @@ namespace {
             Serial.println("SELF-CHECK: previous run ended in a WATCHDOG RESET");
             safety::latchFault(FaultCode::WatchdogReset, "previous run stalled");
             ok = false;
+        }
+
+        // The boiler RTD is the one sensor the heater cannot run safely without.
+        // The group probe is deliberately not checked here: it is monitoring
+        // only and may not even be fitted.
+        if (!temps::selfCheck()) {
+            Serial.println("SELF-CHECK: boiler RTD did not return a believable reading");
+            safety::latchFault(FaultCode::BootSelfCheck, "boiler RTD unavailable at boot");
+            ok = false;
+        }
+        else {
+            Serial.print("SELF-CHECK: boiler RTD reads ");
+            Serial.print(temps::boilerC(), 2);
+            Serial.println(" C");
         }
 
         return ok;
@@ -140,6 +155,7 @@ namespace {
         Serial.print(millis() / 1000);
         Serial.println("s");
         printFaultLine();
+        temps::printStatus();
         bringupConsolePrintHelp();
     }
 
@@ -178,6 +194,9 @@ void setup() {
     // re-asserts off, so there is no window between the two.
     outputs::init();
 
+    // Sensors before the self-check, which depends on them.
+    temps::init();
+
     // Started last, so a slow but legitimate boot cannot trip it, and before the
     // first loop() so the running machine is always covered.
     safety::noteControlLoopAlive();
@@ -196,7 +215,6 @@ void loop() {
 
     // --- Phase 2 onwards, in roughly this order: -------------------------
     // loopWaterLevel();     // dry-fire interlock, gates the heater
-    // loopTempSensors();    // both MAX31865 RTDs, fault flags checked
     // loopPressure();       // brew pressure
     // loopFlow();           // DM60 pulse counter -> volume
     // loopScale();          // HX711, plus BT weight arriving over the link
@@ -206,6 +224,11 @@ void loop() {
     // loopPid();            // heater PID
     // loopPump();           // PWM, closed loop on pressure + flow
     // loopComms();          // telemetry out, commands in, non-blocking
+
+    // Both RTDs. Latches the machine safe on a boiler sensor fault, an
+    // implausible boiler reading, an over-temperature, or a boiler reading that
+    // has stopped updating.
+    temps::loop();
 
     if (safety::isFaulted()) {
         // Belt and braces. The fault path already forced everything off; this
