@@ -73,6 +73,7 @@ class TempSensorMAX31865 final : public TempSensor {
     private:
         Adafruit_MAX31865* rtd_;
         int csPin_; // kept so dumpRegisters() can talk to the chip directly
+        int wires_; // so the diagnostics can restore the configured mode
         float rNominal_;
         float rRef_;
 };
