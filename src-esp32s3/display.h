@@ -179,4 +179,13 @@ namespace display {
      */
     void loop();
 
+    /**
+     * @brief Draw the live machine readout from link telemetry.
+     *
+     * Called on a timer rather than every frame: the panel is on SPI and
+     * redrawing constantly would both flicker and hog the bus for no benefit at
+     * a 5 Hz telemetry rate.
+     */
+    void drawMachineScreen();
+
 } // namespace display

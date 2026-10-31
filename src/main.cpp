@@ -23,6 +23,7 @@
 #include <Arduino.h>
 
 #include "bringupConsole.h"
+#include "commsHandler.h"
 #include "encoderHandler.h"
 #include "flowHandler.h"
 #include "hardware/outputs.h"
@@ -161,6 +162,7 @@ namespace {
         temps::printStatus();
         flow::printStatus();
         encoder::printStatus();
+        comms::printStatus();
         bringupConsolePrintHelp();
     }
 
@@ -192,6 +194,7 @@ void setup() {
     i2c::init();
     temps::init();
     flow::init();
+    comms::init();
 
     if (encoder::init()) {
         Serial.println("encoder: found and initialised");
@@ -254,6 +257,10 @@ void loop() {
 
     // Duppa encoder: gestures and the RGB machine-status LED.
     encoder::loop();
+
+    // Link to the display head. Telemetry out, commands in. Never blocks, and
+    // never gates anything - a missing head is not a machine fault.
+    comms::loop();
 
     if (safety::isFaulted()) {
         // Belt and braces. The fault path already forced everything off; this

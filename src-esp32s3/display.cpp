@@ -6,6 +6,8 @@
 
 #include "display.h"
 
+#include "link.h"
+
 namespace display {
 
     LGFX lcd;
@@ -142,6 +144,117 @@ namespace display {
 
     uint8_t rotation() {
         return currentRotation;
+    }
+
+    void drawMachineScreen() {
+        const auto& st = machinelink::state();
+        const bool live = machinelink::isConnected();
+
+        const int w = lcd.width();
+
+        lcd.setTextSize(2);
+        lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+        lcd.setCursor(8, 8);
+        lcd.print("CleverCoffee   ");
+
+        // Link state. Said plainly, because a stale readout that looks live is
+        // the one genuinely dangerous thing a display can do here.
+        lcd.setTextSize(1);
+        lcd.setCursor(w - 110, 14);
+
+        if (live) {
+            lcd.setTextColor(TFT_GREEN, TFT_BLACK);
+            lcd.print("LINK OK     ");
+        }
+        else {
+            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+            lcd.print("LINK STALE  ");
+        }
+
+        // Boiler temperature, the number that matters most.
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        lcd.setCursor(12, 56);
+        lcd.print("BOILER");
+
+        lcd.setTextSize(4);
+        lcd.setCursor(12, 70);
+
+        if (live && st.boilerOk) {
+            lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+            lcd.printf("%5.1f", st.boilerC);
+        }
+        else {
+            lcd.setTextColor(TFT_RED, TFT_BLACK);
+            lcd.print(" --.-");
+        }
+
+        lcd.setTextSize(2);
+        lcd.setCursor(150, 84);
+        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        lcd.print("C");
+
+        // Group temperature, smaller - it is a hint, not a control value.
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        lcd.setCursor(250, 56);
+        lcd.print("GROUP");
+
+        lcd.setTextSize(2);
+        lcd.setCursor(250, 70);
+
+        if (live && st.groupOk) {
+            lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+            lcd.printf("%5.1f C", st.groupC);
+        }
+        else {
+            lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
+            lcd.print(" --.- C");
+        }
+
+        // Flow and delivered volume.
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        lcd.setCursor(12, 140);
+        lcd.print("FLOW");
+        lcd.setCursor(130, 140);
+        lcd.print("VOLUME");
+        lcd.setCursor(260, 140);
+        lcd.print("ENCODER");
+
+        lcd.setTextSize(2);
+        lcd.setTextColor(live ? TFT_GREENYELLOW : TFT_DARKGREY, TFT_BLACK);
+        lcd.setCursor(12, 154);
+        lcd.printf("%4.1f ml/s", st.flowMlPerSec);
+        lcd.setCursor(130, 154);
+        lcd.printf("%5.1f ml", st.volumeMl);
+        lcd.setCursor(260, 154);
+        lcd.printf("%6ld  ", st.encoder);
+
+        // Machine state and any latched fault.
+        lcd.setTextSize(2);
+        lcd.setCursor(12, 200);
+
+        if (!live) {
+            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+            lcd.printf("no telemetry (%lus)   ", static_cast<unsigned long>(machinelink::msSinceLastFrame() / 1000));
+        }
+        else if (strcmp(st.fault, "none") != 0) {
+            lcd.setTextColor(TFT_RED, TFT_BLACK);
+            lcd.printf("FAULT: %-16s", st.fault);
+        }
+        else {
+            lcd.setTextColor(TFT_GREEN, TFT_BLACK);
+            lcd.printf("state: %-16s", st.status);
+        }
+
+        // Frame counters, small, for bring-up confidence.
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        lcd.setCursor(12, lcd.height() - 14);
+        lcd.printf("frames %lu  badsum %lu        ",
+                   static_cast<unsigned long>(machinelink::framesReceived()),
+                   static_cast<unsigned long>(machinelink::badChecksums()));
     }
 
 } // namespace display
