@@ -37,11 +37,28 @@ namespace audio {
         constexpr i2s_port_t kI2sPort = I2S_NUM_0;
         constexpr uint32_t kSampleRate = 44100;
 
-        // --- I2S pins (LCDwiki page for this module) ---------------------
+        // --- I2S pins ----------------------------------------------------
+        //
+        // MCLK, BCLK and LRCK are as the LCDwiki page lists them. THE TWO DATA
+        // PINS ARE NOT WHAT THE PAGE APPEARS TO SAY, and this cost an evening:
+        // it calls IO6 the "bit output data signal" and IO8 the "bit input data
+        // signal" without saying whose output and whose input. Read from the
+        // ESP32's side - the obvious reading for a board pinout - playback goes
+        // out on IO6. That produces exactly nothing: silence, with a correctly
+        // configured codec and correct clocks, which is the worst kind of
+        // failure because every diagnostic looks healthy.
+        //
+        // The page is naming the pins from the CODEC's side, the way codec
+        // datasheets label DSDIN and ASDOUT. So playback goes out on IO8 (the
+        // codec's input) and IO6 is the microphone coming back. Confirmed by
+        // ear: a 1 kHz tone on IO6 is silent, the same tone on IO8 plays.
         constexpr int kPinMclk = 4;
         constexpr int kPinBclk = 5;
-        constexpr int kPinDout = 6;
         constexpr int kPinLrck = 7;
+        constexpr int kPinDataToCodec = 8;   // codec DSDIN - playback
+        constexpr int kPinDataFromCodec = 6; // codec ASDOUT - microphone, unused
+
+        int dataOutPin = kPinDataToCodec;
 
         /**
          * DMA depth. 8 buffers of 512 samples is about 93 ms of audio in
@@ -78,6 +95,7 @@ namespace audio {
             Priming,  // silence, amplifier still down, DAC settling
             Playing,  // the actual sound
             Draining, // silence, waiting for the DMA to empty
+            Tone,     // continuous test tone, runs until stopped
         };
 
         Phase phase = Phase::Idle;
@@ -85,42 +103,112 @@ namespace audio {
         bool ready = false;         // codec found and I2S installed
         size_t playCursor = 0;      // samples of the sound already handed over
         size_t silenceCursor = 0;   // samples of silence pushed in this phase
-        uint8_t volume = 80;        // percent
+        /**
+         * Default volume, in percent of the 0-100 scale below.
+         *
+         * 55 is about -22 dB. Set from a real listening test, not a guess: at
+         * 100 (0 dB at the codec) this speaker is startlingly loud in a
+         * kitchen. The startup sound is normalised to -3 dBFS, so the headroom
+         * is in the file; the attenuation needs to be here.
+         */
+        uint8_t volume = 55;        // percent
         uint32_t playStartedMs = 0;
-        uint32_t underruns = 0;     // passes where the DMA took nothing
+        uint32_t lastPlayMs = 0;    // how long the last sound actually took
 
-        /** A block of zeroes to push during the prime and drain phases. */
-        int16_t silenceBuffer[kChunkSamples] = {};
+        /**
+         * Interleaving scratch buffer: one stereo frame is two 16-bit samples.
+         *
+         * The source material is mono but it is sent as stereo with the same
+         * sample in both slots. That is not waste, it is insurance: which slot
+         * a mono codec listens to is a configuration detail, and duplicating
+         * the sample means the DAC gets audio whichever one it picks. The flash
+         * cost is nil because the stored file is still mono - only this
+         * in-memory buffer is stereo.
+         */
+        int16_t stereoBuffer[kChunkSamples * 2] = {};
+
+        /** Phase accumulator for the test tone, in samples. */
+        uint32_t tonePhase = 0;
+        uint32_t toneHz = 1000;
 
         size_t totalSamples() {
             return static_cast<size_t>(startupPcmEnd - startupPcmStart) / sizeof(int16_t);
         }
 
         /**
-         * @brief Hand up to `samples` 16-bit samples to the I2S DMA.
+         * @brief Hand up to `frames` mono samples to the I2S DMA as stereo.
          *
-         * Never waits. Returns how many samples were actually accepted, which
-         * is zero when the DMA is full - the normal case for most loop passes,
-         * and not a problem.
+         * Never waits. Returns how many mono samples were actually accepted,
+         * which is zero when the DMA is full - the normal case for most loop
+         * passes, and not a problem.
+         *
+         * @param mono  source samples, or nullptr for silence
+         * @param frames how many to send, capped at kChunkSamples
          */
-        size_t pushSamples(const int16_t* data, size_t samples) {
+        size_t pushFrames(const int16_t* mono, size_t frames) {
+            if (frames > kChunkSamples) {
+                frames = kChunkSamples;
+            }
+
+            for (size_t i = 0; i < frames; ++i) {
+                const int16_t sample = mono ? mono[i] : 0;
+
+                stereoBuffer[i * 2] = sample;     // left
+                stereoBuffer[i * 2 + 1] = sample; // right
+            }
+
             size_t written = 0;
 
-            const esp_err_t err = i2s_write(kI2sPort, data, samples * sizeof(int16_t), &written, 0);
+            const esp_err_t err = i2s_write(kI2sPort, stereoBuffer, frames * 2 * sizeof(int16_t), &written, 0);
 
             if (err != ESP_OK) {
                 return 0;
             }
 
-            return written / sizeof(int16_t);
+            // Back from bytes to mono samples: two 16-bit slots per frame.
+            return written / (2 * sizeof(int16_t));
         }
 
         /**
-         * @brief Install the I2S driver as master, 16-bit mono at 44.1 kHz.
+         * @brief Fill a chunk with a test tone and hand it to the DMA.
          *
-         * Mono is sent as I2S_CHANNEL_FMT_ONLY_LEFT: the codec's DAC is mono
-         * and the board has one speaker, so a stereo file would be two copies
-         * of the same thing taking twice the flash.
+         * A diagnostic, not a feature. A steady full-scale tone separates "the
+         * audio path does not work" from "the sound file is wrong", which a
+         * three second chime cannot do.
+         */
+        size_t pushTone(size_t frames) {
+            if (frames > kChunkSamples) {
+                frames = kChunkSamples;
+            }
+
+            static int16_t toneChunk[kChunkSamples];
+
+            for (size_t i = 0; i < frames; ++i) {
+                const float t = static_cast<float>(tonePhase + i) / static_cast<float>(kSampleRate);
+
+                // -3 dBFS, matching the startup sound, so switching between
+                // them is a fair comparison rather than a volume jump.
+                toneChunk[i] = static_cast<int16_t>(23000.0f * sinf(2.0f * PI * static_cast<float>(toneHz) * t));
+            }
+
+            const size_t pushed = pushFrames(toneChunk, frames);
+
+            tonePhase += pushed;
+
+            return pushed;
+        }
+
+        /**
+         * @brief Install the I2S driver as master, 16-bit stereo at 44.1 kHz.
+         *
+         * Stereo rather than I2S_CHANNEL_FMT_ONLY_LEFT, with the mono source
+         * duplicated into both slots. Two reasons, both learned the hard way:
+         * a mono codec's choice of slot is a configuration detail that is easy
+         * to get wrong, and the single-slot modes also change the bit clock to
+         * frame clock ratio, which has to agree with the divider programmed
+         * into the codec. Plain stereo is the textbook case - 32 bit clocks per
+         * frame, frame clock equal to the sample rate - and it is what the
+         * codec's clock registers here were worked out for.
          *
          * @return true if the driver installed and the pins were assigned.
          */
@@ -130,7 +218,7 @@ namespace audio {
             cfg.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX);
             cfg.sample_rate = kSampleRate;
             cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
-            cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+            cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
             cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
             cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
             cfg.dma_buf_count = kDmaBufCount;
@@ -171,10 +259,10 @@ namespace audio {
             pins.mck_io_num = kPinMclk;
             pins.bck_io_num = kPinBclk;
             pins.ws_io_num = kPinLrck;
-            pins.data_out_num = kPinDout;
+            pins.data_out_num = dataOutPin;
 
-            // The board's microphone is wired to IO8 but not used here, so the
-            // pin is left alone rather than claimed.
+            // Whichever data pin is not being used for playback is the
+            // microphone's; left alone rather than claimed.
             pins.data_in_num = I2S_PIN_NO_CHANGE;
 
             err = i2s_set_pin(kI2sPort, &pins);
@@ -262,7 +350,6 @@ namespace audio {
 
         playCursor = 0;
         silenceCursor = 0;
-        underruns = 0;
         playStartedMs = millis();
         phase = Phase::Priming;
 
@@ -279,7 +366,7 @@ namespace audio {
                 const size_t remaining = kPrimeSamples - silenceCursor;
                 const size_t want = remaining < kChunkSamples ? remaining : kChunkSamples;
 
-                silenceCursor += pushSamples(silenceBuffer, want);
+                silenceCursor += pushFrames(nullptr, want);
 
                 if (silenceCursor >= kPrimeSamples) {
                     // DAC is settled and the clocks are running. Now it is safe
@@ -299,13 +386,7 @@ namespace audio {
                 const size_t want = remaining < kChunkSamples ? remaining : kChunkSamples;
 
                 const auto* samples = reinterpret_cast<const int16_t*>(startupPcmStart);
-                const size_t pushed = pushSamples(samples + playCursor, want);
-
-                if (pushed == 0) {
-                    ++underruns;
-                }
-
-                playCursor += pushed;
+                playCursor += pushFrames(samples + playCursor, want);
 
                 if (playCursor >= total) {
                     phase = Phase::Draining;
@@ -314,11 +395,20 @@ namespace audio {
                 break;
             }
 
+            case Phase::Tone: {
+                // Runs until stop(). Nothing times it out on purpose: a
+                // diagnostic that switches itself off is a diagnostic you have
+                // to keep restarting while you probe.
+                pushTone(kChunkSamples);
+
+                break;
+            }
+
             case Phase::Draining: {
                 const size_t remaining = kDrainSamples - silenceCursor;
                 const size_t want = remaining < kChunkSamples ? remaining : kChunkSamples;
 
-                silenceCursor += pushSamples(silenceBuffer, want);
+                silenceCursor += pushFrames(nullptr, want);
 
                 if (silenceCursor >= kDrainSamples) {
                     // The sound has physically finished. Shut the amplifier
@@ -326,9 +416,14 @@ namespace audio {
                     es8311::ampEnable(false);
 
                     phase = Phase::Idle;
+                    lastPlayMs = millis() - playStartedMs;
 
+                    // Worth printing: this is the one number that proves the
+                    // whole chain is clocking correctly. If it comes back far
+                    // short of the sound's real length, the DMA drained faster
+                    // than real time and the sample rate is wrong somewhere.
                     Serial.print("audio: startup sound finished in ");
-                    Serial.print(millis() - playStartedMs);
+                    Serial.print(lastPlayMs);
                     Serial.println(" ms");
                 }
 
@@ -338,6 +433,59 @@ namespace audio {
             case Phase::Idle:
                 break;
         }
+    }
+
+    bool startTone(uint32_t hz) {
+        if (!ready) {
+            return false;
+        }
+
+        stop();
+
+        toneHz = hz == 0 ? 1000 : hz;
+        tonePhase = 0;
+        phase = Phase::Tone;
+
+        // Straight on, no prime: this is a diagnostic, and a click at the
+        // start of a test tone tells us something useful anyway.
+        es8311::ampEnable(true);
+
+        return true;
+    }
+
+    void forceAmp(bool on) {
+        es8311::ampEnable(on);
+    }
+
+    bool setDataPin(int pin) {
+        if (pin != kPinDataToCodec && pin != kPinDataFromCodec) {
+            Serial.printf("audio: data pin must be %d or %d\n", kPinDataToCodec, kPinDataFromCodec);
+
+            return false;
+        }
+
+        stop();
+
+        if (ready) {
+            i2s_driver_uninstall(kI2sPort);
+            ready = false;
+        }
+
+        dataOutPin = pin;
+
+        if (!installI2s()) {
+            return false;
+        }
+
+        ready = true;
+
+        Serial.printf("audio: I2S playback data now on IO%d\n", dataOutPin);
+
+        return true;
+    }
+
+    int dataPin() {
+        return dataOutPin;
     }
 
     bool isPlaying() {
@@ -391,6 +539,9 @@ namespace audio {
             case Phase::Draining:
                 phaseName = "draining";
                 break;
+            case Phase::Tone:
+                phaseName = "test tone";
+                break;
             case Phase::Idle:
                 break;
         }
@@ -402,7 +553,16 @@ namespace audio {
         Serial.print(totalSamples());
         Serial.print(" samples embedded at ");
         Serial.print(kSampleRate);
-        Serial.println(" Hz mono");
+        Serial.print(" Hz mono, data out on IO");
+        Serial.println(dataOutPin);
+
+        if (lastPlayMs > 0) {
+            Serial.print("audio: last playback took ");
+            Serial.print(lastPlayMs);
+            Serial.print(" ms (");
+            Serial.print(static_cast<float>(totalSamples()) / kSampleRate, 2);
+            Serial.println("s of audio plus prime and drain)");
+        }
 
         es8311::printStatus();
     }

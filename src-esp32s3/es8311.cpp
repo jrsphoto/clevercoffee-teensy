@@ -342,4 +342,104 @@ namespace es8311 {
         }
     }
 
+    void dumpRegisters() {
+        if (foundAddress == 0) {
+            Serial.println("codec: not found, nothing to dump");
+
+            return;
+        }
+
+        /**
+         * The registers begin() sets, with the value it asks for. Anything
+         * reading back differently is the interesting result - either the
+         * codec rejected it, or something else is writing the bus.
+         *
+         * 0x31 and 0x06 are deliberately absent: both are read-modify-write,
+         * so their final value depends on reset defaults rather than on a
+         * number chosen here.
+         */
+        struct Expected {
+                uint8_t reg;
+                uint8_t value;
+                const char* what;
+        };
+
+        static const Expected expected[] = {
+            {0x00, 0x80, "reset/mode    (0x80 = slave)"},
+            {0x01, 0x3F, "clock manager (MCLK from pin)"},
+            {0x02, 0x00, "pre-div/mult  (both 1)"},
+            {0x03, 0x10, "ADC osr"},
+            {0x04, 0x10, "DAC osr"},
+            {0x05, 0x00, "ADC/DAC div   (both 1)"},
+            {0x07, 0x00, "LRCK div high"},
+            {0x08, 0xFF, "LRCK div low  (-> 256)"},
+            {0x09, 0x0C, "DAC serial    (16-bit I2S)"},
+            {0x0A, 0x0C, "ADC serial    (16-bit I2S)"},
+            {0x0D, 0x01, "power up"},
+            {0x0E, 0x02, "analogue power"},
+            {0x12, 0x00, "DAC enable"},
+            {0x14, 0x1A, "analogue PGA"},
+            {0x32, currentVolume, "DAC volume"},
+            {0x37, 0x08, "DAC ramp rate"},
+            {0x44, 0x08, "GPIO/DAC2ADC off"},
+        };
+
+        Serial.print("codec registers at 0x");
+        Serial.println(foundAddress, HEX);
+
+        int mismatches = 0;
+
+        for (const auto& e : expected) {
+            uint8_t actual = 0;
+
+            Serial.print("  0x");
+
+            if (e.reg < 0x10) {
+                Serial.print('0');
+            }
+
+            Serial.print(e.reg, HEX);
+            Serial.print("  ");
+
+            if (!readReg(e.reg, &actual)) {
+                Serial.println("READ FAILED");
+                ++mismatches;
+
+                continue;
+            }
+
+            Serial.print("= 0x");
+
+            if (actual < 0x10) {
+                Serial.print('0');
+            }
+
+            Serial.print(actual, HEX);
+            Serial.print("  ");
+            Serial.print(e.what);
+
+            if (actual != e.value) {
+                Serial.print("   <-- MISMATCH, wrote 0x");
+                Serial.print(e.value, HEX);
+                ++mismatches;
+            }
+
+            Serial.println();
+        }
+
+        // The mute bits, read-modify-write so shown separately.
+        uint8_t mute = 0;
+
+        if (readReg(0x31, &mute)) {
+            Serial.print("  0x31  = 0x");
+            Serial.print(mute, HEX);
+            Serial.print("  DAC mute bits ");
+            Serial.println((mute & 0x60) != 0 ? "SET (muted)" : "clear (unmuted)");
+        }
+
+        Serial.print("codec: ");
+        Serial.print(mismatches);
+        Serial.println(" register(s) did not read back as written");
+    }
+
 } // namespace es8311
