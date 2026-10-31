@@ -25,6 +25,7 @@
 #include <Arduino.h>
 
 #include "display.h"
+#include "link.h"
 
 namespace {
 
@@ -36,6 +37,13 @@ namespace {
 
     constexpr uint32_t kHeartbeatMs = 2000;
     uint32_t lastHeartbeat = 0;
+
+    bool lcdReady = false;
+
+    /** Redraw rate. The panel is on SPI, telemetry arrives at 5 Hz, and
+     *  repainting faster than the data changes only causes flicker. */
+    constexpr uint32_t kRedrawMs = 250;
+    uint32_t lastRedraw = 0;
 
     /**
      * @brief Tiny serial console, so display orientation and inversion can be
@@ -56,12 +64,19 @@ namespace {
             display::setBrightness(static_cast<uint8_t>(b));
             Serial.printf("brightness %d\n", b);
         }
+        else if (line.startsWith("cmd ")) {
+            const String body = line.substring(4);
+            machinelink::sendCommand(body.c_str());
+            Serial.printf("sent: %s\n", body.c_str());
+        }
         else if (line == "redraw") {
             display::showBringupScreen();
             Serial.println("redrawn");
         }
         else if (line == "help" || line.isEmpty()) {
-            Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw");
+            Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw | cmd <body>");
+            Serial.println("  cmd ping=1        ask the Teensy to reply");
+            Serial.println("  cmd flowreset=1   zero the flow accumulator");
             Serial.println("  rot 0,2 = portrait 320x480   rot 1,3 = landscape 480x320");
         }
         else {
@@ -120,11 +135,12 @@ void setup() {
     // The link to the Teensy. Opened before the display so that, once the
     // protocol exists, a Teensy already running has somewhere to send to while
     // this board is still drawing its first frame.
-    Serial1.begin(kLinkBaud, SERIAL_8N1, display::kPinLinkRx, display::kPinLinkTx);
+    machinelink::init();
 
     if (display::init()) {
         Serial.println("display: ST7796S initialised");
-        display::showBringupScreen();
+        lcdReady = true;
+        display::lcd.fillScreen(TFT_BLACK);
         Serial.printf("display: %dx%d, rotation %d\n", display::lcd.width(), display::lcd.height(), display::rotation());
         Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw");
     }
@@ -135,18 +151,22 @@ void setup() {
 
 void loop() {
     serviceConsole();
-    display::loop();
+    machinelink::loop();
 
-    // Anything arriving from the Teensy, echoed to the console. The real
-    // protocol lands in the next phase; for now this proves the wire works in
-    // one direction and gives something to watch while testing it.
-    while (Serial1.available() > 0) {
-        Serial.write(Serial1.read());
+    if (lcdReady) {
+        if (const uint32_t now = millis(); now - lastRedraw >= kRedrawMs) {
+            lastRedraw = now;
+            display::drawMachineScreen();
+        }
     }
 
     if (const uint32_t now = millis(); now - lastHeartbeat >= kHeartbeatMs) {
         lastHeartbeat = now;
 
-        Serial.printf("alive, uptime %lus\n", static_cast<unsigned long>(now / 1000));
+        Serial.printf("alive, uptime %lus  link=%s frames=%lu badsum=%lu\n",
+                      static_cast<unsigned long>(now / 1000),
+                      machinelink::isConnected() ? "OK" : "stale",
+                      static_cast<unsigned long>(machinelink::framesReceived()),
+                      static_cast<unsigned long>(machinelink::badChecksums()));
     }
 }

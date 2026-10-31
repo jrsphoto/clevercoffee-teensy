@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "commsHandler.h"
 #include "encoderHandler.h"
 #include "flowHandler.h"
 #include "hardware/outputs.h"
@@ -59,6 +60,7 @@ namespace {
         Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
+        Serial.println("  link              display-head link state and frame counters");
         Serial.println("  led <rrggbb>      force the encoder LED to a colour");
         Serial.println("  encint            watch the encoder INT line while you turn the knob");
         Serial.println("  i2cslow           SDA electrical test + scan at 10/2/1 kHz");
@@ -102,6 +104,7 @@ namespace {
         temps::printStatus();
         flow::printStatus();
         encoder::printStatus();
+        comms::printStatus();
 
         Serial.println();
     }
@@ -309,6 +312,9 @@ namespace {
         }
         else if (strcasecmp(command, "enctest") == 0) {
             i2c::compareWireVsBitBang(0x04);
+        }
+        else if (strcasecmp(command, "link") == 0) {
+            comms::printStatus();
         }
         else if (strcasecmp(command, "enc") == 0) {
             encoder::printStatus();
