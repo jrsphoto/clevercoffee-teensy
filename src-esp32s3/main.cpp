@@ -37,6 +37,62 @@ namespace {
     constexpr uint32_t kHeartbeatMs = 2000;
     uint32_t lastHeartbeat = 0;
 
+    /**
+     * @brief Tiny serial console, so display orientation and inversion can be
+     *        tuned interactively instead of through a reflash each time.
+     */
+    void handleCommand(const String& line) {
+        if (line.startsWith("rot")) {
+            const int r = line.substring(3).toInt();
+            display::setRotation(static_cast<uint8_t>(r));
+            Serial.printf("rotation %d  (%dx%d)\n", display::rotation(), display::lcd.width(), display::lcd.height());
+        }
+        else if (line == "inv") {
+            display::toggleInvert();
+            Serial.println("inversion toggled");
+        }
+        else if (line.startsWith("bl")) {
+            const int b = line.substring(2).toInt();
+            display::setBrightness(static_cast<uint8_t>(b));
+            Serial.printf("brightness %d\n", b);
+        }
+        else if (line == "redraw") {
+            display::showBringupScreen();
+            Serial.println("redrawn");
+        }
+        else if (line == "help" || line.isEmpty()) {
+            Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw");
+            Serial.println("  rot 0,2 = portrait 320x480   rot 1,3 = landscape 480x320");
+        }
+        else {
+            Serial.printf("unknown: %s\n", line.c_str());
+        }
+    }
+
+    void serviceConsole() {
+        static String line;
+
+        while (Serial.available() > 0) {
+            const char c = static_cast<char>(Serial.read());
+
+            if (c == '\r') {
+                continue;
+            }
+
+            if (c == '\n') {
+                line.trim();
+                handleCommand(line);
+                line = "";
+
+                continue;
+            }
+
+            if (line.length() < 32) {
+                line += c;
+            }
+        }
+    }
+
     void printBanner() {
         Serial.println();
         Serial.println("========================================");
@@ -69,6 +125,8 @@ void setup() {
     if (display::init()) {
         Serial.println("display: ST7796S initialised");
         display::showBringupScreen();
+        Serial.printf("display: %dx%d, rotation %d\n", display::lcd.width(), display::lcd.height(), display::rotation());
+        Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw");
     }
     else {
         Serial.println("display: INIT FAILED - check the SPI pins against the LCDwiki page");
@@ -76,6 +134,7 @@ void setup() {
 }
 
 void loop() {
+    serviceConsole();
     display::loop();
 
     // Anything arriving from the Teensy, echoed to the console. The real
