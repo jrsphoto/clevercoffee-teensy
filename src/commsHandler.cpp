@@ -15,6 +15,7 @@
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
+#include "updateMode.h"
 
 namespace comms {
 
@@ -122,6 +123,23 @@ namespace comms {
                 ack("clearfault", true, "cleared");
 
                 return;
+            }
+
+            if (parser.get("update", value, sizeof(value))) {
+                const char* reason = "";
+
+                if (!updateMode::isSafe(&reason)) {
+                    ack("update", false, reason);
+
+                    return;
+                }
+
+                // Tell the head before rebooting, so it can show something
+                // useful rather than just watching telemetry stop.
+                ack("update", true, "rebooting");
+                Serial1.flush();
+
+                updateMode::requestAndReboot(&reason); // does not return
             }
 
             if (parser.get("ping", value, sizeof(value))) {

@@ -31,6 +31,7 @@
 #include "i2cHandler.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
+#include "updateMode.h"
 
 // Version of the Teensy control firmware specifically. Independent of the
 // upstream CleverCoffee version carried in VERSION.txt.
@@ -175,6 +176,21 @@ void setup() {
     safetyInitOutputs();
 
     Serial.begin(kConsoleBaud);
+
+    // Checked before ANYTHING else is initialised, and read-and-cleared so a
+    // crash in update mode cannot become a boot loop that stays there.
+    //
+    // Update mode never arms the watchdog, never starts a sensor and never runs
+    // the control loop - a machine being updated is provably not controlling
+    // anything, because the code that controls things was never started.
+    if (updateMode::consumeRequest()) {
+        const uint32_t updateWaitStart = millis();
+
+        while (!Serial && (millis() - updateWaitStart) < kConsoleWaitMs) {
+        }
+
+        updateMode::runLoop(); // does not return
+    }
 
     const uint32_t consoleWaitStart = millis();
 
