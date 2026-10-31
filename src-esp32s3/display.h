@@ -154,8 +154,25 @@ namespace display {
 
     /**
      * @brief Draw the bring-up screen: panel info and a touch target.
+     *
+     * Laid out from lcd.width()/height() rather than fixed numbers, so it is
+     * correct in any rotation instead of only the one it was written in.
      */
     void showBringupScreen();
+
+    /**
+     * @brief Set rotation (0-3) and redraw. 1 and 3 are landscape.
+     */
+    void setRotation(uint8_t rotation);
+
+    /** @brief Toggle panel colour inversion and redraw. */
+    void toggleInvert();
+
+    /** @brief Set backlight brightness, 0-255. */
+    void setBrightness(uint8_t level);
+
+    /** @brief Current rotation. */
+    uint8_t rotation();
 
     /**
      * @brief Poll touch and draw feedback. Call every loop pass.
