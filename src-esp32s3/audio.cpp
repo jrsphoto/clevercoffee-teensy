@@ -104,14 +104,20 @@ namespace audio {
         size_t playCursor = 0;      // samples of the sound already handed over
         size_t silenceCursor = 0;   // samples of silence pushed in this phase
         /**
-         * Default volume, in percent of the 0-100 scale below.
+         * Default volume, in percent of the 0-100 scale below. 100 is 0 dB at
+         * the codec, i.e. no digital attenuation at all.
          *
-         * 55 is about -22 dB. Set from a real listening test, not a guess: at
-         * 100 (0 dB at the codec) this speaker is startlingly loud in a
-         * kitchen. The startup sound is normalised to -3 dBFS, so the headroom
-         * is in the file; the attenuation needs to be here.
+         * Set from a listening test, and it needs the full 0 dB because of what
+         * is actually in the file: the chime peaks at -3 dBFS but its RMS is
+         * only -16.9 dBFS, and the body of it sits near -13 dBFS. Peak
+         * normalisation flatters a sound like this - a short transient reaches
+         * full scale while everything you actually hear is 10 dB below it.
+         *
+         * Any attenuation here comes straight off something already quiet, and
+         * at -22 dB it was inaudible across a room. If more volume is ever
+         * wanted, it has to come from compressing the file, not from this.
          */
-        uint8_t volume = 55;        // percent
+        uint8_t volume = 100;       // percent
         uint32_t playStartedMs = 0;
         uint32_t lastPlayMs = 0;    // how long the last sound actually took
 
@@ -186,9 +192,12 @@ namespace audio {
             for (size_t i = 0; i < frames; ++i) {
                 const float t = static_cast<float>(tonePhase + i) / static_cast<float>(kSampleRate);
 
-                // -3 dBFS, matching the startup sound, so switching between
-                // them is a fair comparison rather than a volume jump.
-                toneChunk[i] = static_cast<int16_t>(23000.0f * sinf(2.0f * PI * static_cast<float>(toneHz) * t));
+                // -13 dBFS, which is the startup sound's RMS level rather
+                // than its peak. Matching peaks would make the tone far louder
+                // than the chime, because a continuous sine sits 10 dB closer
+                // to its own peak than music does - the first version of this
+                // was genuinely painful at full volume.
+                toneChunk[i] = static_cast<int16_t>(7300.0f * sinf(2.0f * PI * static_cast<float>(toneHz) * t));
             }
 
             const size_t pushed = pushFrames(toneChunk, frames);
