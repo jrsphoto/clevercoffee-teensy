@@ -75,6 +75,42 @@ namespace audio {
      */
     void loop();
 
+    /**
+     * @brief Start a continuous test tone. Runs until stop().
+     *
+     * Diagnostic only. A steady tone separates "the audio path is broken" from
+     * "the sound file is wrong", which a three second chime cannot do, and it
+     * gives something to point an oscilloscope or a logic analyser at.
+     *
+     * @param hz tone frequency; 1000 is a good default for a small speaker
+     * @return true if the tone started.
+     */
+    bool startTone(uint32_t hz);
+
+    /**
+     * @brief Force the amplifier on or off, ignoring playback state.
+     *
+     * For testing the shutdown pin's polarity by ear. The LCDwiki page says
+     * LOW enables, but boards do not always match their documentation, and a
+     * silent speaker looks identical either way.
+     */
+    void forceAmp(bool on);
+
+    /**
+     * @brief Switch which GPIO carries playback data, and reinstall I2S.
+     *
+     * Only IO6 and IO8 are accepted - they are the board's two I2S data pins.
+     * This exists because the board's documentation does not say which of them
+     * is the codec's input and which is its output, and swapping a pin by
+     * command is quicker and more certain than reasoning about the wording.
+     *
+     * @return true if I2S came back up on the new pin.
+     */
+    bool setDataPin(int pin);
+
+    /** @brief GPIO currently carrying playback data. */
+    int dataPin();
+
     /** @brief Is a sound currently playing (including its silent lead-out)? */
     bool isPlaying();
 

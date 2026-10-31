@@ -26,6 +26,7 @@
 
 #include "audio.h"
 #include "display.h"
+#include "es8311.h"
 #include "link.h"
 
 namespace {
@@ -84,9 +85,31 @@ namespace {
         else if (line == "audio") {
             audio::printStatus();
         }
+        else if (line.startsWith("tone")) {
+            const int hz = line.substring(4).toInt();
+            Serial.printf("%s %d Hz test tone - 'stop' to end it\n", audio::startTone(hz > 0 ? hz : 1000) ? "playing" : "could not start", hz > 0 ? hz : 1000);
+        }
+        else if (line == "stop") {
+            audio::stop();
+            Serial.println("stopped, amp shut down");
+        }
+        else if (line.startsWith("amp")) {
+            // Polarity test. The board's documentation says LOW enables the
+            // amplifier; a silent speaker looks the same either way, so this
+            // allows settling it by ear.
+            const bool on = line.substring(3).toInt() != 0;
+            audio::forceAmp(on);
+            Serial.printf("amp pin forced %s (%s per the datasheet)\n", on ? "LOW" : "HIGH", on ? "enabled" : "shut down");
+        }
+        else if (line.startsWith("dpin")) {
+            audio::setDataPin(line.substring(4).toInt());
+        }
+        else if (line == "regs") {
+            es8311::dumpRegisters();
+        }
         else if (line == "help" || line.isEmpty()) {
             Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw | cmd <body>");
-            Serial.println("          play | vol <0-100> | audio");
+            Serial.println("          play | vol <0-100> | audio | tone <hz> | stop | amp <0|1> | regs | dpin <6|8>");
             Serial.println("  cmd ping=1        ask the Teensy to reply");
             Serial.println("  cmd flowreset=1   zero the flow accumulator");
             Serial.println("  rot 0,2 = portrait 320x480   rot 1,3 = landscape 480x320");

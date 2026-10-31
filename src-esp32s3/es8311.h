@@ -123,4 +123,15 @@ namespace es8311 {
     /** @brief Print codec state for the serial console. */
     void printStatus();
 
+    /**
+     * @brief Read back and print the registers that begin() wrote.
+     *
+     * Writes are acknowledged by the bus, not by the codec agreeing with them,
+     * so an acknowledged write is not proof the value stuck. This reads them
+     * back and flags any that differ from what was asked for, which is the
+     * difference between "the codec is configured" and "the codec was sent a
+     * configuration".
+     */
+    void dumpRegisters();
+
 } // namespace es8311
