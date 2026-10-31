@@ -24,6 +24,7 @@
 
 #include <Arduino.h>
 
+#include "audio.h"
 #include "display.h"
 #include "link.h"
 
@@ -73,8 +74,19 @@ namespace {
             display::showBringupScreen();
             Serial.println("redrawn");
         }
+        else if (line == "play") {
+            Serial.println(audio::playStartupSound() ? "playing" : "could not play - see 'audio'");
+        }
+        else if (line.startsWith("vol")) {
+            audio::setVolumePercent(static_cast<uint8_t>(line.substring(3).toInt()));
+            Serial.printf("volume %d%%\n", audio::volumePercent());
+        }
+        else if (line == "audio") {
+            audio::printStatus();
+        }
         else if (line == "help" || line.isEmpty()) {
             Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw | cmd <body>");
+            Serial.println("          play | vol <0-100> | audio");
             Serial.println("  cmd ping=1        ask the Teensy to reply");
             Serial.println("  cmd flowreset=1   zero the flow accumulator");
             Serial.println("  rot 0,2 = portrait 320x480   rot 1,3 = landscape 480x320");
@@ -147,11 +159,22 @@ void setup() {
     else {
         Serial.println("display: INIT FAILED - check the SPI pins against the LCDwiki page");
     }
+
+    // AFTER the display, because the codec shares the touch panel's I2C bus and
+    // display::init() is what opens it. A missing codec or speaker is not an
+    // error worth stopping for - it just means no sound.
+    if (audio::init()) {
+        audio::playStartupSound();
+    }
 }
 
 void loop() {
     serviceConsole();
     machinelink::loop();
+
+    // Feeds the I2S DMA while a sound is playing; a no-op the rest of the time.
+    // Called before the redraw so a slow screen paint cannot starve it.
+    audio::loop();
 
     if (lcdReady) {
         if (const uint32_t now = millis(); now - lastRedraw >= kRedrawMs) {
