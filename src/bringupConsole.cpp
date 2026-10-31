@@ -17,6 +17,7 @@
 #include "i2cHandler.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
+#include "updateMode.h"
 
 namespace {
 
@@ -61,6 +62,7 @@ namespace {
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
+        Serial.println("  update            reboot into firmware-update mode (machine must be idle)");
         Serial.println("  led <rrggbb>      force the encoder LED to a colour");
         Serial.println("  encint            watch the encoder INT line while you turn the knob");
         Serial.println("  i2cslow           SDA electrical test + scan at 10/2/1 kHz");
@@ -312,6 +314,19 @@ namespace {
         }
         else if (strcasecmp(command, "enctest") == 0) {
             i2c::compareWireVsBitBang(0x04);
+        }
+        else if (strcasecmp(command, "update") == 0) {
+            const char* reason = "";
+
+            if (!updateMode::isSafe(&reason)) {
+                Serial.print("REFUSED: not safe to update - ");
+                Serial.println(reason);
+                Serial.println("         Everything must be off: the control loop stops during");
+                Serial.println("         an update, so anything left on stays on unsupervised.");
+            }
+            else {
+                updateMode::requestAndReboot(&reason); // does not return
+            }
         }
         else if (strcasecmp(command, "link") == 0) {
             comms::printStatus();
