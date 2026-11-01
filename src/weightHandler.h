@@ -157,11 +157,33 @@ namespace weight {
     /**
      * @brief Is the weight usable right now?
      *
-     * present AND ready AND the last conversion is recent. THIS IS THE ONE
-     * PHASE 3 MUST CHECK before using a weight to decide anything - see the
-     * header's note on the time backstop.
+     * present AND ready AND the last conversion is recent AND no cell is
+     * saturated. THIS IS THE ONE PHASE 3 MUST CHECK before using a weight to
+     * decide anything - see the header's note on the time backstop.
      */
     bool healthy();
+
+    /**
+     * @brief Is either load cell pinned at the end of its range?
+     *
+     * The HX711 is a 24-bit converter, so a cell driven past about +/-8.3
+     * million counts is simply stuck at the stop and its reading means
+     * nothing - and because the total is a sum, one saturated cell corrupts
+     * the whole weight.
+     *
+     * This is not hypothetical. With two cells only an inch apart under a
+     * plate that extends well past them, a mass set down outside that span
+     * levers the plate: the near cell is pushed down and the far one PRIED
+     * UPWARD, multiplied by the lever ratio. Measured on this machine, a
+     * 411.7 g weight placed off to one side drove cell 2 to -8,231,000 counts,
+     * 98% of full scale, while the handler happily reported the resulting
+     * -5269 g as "healthy".
+     *
+     * The fix for the hardware is to move the cells as far apart as the plate
+     * allows, so loads land BETWEEN them and both see downward force. The fix
+     * for the firmware is this: refuse to call a saturated reading usable.
+     */
+    bool saturated();
 
     /** @brief Latest weight in grams. Meaningless unless healthy(). */
     float grams();

@@ -7,6 +7,7 @@
 #include "weightHandler.h"
 
 #include <Arduino.h>
+#include <EEPROM.h>
 
 #include "hardware/pinmapping.h"
 #include "hardware/scales/HX711Scale.h"
@@ -108,6 +109,130 @@ namespace weight {
 
         /** Bound on collecting a fresh dataset, in case conversions dry up. */
         constexpr uint32_t kCalibrationTimeoutMs = 15000;
+
+        /**
+         * Saturation threshold in raw counts.
+         *
+         * The HX711 is 24-bit signed, so full scale is +/-8,388,607. At 90% of
+         * that the cell is effectively at the stop: the converter still returns
+         * a number but it no longer tracks the load, so the reading is fiction.
+         * Left short of the absolute limit because the last tenth of the range
+         * is already badly nonlinear.
+         */
+        constexpr float kSaturationCounts = 7550000.0f;
+
+        bool cellSaturated = false;
+        int saturatedCell = 0;
+
+        /**
+         * Calibration survives a reboot, in EEPROM.
+         *
+         * Without this the factor reverts to 1.0 on every reset and every
+         * reflash, which during development means recalibrating against a
+         * known mass several times an hour. Teensy 4.1 emulates EEPROM in
+         * flash, so this also survives a firmware upload.
+         *
+         * Guarded by a magic number, a version and a checksum, and loaded ONLY
+         * if all three agree. Unprogrammed EEPROM reads as 0xFF everywhere,
+         * which would otherwise be interpreted as a calibration factor - and a
+         * garbage factor that happens to look plausible is precisely the
+         * failure this code refuses to have anywhere else. A rejected record
+         * leaves the scale uncalibrated, reporting raw counts, which is
+         * obvious.
+         *
+         * Address 64 rather than 0, leaving the start of EEPROM free for
+         * whatever the config system wants when it arrives in phase 6.
+         */
+        constexpr int kEepromAddress = 64;
+        constexpr uint32_t kStoreMagic = 0x5CA1E001; // "SCALE 001"
+        constexpr uint16_t kStoreVersion = 1;
+
+        struct StoredCalibration {
+                uint32_t magic;
+                uint16_t version;
+                uint16_t samples;
+                float cal1;
+                float cal2;
+                uint8_t dual;
+                uint8_t reserved[3];
+                uint32_t checksum;
+        };
+
+        /** Deliberately trivial - this is a corruption check, not security. */
+        uint32_t storeChecksum(const StoredCalibration& rec) {
+            uint32_t sum = 0;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&rec);
+
+            for (size_t i = 0; i < offsetof(StoredCalibration, checksum); ++i) {
+                sum = (sum << 1) ^ bytes[i];
+            }
+
+            return sum;
+        }
+
+        void saveCalibration() {
+            StoredCalibration rec{};
+
+            rec.magic = kStoreMagic;
+            rec.version = kStoreVersion;
+            rec.samples = static_cast<uint16_t>(samplesInUse);
+            rec.cal1 = calibration;
+            rec.cal2 = calibration2;
+            rec.dual = useDualCell ? 1 : 0;
+            rec.checksum = storeChecksum(rec);
+
+            EEPROM.put(kEepromAddress, rec);
+
+            Serial.println("scale: calibration saved - it will survive a reboot and a reflash");
+        }
+
+        /**
+         * @brief Load a stored calibration, if there is a believable one.
+         *
+         * @return true if a valid record was applied.
+         */
+        bool loadCalibration() {
+            StoredCalibration rec{};
+            EEPROM.get(kEepromAddress, rec);
+
+            if (rec.magic != kStoreMagic || rec.version != kStoreVersion) {
+                return false;
+            }
+
+            if (rec.checksum != storeChecksum(rec)) {
+                Serial.println("scale: stored calibration failed its checksum - ignoring it");
+
+                return false;
+            }
+
+            // Sanity-check the values themselves. A record can pass its
+            // checksum and still be nonsense if it was written by a different
+            // build, and a wrong factor silently mis-doses every shot.
+            if (rec.cal1 == 0.0f || isnan(rec.cal1) || isinf(rec.cal1) || rec.cal2 == 0.0f || isnan(rec.cal2) || isinf(rec.cal2)) {
+                Serial.println("scale: stored calibration holds impossible factors - ignoring it");
+
+                return false;
+            }
+
+            calibration = rec.cal1;
+            calibration2 = rec.cal2;
+            useDualCell = (rec.dual != 0);
+
+            if (rec.samples >= 1 && rec.samples <= 32) {
+                samplesInUse = rec.samples;
+            }
+
+            Serial.print("scale: restored calibration ");
+            Serial.print(calibration, 2);
+            Serial.print("/");
+            Serial.print(calibration2, 2);
+            Serial.print(", ");
+            Serial.print(useDualCell ? "2 cells, " : "1 cell, ");
+            Serial.print(samplesInUse);
+            Serial.println(" samples");
+
+            return true;
+        }
 
         /**
          * How long to let the chip settle before believing a signal timeout.
@@ -249,6 +374,8 @@ namespace weight {
             Serial.print(calibrationTargetGrams, 2);
             Serial.print(" g, factor is now ");
             Serial.println(calibration, 4);
+
+            saveCalibration();
             Serial.println("       Verify it: lift the mass and put it back. If the two readings");
             Serial.println("       differ by more than ~0.1 g the cell is not mounted rigidly");
             Serial.println("       enough and the factor is meaningless.");
@@ -266,6 +393,15 @@ namespace weight {
     } // namespace
 
     bool init() {
+        // Only on the very first call: a restart() must not quietly undo a
+        // factor set by hand with 'scalefactor' since boot.
+        static bool triedLoad = false;
+
+        if (!triedLoad) {
+            triedLoad = true;
+            loadCalibration();
+        }
+
         delete scale;
         cell = nullptr;
         cell2 = nullptr;
@@ -427,6 +563,36 @@ namespace weight {
                     lastGoodReadingMs = millis();
                     haveEverRead = true;
 
+                    // Check each cell against the end of its range. One
+                    // saturated cell corrupts the total, because the total is
+                    // a sum - so this has to be per-cell, not a sanity check
+                    // on the final number.
+                    const float raw1 = cell->getData() * cell->getCalFactor();
+                    const float raw2 = (cell2 != nullptr) ? cell2->getData() * cell2->getCalFactor() : 0.0f;
+
+                    const bool wasSaturated = cellSaturated;
+
+                    if (fabsf(raw1) > kSaturationCounts) {
+                        cellSaturated = true;
+                        saturatedCell = 1;
+                    }
+                    else if (cell2 != nullptr && fabsf(raw2) > kSaturationCounts) {
+                        cellSaturated = true;
+                        saturatedCell = 2;
+                    }
+                    else {
+                        cellSaturated = false;
+                        saturatedCell = 0;
+                    }
+
+                    if (cellSaturated && !wasSaturated) {
+                        Serial.print("scale: CELL ");
+                        Serial.print(saturatedCell);
+                        Serial.println(" SATURATED - reading is not usable.");
+                        Serial.println("       A mass set down outside the span between the cells");
+                        Serial.println("       levers the plate and pries the far cell upward.");
+                    }
+
                     if (calibrationPending && calibrationSamplesLeft > 0) {
                         --calibrationSamplesLeft;
                     }
@@ -481,7 +647,7 @@ namespace weight {
         // Staleness is checked against the last SUCCESSFUL conversion, not
         // against the last time this was called, so a scale that has quietly
         // stopped converting cannot keep refreshing its own freshness.
-        return state == State::Running && haveEverRead && !tareRunning && msSinceLastReading() <= kStaleAfterMs;
+        return state == State::Running && haveEverRead && !tareRunning && !cellSaturated && msSinceLastReading() <= kStaleAfterMs;
     }
 
     float grams() {
@@ -522,6 +688,10 @@ namespace weight {
         tareRunning = true;
 
         Serial.println("scale: taring...");
+    }
+
+    bool saturated() {
+        return cellSaturated;
     }
 
     bool tareInProgress() {
@@ -601,6 +771,8 @@ namespace weight {
     void setCalFactor(const float factor) {
         calibration = factor;
         calibration2 = factor;
+
+        saveCalibration();
 
         if (cell != nullptr) {
             cell->setCalFactor(factor);
@@ -769,6 +941,14 @@ namespace weight {
 
         if (tareRunning) {
             Serial.println("scale: tare in progress");
+        }
+
+        if (cellSaturated) {
+            Serial.print("scale: CELL ");
+            Serial.print(saturatedCell);
+            Serial.println(" IS SATURATED - the weight above is meaningless.");
+            Serial.println("       Move the load between the two cells, or move the cells");
+            Serial.println("       further apart so a load cannot lever the plate.");
         }
     }
 
