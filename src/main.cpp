@@ -30,6 +30,7 @@
 #include "hardware/pinmapping.h"
 #include "i2cHandler.h"
 #include "safetyHandler.h"
+#include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
 
@@ -162,6 +163,7 @@ namespace {
         printFaultLine();
         temps::printStatus();
         flow::printStatus();
+        switches::printStatus();
         encoder::printStatus();
         comms::printStatus();
         bringupConsolePrintHelp();
@@ -210,6 +212,7 @@ void setup() {
     i2c::init();
     temps::init();
     flow::init();
+    switches::init();
     comms::init();
 
     if (encoder::init()) {
@@ -253,7 +256,6 @@ void loop() {
     // loopFlow();           // DM60 pulse counter -> volume
     // loopScale();          // HX711, plus BT weight arriving over the link
     // loopEncoder();        // Duppa gestures + RGB machine status
-    // loopButtons();        // PCF8574 dose buttons
     // handleMachineState(); // brew / steam / hot water / standby
     // loopPid();            // heater PID
     // loopPump();           // PWM, closed loop on pressure + flow
@@ -267,6 +269,11 @@ void loop() {
     // DM60 pulse counter -> volume and rate. Counting is interrupt-driven; this
     // only derives the rate and decides when flow has stopped.
     flow::loop();
+
+    // Hardwired brew switch. Reads and debounces only - nothing acts on it
+    // until the brew state machine lands in phase 3.
+    switches::loop();
+    switches::serviceWatch();
 
     // Non-blocking encoder INT watch (bring-up aid).
     i2c::serviceEncoderIntWatch();
