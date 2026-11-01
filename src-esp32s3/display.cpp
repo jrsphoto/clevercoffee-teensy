@@ -241,56 +241,70 @@ namespace display {
         lcd.setCursor(12, 190);
         lcd.print("WEIGHT");
 
-        // Fixed-width, right-aligned, so the number ALWAYS occupies exactly
-        // the same pixels. Two earlier attempts at this got it wrong: a
-        // six-character field that an eight-character raw count overran, then
-        // a unit positioned from getCursorX() which moved around as the value
-        // changed width. A constant field needs neither - drawing text with a
-        // background colour fully repaints the field every frame, so there are
-        // no stale digits and nothing to clear.
+        // Left-aligned at a fixed left edge, with the unit immediately after
+        // the digits. Getting here took three wrong turns worth recording,
+        // because each one looked reasonable:
         //
-        // Eight characters is the worst case: raw counts are signed 24-bit, so
-        // "-8388608" is the widest value possible.
-        constexpr int kWeightChars = 8;
-        constexpr int kWeightSize = 4;
+        //   1. Unit at a fixed column sized for six characters. An eight
+        //      character raw count overran it and "raw" sat on the digits.
+        //   2. Unit positioned from getCursorX(), then the row tidied with a
+        //      fillRect afterwards. The tidy-up clipped the label.
+        //   3. Fixed-width RIGHT-aligned number. Nothing overlapped, but a
+        //      short value floated off to the right, dragging the unit with it.
+        //
+        // The actual requirement is: number pinned left, unit adjacent, no
+        // leftovers from a wider previous value. That needs the row cleared
+        // BEFORE drawing rather than patched afterwards - and to avoid the
+        // flicker a 4 Hz clear-and-repaint would cause, the whole thing is
+        // skipped unless the text has changed since the last frame.
         constexpr int kWeightX = 12;
         constexpr int kWeightY = 204;
+        constexpr int kWeightSize = 4;
+        constexpr int kWeightRowHeight = 8 * kWeightSize; // glyph is 8 px tall
 
-        // The built-in font is 6 px wide per character before scaling.
-        constexpr int kWeightWidth = kWeightChars * 6 * kWeightSize;
-
-        lcd.setTextSize(kWeightSize);
-        lcd.setCursor(kWeightX, kWeightY);
+        char weightText[16];
+        const char* weightUnit = "g";
+        uint16_t weightColour = TFT_YELLOW;
 
         if (live && st.weightOk) {
-            lcd.setTextColor(st.weightCalibrated ? TFT_YELLOW : TFT_ORANGE, TFT_BLACK);
-
             if (st.weightCalibrated) {
-                lcd.printf("%*.1f", kWeightChars, st.weightG);
+                snprintf(weightText, sizeof(weightText), "%.1f", st.weightG);
             }
             else {
                 // Raw ADC counts, printed whole - a tenth of a count is not a
-                // real quantity.
-                lcd.printf("%*.0f", kWeightChars, st.weightG);
+                // real quantity. Orange and spelled out, so an uncalibrated
+                // reading cannot be mistaken for a dose.
+                snprintf(weightText, sizeof(weightText), "%.0f", st.weightG);
+                weightUnit = "raw";
+                weightColour = TFT_ORANGE;
             }
         }
         else {
-            lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-            lcd.printf("%*s", kWeightChars, "--.-");
+            snprintf(weightText, sizeof(weightText), "--.-");
+            weightColour = TFT_DARKGREY;
         }
 
-        lcd.setTextSize(2);
-        lcd.setCursor(kWeightX + kWeightWidth + 10, kWeightY + 14);
+        static char lastWeightText[16] = "";
+        static char lastWeightUnit[8] = "";
 
-        if (live && st.weightOk && !st.weightCalibrated) {
-            // Orange and spelled out, so an uncalibrated reading cannot be
-            // mistaken for a dose.
-            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
-            lcd.print("raw");
-        }
-        else {
-            lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-            lcd.print("g  ");
+        if (strcmp(weightText, lastWeightText) != 0 || strcmp(weightUnit, lastWeightUnit) != 0) {
+            snprintf(lastWeightText, sizeof(lastWeightText), "%s", weightText);
+            snprintf(lastWeightUnit, sizeof(lastWeightUnit), "%s", weightUnit);
+
+            lcd.fillRect(kWeightX, kWeightY, lcd.width() - kWeightX, kWeightRowHeight, TFT_BLACK);
+
+            lcd.setTextSize(kWeightSize);
+            lcd.setTextColor(weightColour, TFT_BLACK);
+            lcd.setCursor(kWeightX, kWeightY);
+            lcd.print(weightText);
+
+            // Immediately after the digits, sitting on their baseline.
+            const int unitX = lcd.getCursorX() + 8;
+
+            lcd.setTextSize(2);
+            lcd.setTextColor(weightColour == TFT_ORANGE ? TFT_ORANGE : TFT_LIGHTGREY, TFT_BLACK);
+            lcd.setCursor(unitX, kWeightY + kWeightRowHeight - 16);
+            lcd.print(weightUnit);
         }
 
         // Machine state and any latched fault.
