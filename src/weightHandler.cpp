@@ -28,6 +28,18 @@ namespace weight {
          */
         HX711_ADC* cell = nullptr;
 
+        /**
+         * The second load cell, when fitted. On this machine two cells sit
+         * about an inch apart under one 3D-printed plate, so BOTH must be read:
+         * the plate shares the load between them by position, and only the sum
+         * is independent of where the mass lands. Reading one alone measures an
+         * unknown fraction and looks like a faulty cell.
+         */
+        HX711_ADC* cell2 = nullptr;
+
+        /** Two cells under a shared plate is this machine's arrangement. */
+        bool useDualCell = true;
+
         enum class State : uint8_t {
             NotCreated,  // init() has not run, or failed to allocate
             Stabilising, // conversions running, waiting to settle and tare
@@ -54,7 +66,31 @@ namespace weight {
          */
         float calibration = 1.0f;
 
+        /**
+         * Cell 2's factor, SEPARATE from cell 1's and with its own sign.
+         *
+         * This is not over-engineering, it is what the hardware demands. The
+         * two cells on this machine are mounted mirrored, so one reads negative
+         * under load while the other reads positive: measured at 411.7 g,
+         * cell 1 gave -258585 counts and cell 2 gave +195133. Summing those raw
+         * destroys about three quarters of the signal, and how much it destroys
+         * depends on where the load sits - which reintroduces exactly the
+         * position dependence that reading both cells was meant to remove.
+         *
+         * Giving each cell a factor carrying its own sign makes both channels
+         * contribute POSITIVELY, so the total is the real load wherever it
+         * lands. Gaggiuino documents the same thing for the same reason: with
+         * mirrored housings one scale factor comes out negative.
+         *
+         * Alternatively the A+/A- pair on one cell could be swapped to make
+         * both read the same way in hardware. The firmware handling it costs
+         * nothing and leaves the wiring alone.
+         */
+        float calibration2 = 1.0f;
+
         bool tareRunning = false;
+        bool tare1Done = false;
+        bool tare2Done = false;
 
         /**
          * Pending calibration. Taking a calibration point means averaging a
@@ -101,19 +137,19 @@ namespace weight {
          * @param wentLowAfterMs set to how long it took, when it did
          * @return true if DOUT went low within kDoutWaitMs
          */
-        bool waitForDoutLow(uint32_t* wentLowAfterMs) {
+        bool waitForDoutLow(int dataPin, uint32_t* wentLowAfterMs) {
             // Clock idle low. If SCK were left high the HX711 would be in
             // power-down and would never produce a conversion, which would
             // look exactly like an absent chip.
             pinMode(PIN_HXCLK, OUTPUT);
             digitalWrite(PIN_HXCLK, LOW);
 
-            pinMode(PIN_HXDAT, INPUT_PULLUP);
+            pinMode(dataPin, INPUT_PULLUP);
 
             const uint32_t began = millis();
 
             while (millis() - began < kDoutWaitMs) {
-                if (digitalRead(PIN_HXDAT) == LOW) {
+                if (digitalRead(dataPin) == LOW) {
                     *wentLowAfterMs = millis() - began;
 
                     return true;
@@ -152,18 +188,62 @@ namespace weight {
 
             calibrationPending = false;
 
-            const float factor = cell->getNewCalibration(calibrationTargetGrams);
+            // Recover the RAW counts behind each cell's reading: getData()
+            // returns (smoothed - tare) / calFactor, so multiplying back by the
+            // factor in force gives the raw count again.
+            const float raw1 = cell->getData() * cell->getCalFactor();
+            float raw2 = 0.0f;
+            float rawMagnitudeTotal = fabsf(raw1);
 
-            if (factor == 0.0f || isnan(factor) || isinf(factor)) {
+            if (cell2 != nullptr) {
+                raw2 = cell2->getData() * cell2->getCalFactor();
+                rawMagnitudeTotal += fabsf(raw2);
+            }
+
+            // Sum the MAGNITUDES, not the signed values. The cells are
+            // mirrored, so one goes negative and one positive under the same
+            // load; adding them signed cancels most of the signal, and the
+            // amount cancelled depends on where the mass sits.
+            //
+            // Each cell then gets that one magnitude carrying ITS OWN sign, so
+            // both channels read positive under load and the total is the real
+            // weight wherever it lands on the plate.
+            const float magnitude = rawMagnitudeTotal / calibrationTargetGrams;
+
+            if (magnitude == 0.0f || isnan(magnitude) || isinf(magnitude)) {
                 Serial.println("scale: calibration REFUSED - the computed factor is not a number.");
                 Serial.println("       Almost always means no load was actually on the cell.");
-
-                cell->setCalFactor(calibration);
 
                 return;
             }
 
-            calibration = factor;
+            calibration = (raw1 < 0.0f) ? -magnitude : magnitude;
+            cell->setCalFactor(calibration);
+
+            if (cell2 != nullptr) {
+                calibration2 = (raw2 < 0.0f) ? -magnitude : magnitude;
+                cell2->setCalFactor(calibration2);
+
+                Serial.print("scale: cell 1 factor ");
+                Serial.print(calibration, 2);
+                Serial.print(", cell 2 factor ");
+                Serial.println(calibration2, 2);
+
+                if ((raw1 < 0.0f) != (raw2 < 0.0f)) {
+                    Serial.println("       Cells read OPPOSITE ways (mirrored mounting) - the signs");
+                    Serial.println("       above are what make both count toward the total.");
+                }
+
+                // How the plate shared the load. Any split works now, but a
+                // very lopsided one wastes range on the lightly loaded cell.
+                const float share1 = (rawMagnitudeTotal != 0.0f) ? (fabsf(raw1) / rawMagnitudeTotal) * 100.0f : 0.0f;
+
+                Serial.print("       load split cell1/cell2 = ");
+                Serial.print(share1, 0);
+                Serial.print("/");
+                Serial.print(100.0f - share1, 0);
+                Serial.println(" %");
+            }
 
             Serial.print("scale: calibrated to ");
             Serial.print(calibrationTargetGrams, 2);
@@ -187,11 +267,17 @@ namespace weight {
 
     bool init() {
         delete scale;
+        cell = nullptr;
+        cell2 = nullptr;
 
-        // Single load cell. HX711Scale also supports two cells sharing a clock
-        // (PIN_HXDAT2), which is how some machines weigh the cup and the drip
-        // tray separately; add the dual constructor here if that is ever fitted.
-        scale = new HX711Scale(PIN_HXDAT, PIN_HXCLK, calibration);
+        // Two cells share the clock pin and have their own data pins, each with
+        // its own HX711. That is what the board's pin map was laid out for.
+        if (useDualCell) {
+            scale = new HX711Scale(PIN_HXDAT, PIN_HXDAT2, PIN_HXCLK, calibration, calibration2);
+        }
+        else {
+            scale = new HX711Scale(PIN_HXDAT, PIN_HXCLK, calibration);
+        }
 
         if (scale == nullptr) {
             state = State::NotCreated;
@@ -200,51 +286,79 @@ namespace weight {
         }
 
         cell = scale->getLoadCell(1);
+        cell2 = useDualCell ? scale->getLoadCell(2) : nullptr;
 
-        if (cell == nullptr) {
+        if (cell == nullptr || (useDualCell && cell2 == nullptr)) {
             state = State::NotCreated;
 
             return false;
         }
 
-        // Check the chip is actually there BEFORE handing over to the library,
-        // which has no reliable way to tell us. See waitForDoutLow().
+        // Check the chips are actually there BEFORE handing over to the
+        // library, which has no reliable way to tell us. See waitForDoutLow().
         uint32_t doutLowAfterMs = 0;
 
-        if (!waitForDoutLow(&doutLowAfterMs)) {
-            enterFailed("DOUT never went low - no HX711 on pin 38 (check DAT, VCC, GND)");
+        if (!waitForDoutLow(PIN_HXDAT, &doutLowAfterMs)) {
+            enterFailed("cell 1 DOUT never went low - no HX711 on pin 38");
 
             return true;
         }
 
-        Serial.print("scale: DOUT went low after ");
+        Serial.print("scale: cell 1 DOUT low after ");
         Serial.print(doutLowAfterMs);
-        Serial.println(" ms - a chip is present and converting");
+        Serial.println(" ms");
+
+        if (useDualCell) {
+            if (!waitForDoutLow(PIN_HXDAT2, &doutLowAfterMs)) {
+                // Deliberately a hard failure rather than a quiet fall back to
+                // one cell. With a shared plate, one cell is not a degraded
+                // reading, it is a meaningless one - and silently reporting a
+                // fraction of the weight as if it were the weight is exactly
+                // how brew-by-weight would mis-dose every shot.
+                enterFailed("cell 2 DOUT never went low - no HX711 on pin 40 ('scaledual 0' for one cell)");
+
+                return true;
+            }
+
+            Serial.print("scale: cell 2 DOUT low after ");
+            Serial.print(doutLowAfterMs);
+            Serial.println(" ms");
+        }
 
         cell->begin();
 
-        // The data line idles high when nothing is driving it, which is how an
-        // absent HX711 is told apart from one holding the line low to say a
-        // conversion is ready.
+        if (cell2 != nullptr) {
+            cell2->begin();
+        }
+
         pinMode(PIN_HXDAT, INPUT_PULLUP);
+
+        if (useDualCell) {
+            pinMode(PIN_HXDAT2, INPUT_PULLUP);
+        }
 
         // Disable the library's tare timeout and bound the attempt here
         // instead. Its deadline is a function-level static, computed once per
         // program run, so a second attempt would report an instant timeout.
         cell->disableTareTimeout();
-
         cell->setSamplesInUse(samplesInUse);
+
+        if (cell2 != nullptr) {
+            cell2->disableTareTimeout();
+            cell2->setSamplesInUse(samplesInUse);
+        }
 
         startBeganMs = millis();
         haveEverRead = false;
         tareRunning = false;
+        calibrationPending = false;
         state = State::Stabilising;
 
-        Serial.print("scale: HX711 on DAT ");
-        Serial.print(PIN_HXDAT);
-        Serial.print(" / CLK ");
+        Serial.print("scale: HX711 ");
+        Serial.print(useDualCell ? "DUAL cell (DAT 38 + 40" : "single cell (DAT 38");
+        Serial.print(", shared CLK ");
         Serial.print(PIN_HXCLK);
-        Serial.print(", stabilising for ");
+        Serial.print("), stabilising ");
         Serial.print(kStabiliseMs / 1000);
         Serial.println("s then taring (machine runs normally meanwhile)");
 
@@ -259,8 +373,18 @@ namespace weight {
         switch (state) {
             case State::Stabilising: {
                 // Non-blocking equivalent of upstream's `while (!startMultiple
-                // (...))`: called once per pass until it reports done.
-                const int done = cell->startMultiple(kStabiliseMs, true);
+                // (...))`: called once per pass until it reports done. Both
+                // cells are driven, exactly as upstream's dual-cell branch
+                // does - startMultiple exists precisely so several HX711s can
+                // stabilise and tare at the same time.
+                int done = cell->startMultiple(kStabiliseMs, true);
+
+                if (cell2 != nullptr) {
+                    const int done2 = cell2->startMultiple(kStabiliseMs, true);
+
+                    // Both must be finished before the reading means anything.
+                    done = (done != 0 && done2 != 0) ? 1 : 0;
+                }
 
                 if (done != 0) {
                     if (cell->getSignalTimeoutFlag()) {
@@ -271,6 +395,11 @@ namespace weight {
 
                     cell->setCalFactor(calibration);
                     cell->setSamplesInUse(samplesInUse);
+
+                    if (cell2 != nullptr) {
+                        cell2->setCalFactor(calibration2);
+                        cell2->setSamplesInUse(samplesInUse);
+                    }
 
                     state = State::Running;
                     lastGoodReadingMs = millis();
@@ -310,10 +439,23 @@ namespace weight {
                 // measure the thing we actually care about: whether a fresh
                 // conversion arrived recently.
 
-                if (tareRunning && cell->getTareStatus()) {
-                    tareRunning = false;
+                if (tareRunning) {
+                    // getTareStatus() is read-and-clear, so each cell's flag
+                    // must be collected the pass it appears rather than
+                    // re-tested later.
+                    if (cell->getTareStatus()) {
+                        tare1Done = true;
+                    }
 
-                    Serial.println("scale: tare complete");
+                    if (cell2 != nullptr && cell2->getTareStatus()) {
+                        tare2Done = true;
+                    }
+
+                    if (tare1Done && (cell2 == nullptr || tare2Done)) {
+                        tareRunning = false;
+
+                        Serial.println("scale: tare complete");
+                    }
                 }
 
                 serviceCalibration();
@@ -365,7 +507,18 @@ namespace weight {
 
         // The non-blocking tare. The blocking tare() would stall the loop for
         // the length of the whole dataset, which at 10 SPS is seconds.
+        //
+        // BOTH cells, or the zero is only half corrected and every reading
+        // carries the other cell's offset.
+        tare1Done = false;
+        tare2Done = false;
+
         cell->tareNoDelay();
+
+        if (cell2 != nullptr) {
+            cell2->tareNoDelay();
+        }
+
         tareRunning = true;
 
         Serial.println("scale: taring...");
@@ -421,8 +574,16 @@ namespace weight {
         // blocking for seconds would trip the watchdog.
         cell->resetSamplesIndex();
 
+        if (cell2 != nullptr) {
+            cell2->resetSamplesIndex();
+        }
+
         calibrationTargetGrams = knownGrams;
-        calibrationSamplesLeft = samplesInUse + 2; // +2 for the ignored high/low
+
+        // +2 for the ignored high/low samples, doubled with two cells because
+        // HX711Scale::update() alternates between them, so one successful
+        // update refreshes only one cell's window.
+        calibrationSamplesLeft = (samplesInUse + 2) * (cell2 != nullptr ? 2 : 1);
         calibrationStartedMs = millis();
         calibrationPending = true;
 
@@ -439,9 +600,14 @@ namespace weight {
 
     void setCalFactor(const float factor) {
         calibration = factor;
+        calibration2 = factor;
 
         if (cell != nullptr) {
             cell->setCalFactor(factor);
+        }
+
+        if (cell2 != nullptr) {
+            cell2->setCalFactor(factor);
         }
     }
 
@@ -458,47 +624,83 @@ namespace weight {
     }
 
     void probeDataLine() {
-        uint32_t wentLowAfterMs = 0;
-        const bool low = waitForDoutLow(&wentLowAfterMs);
-
-        Serial.print("scale diag: DAT pin ");
+        Serial.print("scale diag: ");
+        Serial.print(useDualCell ? "DUAL cell" : "single cell");
+        Serial.print(", DAT ");
         Serial.print(PIN_HXDAT);
-        Serial.print(", CLK pin ");
+
+        if (useDualCell) {
+            Serial.print(" + ");
+            Serial.print(PIN_HXDAT2);
+        }
+
+        Serial.print(", shared CLK ");
         Serial.print(PIN_HXCLK);
         Serial.println(", clock held idle low for this test");
 
-        if (low) {
-            Serial.print("  DOUT went LOW after ");
-            Serial.print(wentLowAfterMs);
-            Serial.println(" ms -> a chip is present, powered and converting");
-        }
-        else {
-            Serial.print("  DOUT stayed HIGH for ");
-            Serial.print(kDoutWaitMs);
-            Serial.println(" ms -> nothing is driving it");
-            Serial.println("  Check: DAT to pin 38, CLK to pin 39, VCC to 3.3V, GND common.");
-            Serial.println("  Do NOT power it from 5V - DOUT would then swing to 5V and the");
-            Serial.println("  Teensy is not 5V tolerant.");
+        const int pins[2] = {PIN_HXDAT, PIN_HXDAT2};
+        const int count = useDualCell ? 2 : 1;
+
+        for (int i = 0; i < count; ++i) {
+            uint32_t wentLowAfterMs = 0;
+            const bool low = waitForDoutLow(pins[i], &wentLowAfterMs);
+
+            Serial.print("  cell ");
+            Serial.print(i + 1);
+            Serial.print(" (pin ");
+            Serial.print(pins[i]);
+            Serial.print("): ");
+
+            if (low) {
+                Serial.print("DOUT LOW after ");
+                Serial.print(wentLowAfterMs);
+                Serial.println(" ms -> present, powered, converting");
+            }
+            else {
+                Serial.print("DOUT stayed HIGH for ");
+                Serial.print(kDoutWaitMs);
+                Serial.println(" ms -> nothing driving it");
+                Serial.println("    Check DAT, CLK, VCC to 3.3V, GND common. Do NOT use 5V -");
+                Serial.println("    DOUT would swing to 5V and the Teensy is not 5V tolerant.");
+            }
         }
 
-        if (cell != nullptr) {
-            Serial.print("  library: ");
+        // Per-cell readings. With a shared plate BOTH should move when a mass
+        // is placed anywhere on it. One cell dead while the other reads is
+        // precisely the condition that makes the total depend on position.
+        if (cell != nullptr && state == State::Running) {
+            Serial.print("  cell 1 reads ");
+            Serial.print(cell->getData(), 1);
+            Serial.print(" (factor ");
+            Serial.print(cell->getCalFactor(), 2);
+            Serial.println(")");
+
+            if (cell2 != nullptr) {
+                Serial.print("  cell 2 reads ");
+                Serial.print(cell2->getData(), 1);
+                Serial.print(" (factor ");
+                Serial.print(cell2->getCalFactor(), 2);
+                Serial.println(")");
+            }
+
+            Serial.print("  ");
             Serial.print(cell->getSPS(), 2);
-            Serial.print(" conversions/s, conversion time ");
-            Serial.print(cell->getConversionTime(), 1);
-            Serial.print(" us, read index ");
-            Serial.print(cell->getReadIndex());
-            Serial.print(", settling ");
-            Serial.print(cell->getSettlingTime());
-            Serial.println(" ms");
-            Serial.print("  flags: tare timeout ");
-            Serial.print(cell->getTareTimeoutFlag() ? "SET" : "clear");
-            Serial.print(", signal timeout ");
-            Serial.print(cell->getSignalTimeoutFlag() ? "SET" : "clear");
-            Serial.println("  (signal timeout is unreliable here - see the header)");
-            Serial.print("  tare offset ");
+            Serial.print(" conversions/s, cell 1 tare offset ");
             Serial.println(cell->getTareOffset());
         }
+    }
+
+    void setDualCell(const bool dual) {
+        useDualCell = dual;
+
+        Serial.print("scale: now configured for ");
+        Serial.println(dual ? "TWO load cells (DAT 38 + 40)" : "ONE load cell (DAT 38)");
+
+        init();
+    }
+
+    bool dualCell() {
+        return useDualCell;
     }
 
     void restart() {
@@ -539,19 +741,26 @@ namespace weight {
         Serial.print(" g (factor ");
         Serial.print(calibration, 4);
 
+        if (useDualCell) {
+            Serial.print("/");
+            Serial.print(calibration2, 4);
+        }
+
         if (calibration == 1.0f) {
             Serial.print(", UNCALIBRATED - this is raw counts, not grams");
         }
+        else if (useDualCell && ((calibration < 0.0f) != (calibration2 < 0.0f))) {
+            // Not a fault. The cells are mounted mirrored, so one reads
+            // negative under load; the opposing signs are what make both
+            // contribute to the total instead of cancelling.
+            Serial.print(", opposite signs - mirrored cells, both counted");
+        }
         else if (calibration < 0.0f) {
-            // Not a mistake and not worth "fixing" in hardware: this load cell
-            // reads negative under load, and calibrating against a positive
-            // known mass produces a negative factor that corrects the sign for
-            // free. The library's setReverseOutput() would do the same thing
-            // but cannot be undone, so the factor is the better place for it.
-            Serial.print(", negative factor - load cell reads inverted, corrected here");
+            Serial.print(", negative factor - cell reads inverted, corrected here");
         }
 
         Serial.print("), ");
+        Serial.print(useDualCell ? "2 cells, " : "1 cell, ");
         Serial.print(samplesInUse);
         Serial.print(" samples, last reading ");
         Serial.print(msSinceLastReading());
