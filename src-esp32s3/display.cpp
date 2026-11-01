@@ -259,7 +259,16 @@ namespace display {
         // skipped unless the text has changed since the last frame.
         constexpr int kWeightX = 12;
         constexpr int kWeightY = 204;
-        constexpr int kWeightSize = 4;
+        /**
+         * Deliberately size 3, between the two scales already on this screen.
+         *
+         * At size 4 it matched the boiler temperature and competed with it, and
+         * the boiler is the number that actually matters when the machine is
+         * idle. At size 2 it would disappear into the flow/volume/encoder row,
+         * and brew weight is more important than any of those once a shot is
+         * running. Three is the honest middle.
+         */
+        constexpr int kWeightSize = 3;
         constexpr int kWeightRowHeight = 8 * kWeightSize; // glyph is 8 px tall
 
         char weightText[16];
@@ -286,6 +295,16 @@ namespace display {
 
         static char lastWeightText[16] = "";
         static char lastWeightUnit[8] = "";
+
+        // The clear below only covers the current font's row height, so a
+        // change in text SIZE between builds could leave taller glyphs behind.
+        // One full-height wipe on the first pass deals with that.
+        static bool weightRowWiped = false;
+
+        if (!weightRowWiped) {
+            weightRowWiped = true;
+            lcd.fillRect(kWeightX, kWeightY, lcd.width() - kWeightX, 8 * 4, TFT_BLACK);
+        }
 
         if (strcmp(weightText, lastWeightText) != 0 || strcmp(weightUnit, lastWeightUnit) != 0) {
             snprintf(lastWeightText, sizeof(lastWeightText), "%s", weightText);
