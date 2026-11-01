@@ -220,7 +220,7 @@ namespace display {
         lcd.setCursor(130, 140);
         lcd.print("VOLUME");
         lcd.setCursor(260, 140);
-        lcd.print("ENCODER");
+        lcd.print("PUMP");
 
         lcd.setTextSize(2);
         lcd.setTextColor(live ? TFT_GREENYELLOW : TFT_DARKGREY, TFT_BLACK);
@@ -229,7 +229,7 @@ namespace display {
         lcd.setCursor(130, 154);
         lcd.printf("%5.1f ml", st.volumeMl);
         lcd.setCursor(260, 154);
-        lcd.printf("%6ld  ", st.encoder);
+        lcd.printf("%3.0f %%   ", st.pumpPercent);
 
         // Brew weight. Big, because during a shot it is the number being
         // watched - but labelled honestly: the unit is "g" only when the scale

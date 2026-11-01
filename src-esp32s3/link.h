@@ -39,6 +39,9 @@ namespace machinelink {
          * that would have someone trust a dose that is nonsense.
          */
         bool weightCalibrated = false;
+        /** Pump speed actually applied, 0-100%. */
+        float pumpPercent = 0.0f;
+
         long encoder = 0;
         char status[16] = "?";
         char fault[24] = "?";

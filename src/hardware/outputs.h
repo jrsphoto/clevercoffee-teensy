@@ -29,14 +29,24 @@
 namespace outputs {
 
     /**
-     * @brief The four actuator channels.
+     * @brief The relay-driven actuator channels.
      *
-     * Order matches the ULN2003 inputs on the schematic (I1-I4) to make reading
-     * the board and reading this file the same exercise.
+     * Order matches the ULN2003 inputs on the schematic to make reading the
+     * board and reading this file the same exercise.
+     *
+     * THE PUMP IS NOT HERE. It is a brushed DC motor on a DRV8871 driver,
+     * driven by hardware PWM from pumpHandler, because the whole point of it is
+     * proportional speed - pre-infusion, pressure ramps, declining profiles.
+     * The board originally had a "Pmode" jumper so pin 9 could instead feed ULN
+     * channel 2 as a plain on/off pump relay; that is being removed, since this
+     * machine will only ever run a DC pump. ULN channel 2 (I2) is now spare.
+     *
+     * Keeping the pump out of this list entirely is deliberate: two code paths
+     * must never both drive pin 9, and the surest way to guarantee that is for
+     * only one of them to know the pin exists.
      */
     enum class Channel : uint8_t {
         Heater = 0, // ULN I1 -> heater SSR
-        Pump,       // ULN I2 -> pump relay, or PWM to the motor driver
         Valve,      // ULN I3 -> 3-way group solenoid
         Fill,       // ULN I4 -> inlet fill solenoid
         Count

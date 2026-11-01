@@ -9,6 +9,7 @@
 #include <Arduino.h>
 
 #include "hardware/outputs.h"
+#include "pumpHandler.h"
 #include "safetyHandler.h"
 
 namespace updateMode {
@@ -50,8 +51,12 @@ namespace updateMode {
             return false;
         }
 
-        if (outputs::isOn(outputs::Channel::Pump)) {
-            *reason = "pump is on";
+        // The pump is PWM, not a relay channel, so it has to be asked
+        // directly. Missing this would have let an update start with the pump
+        // running - and update mode never starts the control loop, so nothing
+        // would have turned it off again.
+        if (pump::isRunning()) {
+            *reason = "pump is running";
 
             return false;
         }
@@ -86,6 +91,7 @@ namespace updateMode {
         // are already safe rather than relying on the reset to make them so.
         safetyHardOff();
         outputs::allOff();
+        pump::stop();
 
         Serial.println("UPDATE MODE: requested, rebooting into the flash receiver.");
         Serial.println("             Power-cycle at any point to return to normal firmware.");
