@@ -153,6 +153,47 @@ testable dry, with no pump or plumbing.
 
 1. Added a Conn_01x04 link connector; global labels UART_TX on Teensy D1, UART_RX on D0;
    connector pins labelled UART_TX (to ESP32 RX), UART_RX (to ESP32 TX), +3V3, GND.
-2. Added a 10k pull-down from the PMP_PWM net to GND near the PUMP_PWM1 header.
+2. Added a 10k pull-down (R19) from the pump PWM net to GND near the PUMP_PWM1 header.
 3. Removed the DISPLAY1 connector, its decoupling cap, and the OLED_CS/DC/RST/BL labels.
 4. Set the Teensy 3V3 regulator pin to "Power output" and the other 3V3 pins to Passive.
+5. **Renamed the header-end pump label PMP_PWM to PUMP_PWM (2026-10-31).** See below.
+
+## Found later: the pump PWM net was broken in two
+
+Caught while writing the pump firmware, NOT during this review, which is the
+part worth learning from.
+
+The pump path had a global label at each end with a different name: `PUMP_PWM`
+on the Teensy D9 side and `PMP_PWM` at the `PUMP_PWM1` header. Global labels
+connect by exact name, so those were two separate nets and **D9 never reached
+the driver header** - the pump would not have run at all on a fabricated board.
+The 10k pull-down was also stranded on the header-side net, leaving the Teensy
+pin with no default-off bias.
+
+Fixed by renaming the header-end label to `PUMP_PWM`. Verified in the saved
+file: the name now appears twice, `PMP_PWM` is gone, and R19 pulls the whole
+net - including D9 - low at reset.
+
+**Why this review missed it:** the review checked pin ASSIGNMENTS against the
+Teensy's peripheral map - is D9 really FlexPWM2_2_B, does anything else share
+that submodule - and never checked net CONNECTIVITY. A pin can be assigned
+perfectly and still be wired to nothing. Any future pinout review should trace
+each signal end to end and confirm both ends land on the same net name, not just
+that the pin choice is sound.
+
+The same check found two more labels on nets of their own with nothing driving
+them, `PMP_AC` and `PMP_RL` in the relays sheet. Those are the remains of the
+abandoned on/off pump path and are harmless, but can be deleted for tidiness
+now that the pump is PWM-only.
+
+## Open hardware question: 5 V next to a 3.3 V-only pin
+
+`PUMP_PWM1` is a 3-pin header: pin 1 the PWM signal, pin 2 **+5 V**, pin 3 GND.
+The signal pin goes straight to Teensy D9, which is not 5 V tolerant, and it sits
+immediately next to a 5 V pin. A connector inserted one position off puts 5 V on
+D9 and destroys the pin or the chip.
+
+The DRV8871 needs no logic supply - it runs from VM alone - so if nothing on the
+driver board needs 5 V, the cleanest fix is to delete pin 2 and make this a
+2-pin header, which removes the hazard rather than mitigating it. If a driver
+board does need 5 V, use a polarised connector so it can only mate one way.
