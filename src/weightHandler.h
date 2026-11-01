@@ -156,6 +156,15 @@ namespace weight {
     /**
      * @brief Calibrate from a known mass currently sitting on the cell.
      *
+     * Tare with nothing on the cell FIRST, then add the mass, then call this.
+     *
+     * Note that this also fixes the sign. The cell on this machine reads
+     * negative under load, and the library computes the factor as
+     * (reading * existing factor) / known mass, so a negative reading against a
+     * positive mass yields a negative factor and the output comes out positive.
+     * The library's setReverseOutput() would achieve the same thing but cannot
+     * be undone once called, so the factor is the better place for it.
+     *
      * @param knownGrams the actual mass on the scale, which must be positive
      *                   and large enough to be meaningful
      * @return false if refused - not ready, or an implausible mass
@@ -179,5 +188,26 @@ namespace weight {
 
     /** @brief Print scale state for the bring-up console. */
     void printStatus();
+
+    /**
+     * @brief Probe the data line directly and report what the chip is doing.
+     *
+     * Bypasses the library entirely, because the library cannot answer this.
+     * An HX711 drives DOUT LOW when a conversion is ready and holds it there
+     * until the data is clocked out, so with the clock line idle a live chip
+     * takes DOUT low within one conversion period and leaves it there:
+     *
+     *   goes LOW      a chip is present, powered and converting
+     *   stuck HIGH    nothing is driving the line - absent, unpowered, or DAT
+     *                 is not connected to pin 38
+     *   stuck LOW     possible, but with no transitions also consistent with
+     *                 DAT shorted to ground
+     *
+     * This is the check init() uses, rather than the library's signal-timeout
+     * flag. That flag is useless here: startMultiple() resets the timestamp it
+     * is measured from on every single call, and this code calls it every loop
+     * pass, so the timeout can never elapse and the flag never sets.
+     */
+    void probeDataLine();
 
 } // namespace weight
