@@ -15,6 +15,7 @@
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
+#include "weightHandler.h"
 #include "updateMode.h"
 
 namespace comms {
@@ -70,14 +71,21 @@ namespace comms {
         void sendTelemetry() {
             char body[linkproto::kMaxFrame];
 
+            // wcal says whether the weight is in grams or in raw ADC counts.
+            // Sent as its own field rather than inferred at the far end,
+            // because the head must never label raw counts as grams - a
+            // plausible wrong weight on screen is worse than no weight.
             snprintf(body, sizeof(body),
-                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,fl=%.2f,vol=%.1f,enc=%ld,st=%s,flt=%s",
+                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,enc=%ld,st=%s,flt=%s",
                      temps::boilerC(),
                      temps::groupC(),
                      temps::boilerHealthy() ? 1 : 0,
                      temps::groupHealthy() ? 1 : 0,
                      flow::rateMlPerSec(),
                      flow::totalMl(),
+                     weight::grams(),
+                     weight::healthy() ? 1 : 0,
+                     weight::calFactor() == 1.0f ? 0 : 1,
                      static_cast<long>(encoder::counter()),
                      stateWord(),
                      safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "none");

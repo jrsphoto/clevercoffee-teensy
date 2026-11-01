@@ -231,9 +231,45 @@ namespace display {
         lcd.setCursor(260, 154);
         lcd.printf("%6ld  ", st.encoder);
 
+        // Brew weight. Big, because during a shot it is the number being
+        // watched - but labelled honestly: the unit is "g" only when the scale
+        // has actually been calibrated, and "raw" otherwise. Showing raw ADC
+        // counts next to a "g" would invite someone to trust a dose that is
+        // nonsense, which is worse than showing nothing.
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        lcd.setCursor(12, 190);
+        lcd.print("WEIGHT");
+
+        lcd.setTextSize(4);
+        lcd.setCursor(12, 204);
+
+        if (live && st.weightOk) {
+            lcd.setTextColor(st.weightCalibrated ? TFT_YELLOW : TFT_ORANGE, TFT_BLACK);
+            lcd.printf("%6.1f", st.weightG);
+        }
+        else {
+            lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
+            lcd.print("  --.-");
+        }
+
+        lcd.setTextSize(2);
+        lcd.setCursor(160, 218);
+
+        if (live && st.weightOk && !st.weightCalibrated) {
+            // Orange and spelled out, so an uncalibrated reading cannot be
+            // mistaken for a dose.
+            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+            lcd.print("raw");
+        }
+        else {
+            lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+            lcd.print("g  ");
+        }
+
         // Machine state and any latched fault.
         lcd.setTextSize(2);
-        lcd.setCursor(12, 200);
+        lcd.setCursor(12, 260);
 
         if (!live) {
             lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
