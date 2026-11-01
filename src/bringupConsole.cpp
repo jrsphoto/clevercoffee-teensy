@@ -16,6 +16,7 @@
 #include "hardware/outputs.h"
 #include "i2cHandler.h"
 #include "safetyHandler.h"
+#include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
 
@@ -59,6 +60,11 @@ namespace {
         Serial.println("  flowreset         zero the flow volume accumulator");
         Serial.println("  flowcal <ml>      calibrate from a measured volume");
         Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
+        Serial.println("  brew              brew switch: raw level, debounced state, sense");
+        Serial.println("  brewsense         flip which level means pressed (JP2 orientation)");
+        Serial.println("  brewpull <u|d|x>  pull: internal up / internal down / none (PCB has R9)");
+        Serial.println("  brewtype          flip between momentary and toggle");
+        Serial.println("  brewwatch         watch the brew switch live while you operate it");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -269,6 +275,67 @@ namespace {
 
             Serial.print("boiler sensor fault injection ");
             Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
+        }
+        else if (strcasecmp(command, "brew") == 0) {
+            switches::printStatus();
+        }
+        else if (strcasecmp(command, "brewsense") == 0) {
+            switches::setActiveHigh(!switches::activeHigh());
+
+            Serial.print("brew switch now active ");
+            Serial.println(switches::activeHigh() ? "HIGH (JP2 pulling DOWN, switch to +3.3V)" : "LOW (JP2 pulling UP, switch to GND)");
+            Serial.println("Release latch reset - operate the switch once to re-arm it.");
+        }
+        else if (strcasecmp(command, "brewpull") == 0) {
+            if (argument == nullptr) {
+                Serial.print("pull is ");
+                Serial.println(switches::pullName());
+                Serial.println("usage: brewpull u | d | x");
+                Serial.println("  u  internal pull-up, switch shorts pin 24 to GND   (breadboard)");
+                Serial.println("  d  internal pull-down, switch shorts pin 24 to 3V3 (breadboard)");
+                Serial.println("  x  no internal pull - for the finished PCB, where R9 pulls");
+            }
+            else {
+                switch (argument[0]) {
+                    case 'u':
+                    case 'U':
+                        switches::setPull(switches::Pull::InternalUp);
+                        switches::setActiveHigh(false);
+                        break;
+                    case 'd':
+                    case 'D':
+                        switches::setPull(switches::Pull::InternalDown);
+                        switches::setActiveHigh(true);
+                        break;
+                    case 'x':
+                    case 'X':
+                        switches::setPull(switches::Pull::External);
+                        break;
+                    default:
+                        Serial.println("usage: brewpull u | d | x");
+
+                        return;
+                }
+
+                // The sense is set alongside the pull for the two internal
+                // options, because for those the wiring is implied: with a
+                // pull-up the switch must go to GND, so it is active low.
+                // Pull::External leaves the sense alone - the board's JP2
+                // decides, and only 'brewsense' can say which way.
+                Serial.print("pull is now ");
+                Serial.println(switches::pullName());
+                Serial.print("sense is active ");
+                Serial.println(switches::activeHigh() ? "HIGH" : "LOW");
+            }
+        }
+        else if (strcasecmp(command, "brewwatch") == 0) {
+            switches::startWatch(20000);
+        }
+        else if (strcasecmp(command, "brewtype") == 0) {
+            switches::setMomentary(!switches::momentary());
+
+            Serial.print("brew switch now ");
+            Serial.println(switches::momentary() ? "MOMENTARY (spring return)" : "TOGGLE (latching)");
         }
         else if (strcasecmp(command, "flow") == 0) {
             flow::printStatus();
