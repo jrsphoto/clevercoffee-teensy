@@ -72,6 +72,7 @@ namespace {
         Serial.println("  scalesamples <n>  averaging length; fewer = faster, noisier");
         Serial.println("  scalerestart      retry start-up, e.g. after plugging one in");
         Serial.println("  scalediag         probe the HX711 data line directly, bypassing the lib");
+        Serial.println("  scalefactor <n>   set the calibration factor directly (1 = raw counts)");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -288,6 +289,22 @@ namespace {
         }
         else if (strcasecmp(command, "scaletare") == 0) {
             weight::startTare();
+        }
+        else if (strcasecmp(command, "scalefactor") == 0) {
+            if (argument == nullptr) {
+                Serial.print("calibration factor is ");
+                Serial.println(weight::calFactor(), 4);
+                Serial.println("usage: scalefactor <n>    1 = raw counts, negative = inverted cell");
+            }
+            else if (const float f = static_cast<float>(atof(argument)); f != 0.0f) {
+                weight::setCalFactor(f);
+
+                Serial.print("calibration factor set to ");
+                Serial.println(weight::calFactor(), 4);
+            }
+            else {
+                Serial.println("REFUSED: zero would make every weight infinite");
+            }
         }
         else if (strcasecmp(command, "scalediag") == 0) {
             weight::probeDataLine();
