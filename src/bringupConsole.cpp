@@ -71,6 +71,7 @@ namespace {
         Serial.println("  scalecal <g>      calibrate from a known mass on the cell");
         Serial.println("  scalesamples <n>  averaging length; fewer = faster, noisier");
         Serial.println("  scalerestart      retry start-up, e.g. after plugging one in");
+        Serial.println("  scalediag         probe the HX711 data line directly, bypassing the lib");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -287,6 +288,9 @@ namespace {
         }
         else if (strcasecmp(command, "scaletare") == 0) {
             weight::startTare();
+        }
+        else if (strcasecmp(command, "scalediag") == 0) {
+            weight::probeDataLine();
         }
         else if (strcasecmp(command, "scalerestart") == 0) {
             weight::restart();

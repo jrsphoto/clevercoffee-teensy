@@ -63,6 +63,51 @@ namespace weight {
          */
         constexpr uint32_t kSignalGraceMs = 1000;
 
+        /**
+         * How long to wait for DOUT to go low before calling the chip absent.
+         *
+         * At the usual 10 conversions per second one is due every 100 ms, so
+         * 600 ms is several conversion periods - long enough to be certain,
+         * short enough to report at boot rather than after a long wait. Covers
+         * a board strapped for 80 SPS too, which is faster still.
+         */
+        constexpr uint32_t kDoutWaitMs = 600;
+
+        /**
+         * @brief Wait for the HX711 to pull DOUT low. Blocking, bounded.
+         *
+         * Only called from init() and the console probe, never from loop(). The
+         * HX711 holds DOUT low once a conversion is ready and nothing has
+         * clocked it out, so this is a definitive presence test rather than a
+         * sampled guess.
+         *
+         * @param wentLowAfterMs set to how long it took, when it did
+         * @return true if DOUT went low within kDoutWaitMs
+         */
+        bool waitForDoutLow(uint32_t* wentLowAfterMs) {
+            // Clock idle low. If SCK were left high the HX711 would be in
+            // power-down and would never produce a conversion, which would
+            // look exactly like an absent chip.
+            pinMode(PIN_HXCLK, OUTPUT);
+            digitalWrite(PIN_HXCLK, LOW);
+
+            pinMode(PIN_HXDAT, INPUT_PULLUP);
+
+            const uint32_t began = millis();
+
+            while (millis() - began < kDoutWaitMs) {
+                if (digitalRead(PIN_HXDAT) == LOW) {
+                    *wentLowAfterMs = millis() - began;
+
+                    return true;
+                }
+            }
+
+            *wentLowAfterMs = kDoutWaitMs;
+
+            return false;
+        }
+
         void enterFailed(const char* reason) {
             state = State::Failed;
             failureReason = reason;
@@ -95,6 +140,20 @@ namespace weight {
 
             return false;
         }
+
+        // Check the chip is actually there BEFORE handing over to the library,
+        // which has no reliable way to tell us. See waitForDoutLow().
+        uint32_t doutLowAfterMs = 0;
+
+        if (!waitForDoutLow(&doutLowAfterMs)) {
+            enterFailed("DOUT never went low - no HX711 on pin 38 (check DAT, VCC, GND)");
+
+            return true;
+        }
+
+        Serial.print("scale: DOUT went low after ");
+        Serial.print(doutLowAfterMs);
+        Serial.println(" ms - a chip is present and converting");
 
         cell->begin();
 
@@ -155,24 +214,13 @@ namespace weight {
                     return;
                 }
 
-                const uint32_t elapsed = millis() - startBeganMs;
-
-                // Fail fast on an absent chip. With the data line pulled up and
-                // nothing driving it, a conversion is never ready and the
-                // library raises its signal timeout - so there is no need to sit
-                // through the full stabilisation to find out. The grace period
-                // is because the flag can also trip transiently while the HX711
-                // itself is powering up, which is not a failure.
-                if (elapsed > kSignalGraceMs && cell->getSignalTimeoutFlag()) {
-                    enterFailed("no response from the HX711 (check DAT/CLK, VCC and GND)");
-
-                    return;
-                }
-
-                // Backstop. The library's own bound would not fire, having been
-                // disabled above on purpose.
-                if (elapsed > kStartTimeoutMs) {
-                    enterFailed("start-up timed out - is an HX711 actually connected?");
+                // NOT checking getSignalTimeoutFlag() here, which looks like
+                // the obvious thing to do and does not work: startMultiple()
+                // resets the timestamp that flag is measured from on every
+                // call, and this calls it every loop pass, so the timeout can
+                // never elapse. Presence was established directly in init().
+                if (millis() - startBeganMs > kStartTimeoutMs) {
+                    enterFailed("stabilise/tare did not finish - see 'scalediag'");
                 }
 
                 break;
@@ -185,15 +233,12 @@ namespace weight {
                     haveEverRead = true;
                 }
 
-                // A signal timeout while running means the HX711 stopped
-                // answering - unplugged mid-shot, most likely. Report it rather
-                // than keep serving the last number, which would look exactly
-                // like a working scale to anything downstream.
-                if (cell->getSignalTimeoutFlag()) {
-                    enterFailed("HX711 stopped responding while running");
-
-                    return;
-                }
+                // Losing the chip mid-shot is caught by staleness in healthy()
+                // rather than by the library's flag, for the reason given above.
+                // update() is called once per pass here, which does NOT reset
+                // the flag's timestamp, but it is simpler and more honest to
+                // measure the thing we actually care about: whether a fresh
+                // conversion arrived recently.
 
                 if (tareRunning && cell->getTareStatus()) {
                     tareRunning = false;
@@ -315,6 +360,50 @@ namespace weight {
         return samplesInUse;
     }
 
+    void probeDataLine() {
+        uint32_t wentLowAfterMs = 0;
+        const bool low = waitForDoutLow(&wentLowAfterMs);
+
+        Serial.print("scale diag: DAT pin ");
+        Serial.print(PIN_HXDAT);
+        Serial.print(", CLK pin ");
+        Serial.print(PIN_HXCLK);
+        Serial.println(", clock held idle low for this test");
+
+        if (low) {
+            Serial.print("  DOUT went LOW after ");
+            Serial.print(wentLowAfterMs);
+            Serial.println(" ms -> a chip is present, powered and converting");
+        }
+        else {
+            Serial.print("  DOUT stayed HIGH for ");
+            Serial.print(kDoutWaitMs);
+            Serial.println(" ms -> nothing is driving it");
+            Serial.println("  Check: DAT to pin 38, CLK to pin 39, VCC to 3.3V, GND common.");
+            Serial.println("  Do NOT power it from 5V - DOUT would then swing to 5V and the");
+            Serial.println("  Teensy is not 5V tolerant.");
+        }
+
+        if (cell != nullptr) {
+            Serial.print("  library: ");
+            Serial.print(cell->getSPS(), 2);
+            Serial.print(" conversions/s, conversion time ");
+            Serial.print(cell->getConversionTime(), 1);
+            Serial.print(" us, read index ");
+            Serial.print(cell->getReadIndex());
+            Serial.print(", settling ");
+            Serial.print(cell->getSettlingTime());
+            Serial.println(" ms");
+            Serial.print("  flags: tare timeout ");
+            Serial.print(cell->getTareTimeoutFlag() ? "SET" : "clear");
+            Serial.print(", signal timeout ");
+            Serial.print(cell->getSignalTimeoutFlag() ? "SET" : "clear");
+            Serial.println("  (signal timeout is unreliable here - see the header)");
+            Serial.print("  tare offset ");
+            Serial.println(cell->getTareOffset());
+        }
+    }
+
     void restart() {
         Serial.println("scale: restarting start-up sequence");
         init();
@@ -355,6 +444,14 @@ namespace weight {
 
         if (calibration == 1.0f) {
             Serial.print(", UNCALIBRATED - this is raw counts, not grams");
+        }
+        else if (calibration < 0.0f) {
+            // Not a mistake and not worth "fixing" in hardware: this load cell
+            // reads negative under load, and calibrating against a positive
+            // known mass produces a negative factor that corrects the sign for
+            // free. The library's setReverseOutput() would do the same thing
+            // but cannot be undone, so the factor is the better place for it.
+            Serial.print(", negative factor - load cell reads inverted, corrected here");
         }
 
         Serial.print("), ");
