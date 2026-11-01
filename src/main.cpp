@@ -311,18 +311,76 @@ void loop() {
     // Also enforces the auto-off timer, so it must run even when nobody types.
     bringupConsoleLoop();
 
-    // Phase 1 heartbeat so it is obvious on the bench that the loop is running.
+    // One-line status, repeated so the bench always shows the whole machine.
+    //
+    // This used to print just "alive, uptime 140s, state safe-idle", which is
+    // the worst of both worlds: frequent enough to scroll everything useful out
+    // of a serial monitor, while saying nothing you would want to know. Every
+    // sensor now reports on the same line, so a monitor opened at any moment
+    // shows the current state of the machine without typing anything.
+    //
     // Suppressed while a channel is energized from the console, so it cannot
-    // scroll an auto-off warning off the screen. Goes away once there is real
-    // telemetry.
+    // scroll an auto-off warning off the screen.
     if (const uint32_t now = millis(); now - lastHeartbeatMs >= kHeartbeatIntervalMs) {
         lastHeartbeatMs = now;
 
         if (outputs::activeCount() == 0) {
-            Serial.print("alive, uptime ");
             Serial.print(now / 1000);
-            Serial.print("s, state ");
-            Serial.println(safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "safe-idle");
+            Serial.print("s ");
+            Serial.print(safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "safe-idle");
+
+            // Temperatures, with a marker rather than a plausible number when
+            // the probe is unhealthy - a bad reading must not look like a good
+            // one at a glance.
+            Serial.print(" | boiler ");
+
+            if (temps::boilerHealthy()) {
+                Serial.print(temps::boilerC(), 1);
+                Serial.print("C");
+            }
+            else {
+                Serial.print("FAULT");
+            }
+
+            Serial.print(" group ");
+
+            if (temps::groupHealthy()) {
+                Serial.print(temps::groupC(), 1);
+                Serial.print("C");
+            }
+            else {
+                Serial.print("--");
+            }
+
+            Serial.print(" | brew ");
+            Serial.print(switches::brewRequested() ? "PRESSED" : "off");
+
+            Serial.print(" | scale ");
+
+            if (weight::healthy()) {
+                Serial.print(weight::grams(), 1);
+                Serial.print(weight::calFactor() == 1.0f ? " raw" : " g");
+            }
+            else if (weight::present()) {
+                Serial.print("starting");
+            }
+            else {
+                Serial.print("--");
+            }
+
+            Serial.print(" | flow ");
+            Serial.print(flow::rateMlPerSec(), 1);
+            Serial.print(" ml/s ");
+            Serial.print(flow::totalMl(), 0);
+            Serial.print("ml");
+
+            Serial.print(" | enc ");
+            Serial.print(encoder::counter());
+
+            Serial.print(" | head ");
+            Serial.print(comms::peerPresent() ? "ok" : "--");
+
+            Serial.println();
         }
     }
 
