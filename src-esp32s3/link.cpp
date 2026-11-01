@@ -39,6 +39,7 @@ namespace machinelink {
             current.flowMlPerSec = floatField("fl", current.flowMlPerSec);
             current.volumeMl = floatField("vol", current.volumeMl);
             current.weightG = floatField("wt", current.weightG);
+            current.pumpPercent = floatField("pmp", current.pumpPercent);
 
             char buf[24];
 

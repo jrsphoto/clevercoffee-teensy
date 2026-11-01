@@ -29,6 +29,7 @@
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "i2cHandler.h"
+#include "pumpHandler.h"
 #include "safetyHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
@@ -166,6 +167,7 @@ namespace {
         flow::printStatus();
         switches::printStatus();
         weight::printStatus();
+        pump::printStatus();
         encoder::printStatus();
         comms::printStatus();
         bringupConsolePrintHelp();
@@ -216,6 +218,7 @@ void setup() {
     flow::init();
     switches::init();
     weight::init();
+    pump::init();
     comms::init();
 
     if (encoder::init()) {
@@ -260,7 +263,6 @@ void loop() {
     // loopEncoder();        // Duppa gestures + RGB machine status
     // handleMachineState(); // brew / steam / hot water / standby
     // loopPid();            // heater PID
-    // loopPump();           // PWM, closed loop on pressure + flow
     // loopComms();          // telemetry out, commands in, non-blocking
 
     // Both RTDs. Latches the machine safe on a boiler sensor fault, an
@@ -276,6 +278,11 @@ void loop() {
     // until the brew state machine lands in phase 3.
     switches::loop();
     switches::serviceWatch();
+
+    // Pump speed: services the ramp AND the command-expiry rule, so it has to
+    // run every pass even when the pump is idle - that is what catches a
+    // wedged caller that stopped re-asserting its speed.
+    pump::loop();
 
     // HX711 load cell. Non-blocking: drives its own stabilise/tare sequence
     // and then one conversion per pass as the chip makes them available.
@@ -373,6 +380,10 @@ void loop() {
             Serial.print(" ml/s ");
             Serial.print(flow::totalMl(), 0);
             Serial.print("ml");
+
+            Serial.print(" | pump ");
+            Serial.print(pump::actualSpeed(), 0);
+            Serial.print("%");
 
             Serial.print(" | enc ");
             Serial.print(encoder::counter());

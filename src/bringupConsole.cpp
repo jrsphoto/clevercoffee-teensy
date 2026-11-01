@@ -15,6 +15,7 @@
 #include "flowHandler.h"
 #include "hardware/outputs.h"
 #include "i2cHandler.h"
+#include "pumpHandler.h"
 #include "safetyHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
@@ -61,6 +62,8 @@ namespace {
         Serial.println("  flowreset         zero the flow volume accumulator");
         Serial.println("  flowcal <ml>      calibrate from a measured volume");
         Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
+        Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
+        Serial.println("  pumpshed <0|1>    heater/pump load-shed interlock");
         Serial.println("  brew              brew switch: raw level, debounced state, sense");
         Serial.println("  brewsense         flip which level means pressed (JP2 orientation)");
         Serial.println("  brewpull <u|d|x>  pull: internal up / internal down / none (PCB has R9)");
@@ -83,7 +86,7 @@ namespace {
         Serial.println("  i2cslow           SDA electrical test + scan at 10/2/1 kHz");
         Serial.println("  clear             clear a latched fault (deliberate act)");
         Serial.println("  help              this list");
-        Serial.println("Channels: heater, pump, valve, fill");
+        Serial.println("Channels: heater, valve, fill   (the pump is PWM - use 'pump <0-100>')");
         Serial.print("One channel at a time. Auto-off after ");
         Serial.print(kAutoOffMs / 1000);
         Serial.println("s. Nothing energizes while faulted.");
@@ -284,6 +287,43 @@ namespace {
 
             Serial.print("boiler sensor fault injection ");
             Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
+        }
+        else if (strcasecmp(command, "pump") == 0) {
+            if (argument == nullptr) {
+                pump::printStatus();
+                Serial.println("usage: pump <0-100>    0 stops; a command expires after 1.5 s");
+            }
+            else {
+                const float pct = static_cast<float>(atof(argument));
+
+                if (pump::setSpeed(pct)) {
+                    Serial.print("pump: requested ");
+                    Serial.print(pct, 1);
+                    Serial.println("%");
+
+                    if (pct > 0.0f) {
+                        Serial.println("      NOTE: the console does not re-assert this, so it will");
+                        Serial.println("      stop itself after 1.5 s. Re-issue to keep it running.");
+                    }
+                }
+                else {
+                    Serial.print("pump: REFUSED - ");
+                    Serial.println(pump::lastRefusal());
+                }
+            }
+        }
+        else if (strcasecmp(command, "pumpshed") == 0) {
+            if (argument == nullptr) {
+                Serial.print("load shed is ");
+                Serial.println(pump::loadShed() ? "ON" : "off");
+                Serial.println("usage: pumpshed 0 | 1");
+            }
+            else {
+                pump::setLoadShed(atoi(argument) != 0);
+
+                Serial.print("load shed is now ");
+                Serial.println(pump::loadShed() ? "ON - pump will not run with the heater on" : "off");
+            }
         }
         else if (strcasecmp(command, "scale") == 0) {
             weight::printStatus();

@@ -82,6 +82,13 @@ inline void safetyHardOff() {
     pinMode(PIN_HEATER, OUTPUT);
     digitalWriteFast(PIN_HEATER, LOW);
 
+    // The pinMode here is LOAD-BEARING for the pump specifically, and it looks
+    // redundant. Pin 9 is driven by hardware PWM in normal operation, and on
+    // Teensy 4 pinMode unconditionally re-points the pad mux at GPIO
+    // (digital.c: `*(p->mux) = 5 | 0x10`), which is what tears down the FlexPWM
+    // routing. A bare digitalWriteFast would leave the pad driven by the PWM
+    // peripheral and the GPIO register ignored - the pump would keep running
+    // through an emergency stop. Do not remove it.
     pinMode(PIN_PUMP, OUTPUT);
     digitalWriteFast(PIN_PUMP, LOW);
 

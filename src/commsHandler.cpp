@@ -15,6 +15,7 @@
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
+#include "pumpHandler.h"
 #include "weightHandler.h"
 #include "updateMode.h"
 
@@ -61,7 +62,7 @@ namespace comms {
                 return "heating";
             }
 
-            if (outputs::isOn(outputs::Channel::Pump)) {
+            if (pump::isRunning()) {
                 return "pump";
             }
 
@@ -76,7 +77,7 @@ namespace comms {
             // because the head must never label raw counts as grams - a
             // plausible wrong weight on screen is worse than no weight.
             snprintf(body, sizeof(body),
-                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,enc=%ld,st=%s,flt=%s",
+                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,st=%s,flt=%s",
                      temps::boilerC(),
                      temps::groupC(),
                      temps::boilerHealthy() ? 1 : 0,
@@ -86,6 +87,7 @@ namespace comms {
                      weight::grams(),
                      weight::healthy() ? 1 : 0,
                      weight::calFactor() == 1.0f ? 0 : 1,
+                     pump::actualSpeed(),
                      static_cast<long>(encoder::counter()),
                      stateWord(),
                      safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "none");
