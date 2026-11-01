@@ -33,6 +33,7 @@
 #include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
+#include "weightHandler.h"
 
 // Version of the Teensy control firmware specifically. Independent of the
 // upstream CleverCoffee version carried in VERSION.txt.
@@ -164,6 +165,7 @@ namespace {
         temps::printStatus();
         flow::printStatus();
         switches::printStatus();
+        weight::printStatus();
         encoder::printStatus();
         comms::printStatus();
         bringupConsolePrintHelp();
@@ -213,6 +215,7 @@ void setup() {
     temps::init();
     flow::init();
     switches::init();
+    weight::init();
     comms::init();
 
     if (encoder::init()) {
@@ -254,7 +257,6 @@ void loop() {
     // loopWaterLevel();     // dry-fire interlock, gates the heater
     // loopPressure();       // brew pressure
     // loopFlow();           // DM60 pulse counter -> volume
-    // loopScale();          // HX711, plus BT weight arriving over the link
     // loopEncoder();        // Duppa gestures + RGB machine status
     // handleMachineState(); // brew / steam / hot water / standby
     // loopPid();            // heater PID
@@ -274,6 +276,10 @@ void loop() {
     // until the brew state machine lands in phase 3.
     switches::loop();
     switches::serviceWatch();
+
+    // HX711 load cell. Non-blocking: drives its own stabilise/tare sequence
+    // and then one conversion per pass as the chip makes them available.
+    weight::loop();
 
     // Non-blocking encoder INT watch (bring-up aid).
     i2c::serviceEncoderIntWatch();

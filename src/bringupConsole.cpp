@@ -19,6 +19,7 @@
 #include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
+#include "weightHandler.h"
 
 namespace {
 
@@ -65,6 +66,11 @@ namespace {
         Serial.println("  brewpull <u|d|x>  pull: internal up / internal down / none (PCB has R9)");
         Serial.println("  brewtype          flip between momentary and toggle");
         Serial.println("  brewwatch         watch the brew switch live while you operate it");
+        Serial.println("  scale             load cell: weight, calibration, health");
+        Serial.println("  scaletare         zero the scale (non-blocking)");
+        Serial.println("  scalecal <g>      calibrate from a known mass on the cell");
+        Serial.println("  scalesamples <n>  averaging length; fewer = faster, noisier");
+        Serial.println("  scalerestart      retry start-up, e.g. after plugging one in");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -275,6 +281,46 @@ namespace {
 
             Serial.print("boiler sensor fault injection ");
             Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
+        }
+        else if (strcasecmp(command, "scale") == 0) {
+            weight::printStatus();
+        }
+        else if (strcasecmp(command, "scaletare") == 0) {
+            weight::startTare();
+        }
+        else if (strcasecmp(command, "scalerestart") == 0) {
+            weight::restart();
+        }
+        else if (strcasecmp(command, "scalecal") == 0) {
+            if (argument == nullptr) {
+                Serial.print("calibration factor is ");
+                Serial.println(weight::calFactor(), 4);
+                Serial.println("usage: scalecal <grams of the mass now on the cell>");
+                Serial.println("       tare with nothing on it FIRST, then put the mass on.");
+            }
+            else {
+                weight::calibrateTo(static_cast<float>(atof(argument)));
+            }
+        }
+        else if (strcasecmp(command, "scalesamples") == 0) {
+            if (argument == nullptr) {
+                Serial.print("averaging ");
+                Serial.print(weight::samples());
+                Serial.println(" samples");
+                Serial.println("usage: scalesamples <n>   (1-32; at 10 SPS, n samples is n*100ms of lag)");
+            }
+            else if (const int n = atoi(argument); n >= 1 && n <= 32) {
+                weight::setSamples(n);
+
+                Serial.print("averaging ");
+                Serial.print(weight::samples());
+                Serial.print(" samples, about ");
+                Serial.print(n * 100);
+                Serial.println(" ms of lag at 10 SPS");
+            }
+            else {
+                Serial.println("REFUSED: samples must be 1-32");
+            }
         }
         else if (strcasecmp(command, "brew") == 0) {
             switches::printStatus();
