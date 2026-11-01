@@ -246,15 +246,31 @@ namespace display {
 
         if (live && st.weightOk) {
             lcd.setTextColor(st.weightCalibrated ? TFT_YELLOW : TFT_ORANGE, TFT_BLACK);
-            lcd.printf("%6.1f", st.weightG);
+
+            if (st.weightCalibrated) {
+                lcd.printf("%.1f", st.weightG);
+            }
+            else {
+                // Raw ADC counts, printed whole. A tenth of a count is not a
+                // real quantity, and the decimal only ate width that a
+                // five-digit raw value needs.
+                lcd.printf("%.0f", st.weightG);
+            }
         }
         else {
             lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-            lcd.print("  --.-");
+            lcd.print("--.-");
         }
 
+        // Unit placed AFTER the number rather than at a fixed column. A fixed
+        // column assumed the number was at most six characters wide, and raw
+        // counts run to eight ("-11422.0") - so the label sat on top of the
+        // digits. Asking the cursor where the number actually ended cannot get
+        // that wrong whatever the value.
+        const int unitX = lcd.getCursorX() + 10;
+
         lcd.setTextSize(2);
-        lcd.setCursor(160, 218);
+        lcd.setCursor(unitX, 218);
 
         if (live && st.weightOk && !st.weightCalibrated) {
             // Orange and spelled out, so an uncalibrated reading cannot be
@@ -264,7 +280,14 @@ namespace display {
         }
         else {
             lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-            lcd.print("g  ");
+            lcd.print("g");
+        }
+
+        // Wipe the rest of the row. With a variable-width number the previous
+        // frame's digits can stick out past this one, and overwriting with a
+        // background colour only covers where text is actually drawn.
+        if (const int clearFrom = lcd.getCursorX(); clearFrom < lcd.width()) {
+            lcd.fillRect(clearFrom, 200, lcd.width() - clearFrom, 40, TFT_BLACK);
         }
 
         // Machine state and any latched fault.
