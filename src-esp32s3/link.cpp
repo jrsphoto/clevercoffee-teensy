@@ -38,6 +38,7 @@ namespace machinelink {
             current.groupC = floatField("gt", current.groupC);
             current.flowMlPerSec = floatField("fl", current.flowMlPerSec);
             current.volumeMl = floatField("vol", current.volumeMl);
+            current.weightG = floatField("wt", current.weightG);
 
             char buf[24];
 
@@ -47,6 +48,14 @@ namespace machinelink {
 
             if (parser.get("gok", buf, sizeof(buf))) {
                 current.groupOk = (buf[0] == '1');
+            }
+
+            if (parser.get("wok", buf, sizeof(buf))) {
+                current.weightOk = (atoi(buf) != 0);
+            }
+
+            if (parser.get("wcal", buf, sizeof(buf))) {
+                current.weightCalibrated = (atoi(buf) != 0);
             }
 
             if (parser.get("enc", buf, sizeof(buf))) {

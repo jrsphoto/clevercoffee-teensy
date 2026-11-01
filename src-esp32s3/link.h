@@ -27,6 +27,18 @@ namespace machinelink {
         bool groupOk = false;
         float flowMlPerSec = 0.0f;
         float volumeMl = 0.0f;
+
+        /** Brew weight. In grams only when weightCalibrated; raw counts if not. */
+        float weightG = 0.0f;
+        bool weightOk = false;
+
+        /**
+         * False means weightG is raw ADC counts, not grams. The display must
+         * say so rather than print a number next to a "g" - an uncalibrated
+         * scale shown as grams is exactly the kind of plausible wrong reading
+         * that would have someone trust a dose that is nonsense.
+         */
+        bool weightCalibrated = false;
         long encoder = 0;
         char status[16] = "?";
         char fault[24] = "?";
