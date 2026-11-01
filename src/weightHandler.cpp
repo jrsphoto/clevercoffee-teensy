@@ -57,6 +57,23 @@ namespace weight {
         bool tareRunning = false;
 
         /**
+         * Pending calibration. Taking a calibration point means averaging a
+         * dataset that contains ONLY post-load conversions, which upstream does
+         * with the library's refreshDataSet(). That function blocks until the
+         * set refills - seconds at 10 conversions per second - and the watchdog
+         * here is armed with a 4 second bite, so calling it would reset the
+         * board mid-calibration. This counts the conversions from loop()
+         * instead and computes the factor when enough have arrived.
+         */
+        bool calibrationPending = false;
+        float calibrationTargetGrams = 0.0f;
+        int calibrationSamplesLeft = 0;
+        uint32_t calibrationStartedMs = 0;
+
+        /** Bound on collecting a fresh dataset, in case conversions dry up. */
+        constexpr uint32_t kCalibrationTimeoutMs = 15000;
+
+        /**
          * How long to let the chip settle before believing a signal timeout.
          * The flag can trip while the HX711 is still powering up, which is not
          * a fault; after a second it means nothing is answering.
@@ -106,6 +123,55 @@ namespace weight {
             *wentLowAfterMs = kDoutWaitMs;
 
             return false;
+        }
+
+        /**
+         * @brief Finish a pending calibration once the dataset is fresh.
+         *
+         * Called from loop() while running. Counts conversions rather than
+         * blocking, then takes the factor from a set that holds only post-load
+         * readings - which is the whole point, and what was wrong with the
+         * first attempt at calibrating this.
+         */
+        void serviceCalibration() {
+            if (!calibrationPending) {
+                return;
+            }
+
+            if (millis() - calibrationStartedMs > kCalibrationTimeoutMs) {
+                calibrationPending = false;
+
+                Serial.println("scale: calibration ABANDONED - conversions stopped arriving");
+
+                return;
+            }
+
+            if (calibrationSamplesLeft > 0) {
+                return; // loop() decrements this as conversions land
+            }
+
+            calibrationPending = false;
+
+            const float factor = cell->getNewCalibration(calibrationTargetGrams);
+
+            if (factor == 0.0f || isnan(factor) || isinf(factor)) {
+                Serial.println("scale: calibration REFUSED - the computed factor is not a number.");
+                Serial.println("       Almost always means no load was actually on the cell.");
+
+                cell->setCalFactor(calibration);
+
+                return;
+            }
+
+            calibration = factor;
+
+            Serial.print("scale: calibrated to ");
+            Serial.print(calibrationTargetGrams, 2);
+            Serial.print(" g, factor is now ");
+            Serial.println(calibration, 4);
+            Serial.println("       Verify it: lift the mass and put it back. If the two readings");
+            Serial.println("       differ by more than ~0.1 g the cell is not mounted rigidly");
+            Serial.println("       enough and the factor is meaningless.");
         }
 
         void enterFailed(const char* reason) {
@@ -231,6 +297,10 @@ namespace weight {
                     lastWeight = scale->getWeight();
                     lastGoodReadingMs = millis();
                     haveEverRead = true;
+
+                    if (calibrationPending && calibrationSamplesLeft > 0) {
+                        --calibrationSamplesLeft;
+                    }
                 }
 
                 // Losing the chip mid-shot is caught by staleness in healthy()
@@ -245,6 +315,8 @@ namespace weight {
 
                     Serial.println("scale: tare complete");
                 }
+
+                serviceCalibration();
 
                 break;
             }
@@ -316,6 +388,12 @@ namespace weight {
             return false;
         }
 
+        if (calibrationPending) {
+            Serial.println("scale: a calibration is already in progress");
+
+            return false;
+        }
+
         // A tiny mass gives a calibration factor dominated by noise and drift,
         // and a negative one means the cell is wired backwards or was tared
         // with the mass already on it. Either way, refuse rather than store a
@@ -326,12 +404,31 @@ namespace weight {
             return false;
         }
 
-        calibration = cell->getNewCalibration(knownGrams);
+        // Warn rather than refuse. Gaggiuino's guidance for the same class of
+        // load cell is a 200-400 g reference; well below that, the cell is
+        // working in the few percent of its range where its own nonlinearity
+        // and the mounting both matter most.
+        if (knownGrams < 150.0f) {
+            Serial.print("scale: NOTE - ");
+            Serial.print(knownGrams, 1);
+            Serial.println(" g is a light reference for this cell.");
+            Serial.println("       200-400 g gives a far more trustworthy factor.");
+        }
 
-        Serial.print("scale: calibrated to ");
-        Serial.print(knownGrams, 2);
-        Serial.print(" g, factor is now ");
-        Serial.println(calibration, 4);
+        // Discard the whole averaging window and wait for it to refill with
+        // post-load conversions only. Upstream does this with the library's
+        // blocking refreshDataSet(); here it is counted from loop(), because
+        // blocking for seconds would trip the watchdog.
+        cell->resetSamplesIndex();
+
+        calibrationTargetGrams = knownGrams;
+        calibrationSamplesLeft = samplesInUse + 2; // +2 for the ignored high/low
+        calibrationStartedMs = millis();
+        calibrationPending = true;
+
+        Serial.print("scale: collecting ");
+        Serial.print(calibrationSamplesLeft);
+        Serial.println(" fresh conversions - keep the mass still and do not touch the cell");
 
         return true;
     }
