@@ -241,36 +241,46 @@ namespace display {
         lcd.setCursor(12, 190);
         lcd.print("WEIGHT");
 
-        lcd.setTextSize(4);
-        lcd.setCursor(12, 204);
+        // Fixed-width, right-aligned, so the number ALWAYS occupies exactly
+        // the same pixels. Two earlier attempts at this got it wrong: a
+        // six-character field that an eight-character raw count overran, then
+        // a unit positioned from getCursorX() which moved around as the value
+        // changed width. A constant field needs neither - drawing text with a
+        // background colour fully repaints the field every frame, so there are
+        // no stale digits and nothing to clear.
+        //
+        // Eight characters is the worst case: raw counts are signed 24-bit, so
+        // "-8388608" is the widest value possible.
+        constexpr int kWeightChars = 8;
+        constexpr int kWeightSize = 4;
+        constexpr int kWeightX = 12;
+        constexpr int kWeightY = 204;
+
+        // The built-in font is 6 px wide per character before scaling.
+        constexpr int kWeightWidth = kWeightChars * 6 * kWeightSize;
+
+        lcd.setTextSize(kWeightSize);
+        lcd.setCursor(kWeightX, kWeightY);
 
         if (live && st.weightOk) {
             lcd.setTextColor(st.weightCalibrated ? TFT_YELLOW : TFT_ORANGE, TFT_BLACK);
 
             if (st.weightCalibrated) {
-                lcd.printf("%.1f", st.weightG);
+                lcd.printf("%*.1f", kWeightChars, st.weightG);
             }
             else {
-                // Raw ADC counts, printed whole. A tenth of a count is not a
-                // real quantity, and the decimal only ate width that a
-                // five-digit raw value needs.
-                lcd.printf("%.0f", st.weightG);
+                // Raw ADC counts, printed whole - a tenth of a count is not a
+                // real quantity.
+                lcd.printf("%*.0f", kWeightChars, st.weightG);
             }
         }
         else {
             lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-            lcd.print("--.-");
+            lcd.printf("%*s", kWeightChars, "--.-");
         }
 
-        // Unit placed AFTER the number rather than at a fixed column. A fixed
-        // column assumed the number was at most six characters wide, and raw
-        // counts run to eight ("-11422.0") - so the label sat on top of the
-        // digits. Asking the cursor where the number actually ended cannot get
-        // that wrong whatever the value.
-        const int unitX = lcd.getCursorX() + 10;
-
         lcd.setTextSize(2);
-        lcd.setCursor(unitX, 218);
+        lcd.setCursor(kWeightX + kWeightWidth + 10, kWeightY + 14);
 
         if (live && st.weightOk && !st.weightCalibrated) {
             // Orange and spelled out, so an uncalibrated reading cannot be
@@ -280,14 +290,7 @@ namespace display {
         }
         else {
             lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-            lcd.print("g");
-        }
-
-        // Wipe the rest of the row. With a variable-width number the previous
-        // frame's digits can stick out past this one, and overwriting with a
-        // background colour only covers where text is actually drawn.
-        if (const int clearFrom = lcd.getCursorX(); clearFrom < lcd.width()) {
-            lcd.fillRect(clearFrom, 200, lcd.width() - clearFrom, 40, TFT_BLACK);
+            lcd.print("g  ");
         }
 
         // Machine state and any latched fault.
