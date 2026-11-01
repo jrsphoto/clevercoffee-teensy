@@ -115,6 +115,28 @@ namespace weight {
     constexpr uint32_t kStaleAfterMs = 1000;
 
     /**
+     * @brief Use one load cell or two.
+     *
+     * TWO CELLS UNDER A SHARED PLATE MUST BOTH BE READ. A plate spanning two
+     * cells divides the load between them according to where the mass sits, so
+     * reading one cell measures an unknown fraction of the weight - which looks
+     * exactly like a badly behaved load cell: steady when empty, and
+     * irreproducible the moment anything is placed on it. Only the SUM of the
+     * two is independent of position, which is the entire reason a two-cell
+     * platform works at all.
+     *
+     * Each cell needs its own HX711. They share the clock (PIN_HXCLK) and have
+     * separate data pins (PIN_HXDAT, PIN_HXDAT2), which is what the board's pin
+     * map was laid out for.
+     *
+     * Recreates the scale, so the stabilise and tare run again.
+     */
+    void setDualCell(bool dual);
+
+    /** @brief True if two load cells are being read and summed. */
+    bool dualCell();
+
+    /**
      * @brief Create the scale and begin stabilising. Returns immediately.
      *
      * @return true if the hardware object was created. Whether an HX711 is
@@ -164,6 +186,14 @@ namespace weight {
      * positive mass yields a negative factor and the output comes out positive.
      * The library's setReverseOutput() would achieve the same thing but cannot
      * be undone once called, so the factor is the better place for it.
+     *
+     * With two cells, BOTH factors are set to the same combined value, derived
+     * from the sum of the two raw readings. That is what makes the result
+     * independent of where the mass sat during calibration: the sum of the raw
+     * counts is the total load however it was shared, so one factor applied to
+     * both channels converts that total to grams correctly. Calibrating the
+     * cells separately - which upstream does - is only possible if each can be
+     * loaded on its own, and a shared plate makes that impossible.
      *
      * @param knownGrams the actual mass on the scale, which must be positive
      *                   and large enough to be meaningful
