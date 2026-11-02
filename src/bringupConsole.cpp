@@ -69,6 +69,8 @@ namespace {
         Serial.println("  pid <kp> <tn> <tv>  PID tunings, upstream's form");
         Serial.println("  drybench <0|1>    BYPASS the dry-fire interlock - NO ELEMENT FITTED");
         Serial.println("  permittest        stall the loop; the heater must drop (safety test)");
+        Serial.println("  ulntest           verify the ULN2003 output stage actually inverts");
+        Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
         Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
         Serial.println("  pumpshed <0|1>    heater/pump load-shed interlock");
         Serial.println("  brew              brew switch: raw level, debounced state, sense");
@@ -350,6 +352,12 @@ namespace {
             else {
                 heater::setBenchOverride(atoi(argument) != 0);
             }
+        }
+        else if (strcasecmp(command, "ulnduty") == 0) {
+            heater::startOutputDutyMeasurement(argument ? static_cast<uint32_t>(atoi(argument)) : 5);
+        }
+        else if (strcasecmp(command, "ulntest") == 0) {
+            heater::testOutputStage();
         }
         else if (strcasecmp(command, "permittest") == 0) {
             heater::testPermitExpiry();

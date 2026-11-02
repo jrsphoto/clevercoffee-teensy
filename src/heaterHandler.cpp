@@ -53,6 +53,10 @@ namespace heater {
         /** Duty the ISR compares the tick counter against, 0-1000. */
         volatile uint32_t isrDutyPerMille = 0;
 
+        /** Set once the monitor pin is known to be wired; see armOutputMonitor(). */
+        volatile bool ulnMonitorArmed = false;
+        volatile uint32_t isrUlnMismatches = 0;
+
         volatile uint32_t isrTicks = 0;
         volatile uint32_t isrOnTicks = 0;
         volatile uint32_t isrCounter = 0;
@@ -104,6 +108,28 @@ namespace heater {
 
             if (on) {
                 ++isrOnTicks;
+            }
+
+            // Verify the output stage on EVERY tick, not just on demand.
+            //
+            // This replaced a diagnostic that sampled the monitor pin once per
+            // main-loop pass and read 13% high - loop timing is not uniform, so
+            // samples do not land evenly across the window. Sampling here is
+            // exact by construction: one reading per tick, always at the same
+            // point after the pin is driven.
+            //
+            // It also turns a manual test into continuous monitoring. A ULN
+            // channel that dies mid-shot now shows up in the mismatch count
+            // rather than as a boiler that quietly stops heating.
+            if (ulnMonitorArmed) {
+                // The Darlington switches in about a microsecond; give it a
+                // couple before believing the reading.
+                delayMicroseconds(2);
+
+                // Output is inverted: driven high means the output sinks low.
+                if ((digitalReadFast(kPinUlnOut1Monitor) == LOW) != on) {
+                    ++isrUlnMismatches;
+                }
             }
 
             isrCounter += kTickMs;
@@ -365,6 +391,145 @@ namespace heater {
 
     uint32_t onTickCount() {
         return isrOnTicks;
+    }
+
+    namespace {
+
+        bool measuring = false;
+        uint32_t measureUntilMs = 0;
+        uint32_t measureTicksAtStart = 0;
+        uint32_t measureOnTicksAtStart = 0;
+        uint32_t measureMismatchAtStart = 0;
+        double measureDutyAsked = 0.0;
+        uint32_t measureAskedSamples = 0;
+
+    } // namespace
+
+    void startOutputDutyMeasurement(const uint32_t seconds) {
+        pinMode(kPinUlnOut1Monitor, INPUT_PULLUP);
+        ulnMonitorArmed = true;
+
+        measuring = true;
+        measureUntilMs = millis() + (seconds * 1000);
+        measureTicksAtStart = isrTicks;
+        measureOnTicksAtStart = isrOnTicks;
+        measureMismatchAtStart = isrUlnMismatches;
+        measureDutyAsked = 0.0;
+        measureAskedSamples = 0;
+
+        Serial.print("heater: measuring for ");
+        Serial.print(seconds);
+        Serial.println("s, counting ISR ticks and checking the ULN on each one...");
+    }
+
+    void serviceOutputDutyMeasurement() {
+        if (!measuring) {
+            return;
+        }
+
+        // Only the ASKED duty is sampled from the loop; the measured duty comes
+        // from the ISR's own tick counters, which cannot be biased by loop
+        // timing the way a loop-rate sampler is.
+        measureDutyAsked += dutyPercent();
+        ++measureAskedSamples;
+
+        if (static_cast<int32_t>(millis() - measureUntilMs) < 0) {
+            return;
+        }
+
+        measuring = false;
+
+        const uint32_t ticks = isrTicks - measureTicksAtStart;
+        const uint32_t onTicks = isrOnTicks - measureOnTicksAtStart;
+        const uint32_t mismatches = isrUlnMismatches - measureMismatchAtStart;
+
+        if (ticks == 0 || measureAskedSamples == 0) {
+            Serial.println("heater: no ticks observed - is the timer running?");
+
+            return;
+        }
+
+        const double measured = (100.0 * static_cast<double>(onTicks)) / static_cast<double>(ticks);
+        const double asked = measureDutyAsked / static_cast<double>(measureAskedSamples);
+
+        Serial.print("  duty ");
+        Serial.print(measured, 2);
+        Serial.print("% over ");
+        Serial.print(ticks);
+        Serial.print(" ticks, PID asked ");
+        Serial.print(asked, 2);
+        Serial.print("%, error ");
+        Serial.print(measured - asked, 2);
+        Serial.println(" points");
+
+        Serial.print("  ULN output disagreed with the commanded state on ");
+        Serial.print(mismatches);
+        Serial.print(" of ");
+        Serial.print(ticks);
+        Serial.println(" ticks");
+
+        if (mismatches == 0) {
+            Serial.println("  PASS - the output stage followed every tick.");
+        }
+        else {
+            Serial.println("  *** FAIL - the ULN output did not follow the drive. ***");
+        }
+    }
+
+    bool testOutputStage() {
+        pinMode(kPinUlnOut1Monitor, INPUT_PULLUP);
+
+        // Stop the window timer briefly so the ISR cannot fight this test for
+        // the pin. Restarted before returning, whatever the outcome.
+        windowTimer.end();
+
+        Serial.print("heater: testing the ULN2003 output stage (pin ");
+        Serial.print(PIN_HEATER);
+        Serial.print(" -> I1, O1 -> pin ");
+        Serial.print(kPinUlnOut1Monitor);
+        Serial.println(")");
+
+        // Input LOW: the Darlington is off, the output floats, and the
+        // internal pull-up should bring the monitor pin high.
+        driveHeater(false);
+        delayMicroseconds(500);
+        const int offState = digitalRead(kPinUlnOut1Monitor);
+
+        // Input HIGH: the Darlington conducts and should pull the output to
+        // near ground against the pull-up.
+        driveHeater(true);
+        delayMicroseconds(500);
+        const int onState = digitalRead(kPinUlnOut1Monitor);
+
+        driveHeater(false);
+
+        windowTimer.begin(onTick, kTickMs * 1000);
+
+        Serial.print("  heater pin LOW  -> O1 reads ");
+        Serial.println(offState == HIGH ? "HIGH (floating, pulled up)  as expected" : "LOW   <-- WRONG");
+        Serial.print("  heater pin HIGH -> O1 reads ");
+        Serial.println(onState == LOW ? "LOW  (sinking)              as expected" : "HIGH  <-- WRONG");
+
+        const bool pass = (offState == HIGH) && (onState == LOW);
+
+        if (pass) {
+            Serial.println("  PASS - the output stage inverts correctly.");
+
+            return true;
+        }
+
+        Serial.println("  *** FAIL - the ULN2003 is not switching as expected. ***");
+
+        if (offState == LOW && onState == LOW) {
+            Serial.println("  Output stuck low: check the chip has GND on pin 8, and that");
+            Serial.println("  nothing else is holding O1 down.");
+        }
+        else if (offState == HIGH && onState == HIGH) {
+            Serial.println("  Output never sinks: the input is probably not reaching I1, or");
+            Serial.println("  the chip is absent or dead. Check pin 2 to ULN pin 1.");
+        }
+
+        return false;
     }
 
     void testPermitExpiry() {
