@@ -12,11 +12,29 @@
  * per fixed small volume. Pulled up to 3.3 V, never 5 V - neither chip here is
  * 5 V tolerant.
  *
- * Resolution is high, roughly 36,000-49,000 pulses per litre depending on the
- * variant, so at the pump's ~17 ml/s ceiling the pulse rate tops out under 1 kHz.
+ * Resolution is 49,162 pulses per litre (datasheet, 93N-6211-1100x), and the
+ * sensor's own ceiling is 3.0 l/min, so the pulse rate tops out around 2,460 Hz.
  * That is slow enough that a plain interrupt is ample and no hardware counter is
  * needed, though pin 10 is on QuadTimer1_0 and could use input capture later if
- * it ever proves necessary.
+ * it ever proves necessary. The 200 us debounce below permits 5 kHz, leaving
+ * roughly 2x headroom over the sensor's maximum.
+ *
+ * THE SIGNAL PIN NEEDS A REAL PULL-UP. The datasheet's own reference circuit
+ * uses 4k7 to the supply plus 10 nF to ground, and the sensor does not work
+ * without it: the Teensy's ~22k internal pull-up cannot lift the line between
+ * pulses, so it sits low, there is no high state to fall from, and the
+ * falling-edge interrupt almost never fires. With water flowing at a good rate
+ * that produced FOUR pulses in thirty seconds. The internal pull-up is still
+ * enabled below, but only as a backstop - it is not sufficient alone.
+ *
+ * Mounting matters too, from the datasheet's application notes: mount the sensor
+ * VERTICALLY so air bubbles pass through instead of lodging in the turbine
+ * chamber, keep at least 14 cm of tube between pump and sensor, and keep it away
+ * from the pump's magnetic field - the turbine is magnet-driven, so a motor
+ * alongside it can corrupt the reading.
+ *
+ * Do not blow compressed air through it. The datasheet states that drying or
+ * operating the sensor with compressed air destroys it.
  *
  * What this feeds, eventually:
  *   - a brew-stop condition by volume, parallel to the existing by-weight one
@@ -32,15 +50,19 @@
 namespace flow {
 
     /**
-     * Pulses per litre. THIS MUST BE CALIBRATED - the figure varies by variant
-     * across roughly 36,000-49,000, and the only honest value is one measured on
-     * this machine with this sensor.
+     * Pulses per litre, from the sensor's own datasheet.
      *
-     * The default is deliberately mid-range so that an uncalibrated system is
-     * obviously approximate rather than plausibly wrong. Use the console's
-     * 'flowcal' against a measured volume to replace it.
+     * 49,162 is the stated resolution of the Digmesa Nano DM60, part number
+     * 93N-6211-1100x, which is the sensor fitted to this machine. The previous
+     * default of 42,000 was the middle of the range across DM60 variants - a
+     * guess, and 15% low for this one.
+     *
+     * Quoted accuracy is +/-2.0% across the linear range of 0.05-3.0 l/min, so
+     * the factory figure is good enough to use directly. A gravimetric
+     * calibration with 'flowcal' against a weighed volume would still beat it
+     * and should be done once the machine can dispense onto a working scale.
      */
-    constexpr uint32_t kDefaultPulsesPerLitre = 42000;
+    constexpr uint32_t kDefaultPulsesPerLitre = 49162;
 
     /**
      * How long without a pulse before flow is reported as zero.

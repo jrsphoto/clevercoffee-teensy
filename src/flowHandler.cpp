@@ -235,7 +235,12 @@ namespace flow {
             Serial.print(", ");
             Serial.print(watchChanges);
             Serial.print(" level changes, ");
-            const uint32_t pulsesSeen = pulseCount() - watchStartPulses;
+            // Guard the subtraction. 'flowreset' can zero the counter while a
+            // watch is running, which made this underflow and report
+            // 4,294,967,279 pulses - a number so absurd it was obvious, but the
+            // same wrap in any other arithmetic would not have been.
+            const uint32_t nowPulses = pulseCount();
+            const uint32_t pulsesSeen = (nowPulses >= watchStartPulses) ? (nowPulses - watchStartPulses) : nowPulses;
 
             Serial.print(pulsesSeen);
             Serial.println(" pulses counted during the watch");
@@ -300,7 +305,11 @@ namespace flow {
         Serial.print(" pulses/litre");
 
         if (calibrationPulsesPerLitre == kDefaultPulsesPerLitre) {
-            Serial.println("  (DEFAULT - not yet calibrated)");
+            // Not "uncalibrated". 49,162 is the DM60's datasheet resolution for
+            // this exact part number, quoted to +/-2%, so it is a real figure
+            // rather than a placeholder. Saying otherwise would invite someone
+            // to distrust a number that is good enough to use.
+            Serial.println("  (datasheet value, +/-2%; 'flowcal' to beat it gravimetrically)");
         }
         else {
             Serial.println();
