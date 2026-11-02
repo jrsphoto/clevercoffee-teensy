@@ -77,6 +77,7 @@ namespace {
         Serial.println("  scalediag         probe the HX711 data line directly, bypassing the lib");
         Serial.println("  scalefactor <n>   set the calibration factor directly (1 = raw counts)");
         Serial.println("  scaledual <0|1>   read one load cell or two (two share one plate here)");
+        Serial.println("  flowwatch         watch the flow signal line directly (wiring test)");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -529,6 +530,9 @@ namespace {
                 Serial.print("LED set to 0x");
                 Serial.println(rgb, HEX);
             }
+        }
+        else if (strcasecmp(command, "flowwatch") == 0) {
+            flow::startWatch(20000);
         }
         else if (strcasecmp(command, "i2c") == 0) {
             i2c::checkLines();

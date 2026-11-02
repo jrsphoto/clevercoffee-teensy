@@ -273,6 +273,7 @@ void loop() {
     // DM60 pulse counter -> volume and rate. Counting is interrupt-driven; this
     // only derives the rate and decides when flow has stopped.
     flow::loop();
+    flow::serviceWatch();
 
     // Hardwired brew switch. Reads and debounces only - nothing acts on it
     // until the brew state machine lands in phase 3.

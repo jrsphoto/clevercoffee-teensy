@@ -127,4 +127,26 @@ namespace flow {
      */
     void printStatus();
 
+    /**
+     * @brief Watch the signal line directly and report every level change.
+     *
+     * Reads the PIN rather than the interrupt count, which is the distinction
+     * that matters when nothing is being counted:
+     *
+     *   stuck HIGH    the internal pull-up is holding the line and nothing is
+     *                 pulling it down - sensor not reaching this pin, sensor
+     *                 unpowered, no shared ground, or genuinely no flow
+     *   stuck LOW     something is holding the line at ground - a short, or a
+     *                 swapped signal and ground
+     *   changing      the signal IS arriving, so a zero pulse count would mean
+     *                 the interrupt is at fault rather than the wiring
+     *
+     * Non-blocking, like the brew switch and encoder watches - a blocking one
+     * would stop the watchdog being fed.
+     */
+    void startWatch(uint32_t durationMs);
+
+    /** @brief Service an active watch. Call every main-loop pass. */
+    void serviceWatch();
+
 } // namespace flow
