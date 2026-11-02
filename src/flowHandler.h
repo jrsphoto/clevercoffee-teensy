@@ -27,6 +27,19 @@
  * that produced FOUR pulses in thirty seconds. The internal pull-up is still
  * enabled below, but only as a backstop - it is not sufficient alone.
  *
+ * FLOW DIRECTION IS NOT OPTIONAL. The DM60 drives its turbine with a jet
+ * through a 1.1 mm nozzle, so plumbed backwards the jet geometry does not turn
+ * the wheel at all - water passes straight through and the sensor reports
+ * nothing. There is no arrow on the body; the datasheet's dimension drawing
+ * marks one port "OUT" and shows an "INLET identification" feature instead,
+ * which is easy to miss. Plumbed backwards this gave FOUR pulses in thirty
+ * seconds with water flowing well; plumbed correctly, 10,561 pulses in twenty.
+ *
+ * The giveaway for a backwards sensor is the output pulling LOW and STAYING
+ * low: the turbine is not rotating, so the Hall sensor sits wherever the magnet
+ * parked. An electrically dead sensor looks different - it never actuates at
+ * all and the line stays HIGH.
+ *
  * Mounting matters too, from the datasheet's application notes: mount the sensor
  * VERTICALLY so air bubbles pass through instead of lodging in the turbine
  * chamber, keep at least 14 cm of tube between pump and sensor, and keep it away
