@@ -171,4 +171,24 @@ namespace flow {
     /** @brief Service an active watch. Call every main-loop pass. */
     void serviceWatch();
 
+    /**
+     * @brief Sample the signal pin in a tight loop and report what it does.
+     *
+     * BLOCKING, for a fixed short window well inside the watchdog's 4 s bite.
+     * That is the point: polling from the main loop samples at a few kHz at
+     * best and misses anything brief, so "no level changes" from serviceWatch()
+     * proves nothing. This samples at megahertz and cannot miss an edge.
+     *
+     * It answers the question the pulse counter alone cannot: if this sees
+     * transitions while pulseCount() stays at zero, the INTERRUPT is broken. If
+     * it sees none, the signal genuinely is not moving and the fault is the
+     * sensor or its wiring.
+     *
+     * Also reports the fraction of the window spent low, which distinguishes a
+     * line held hard at ground from one pulsing with a very short duty.
+     *
+     * @param windowMs how long to sample for; kept short, it blocks
+     */
+    void sampleFast(uint32_t windowMs);
+
 } // namespace flow

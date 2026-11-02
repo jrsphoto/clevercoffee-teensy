@@ -284,6 +284,70 @@ namespace flow {
         }
     }
 
+    void sampleFast(const uint32_t windowMs) {
+        // Bounded hard. This blocks, and the watchdog bites at 4 s.
+        const uint32_t window = windowMs > 500 ? 500 : windowMs;
+
+        const uint32_t pulsesBefore = pulseCount();
+
+        Serial.print("sampling pin ");
+        Serial.print(PIN_FLOW);
+        Serial.print(" as fast as possible for ");
+        Serial.print(window);
+        Serial.println(" ms...");
+
+        uint32_t samples = 0;
+        uint32_t lowSamples = 0;
+        uint32_t transitions = 0;
+
+        const uint32_t began = millis();
+        int last = digitalReadFast(PIN_FLOW);
+
+        while (millis() - began < window) {
+            const int now = digitalReadFast(PIN_FLOW);
+
+            ++samples;
+
+            if (now == LOW) {
+                ++lowSamples;
+            }
+
+            if (now != last) {
+                ++transitions;
+                last = now;
+            }
+        }
+
+        const uint32_t pulsesDuring = pulseCount() - pulsesBefore;
+        const float lowPct = samples ? (100.0f * static_cast<float>(lowSamples) / static_cast<float>(samples)) : 0.0f;
+        const float rateMHz = samples ? (static_cast<float>(samples) / (static_cast<float>(window) * 1000.0f)) : 0.0f;
+
+        Serial.print("  ");
+        Serial.print(samples);
+        Serial.print(" samples (");
+        Serial.print(rateMHz, 2);
+        Serial.print(" MHz), ");
+        Serial.print(transitions);
+        Serial.print(" transitions, line low ");
+        Serial.print(lowPct, 1);
+        Serial.print("% of the time, ");
+        Serial.print(pulsesDuring);
+        Serial.println(" interrupts in the same window");
+
+        if (transitions == 0) {
+            Serial.print("  The line did not move at all. Held ");
+            Serial.print(lowPct > 50.0f ? "LOW" : "HIGH");
+            Serial.println(" - this is not something the firmware can fix.");
+        }
+        else if (pulsesDuring == 0) {
+            Serial.println("  TRANSITIONS BUT NO INTERRUPTS - the signal is arriving and the");
+            Serial.println("  interrupt is not firing. That is a firmware fault, not wiring.");
+        }
+        else {
+            Serial.println("  Signal moving and interrupts firing - the path works.");
+        }
+    }
+
     void printStatus() {
         const uint32_t counted = snapshotPulses();
 
