@@ -185,6 +185,100 @@ namespace flow {
         return true;
     }
 
+    namespace {
+
+        bool watching = false;
+        uint32_t watchUntilMs = 0;
+        uint32_t watchChanges = 0;
+        int watchLastLevel = -1;
+        uint32_t watchStartPulses = 0;
+
+    } // namespace
+
+    void startWatch(const uint32_t durationMs) {
+        watching = true;
+        watchUntilMs = millis() + durationMs;
+        watchChanges = 0;
+        watchLastLevel = -1;
+        watchStartPulses = pulseCount();
+
+        Serial.print("watching the flow signal on pin ");
+        Serial.print(PIN_FLOW);
+        Serial.print(" for ");
+        Serial.print(durationMs / 1000);
+        Serial.println("s - run water, or blow through the sensor.");
+        Serial.println("  stuck HIGH = nothing pulling the line down");
+        Serial.println("  stuck LOW  = something holding it at ground");
+        Serial.println("  changing   = signal is arriving");
+    }
+
+    void serviceWatch() {
+        if (!watching) {
+            return;
+        }
+
+        const int level = digitalRead(PIN_FLOW);
+
+        if (level != watchLastLevel) {
+            if (watchLastLevel >= 0) {
+                ++watchChanges;
+            }
+
+            watchLastLevel = level;
+        }
+
+        if (static_cast<int32_t>(millis() - watchUntilMs) >= 0) {
+            watching = false;
+
+            Serial.print("flow watch finished: line is ");
+            Serial.print(level == HIGH ? "HIGH" : "LOW");
+            Serial.print(", ");
+            Serial.print(watchChanges);
+            Serial.print(" level changes, ");
+            const uint32_t pulsesSeen = pulseCount() - watchStartPulses;
+
+            Serial.print(pulsesSeen);
+            Serial.println(" pulses counted during the watch");
+
+            // The interrupt is the authority here, NOT the polled level. This
+            // loop samples the pin once per main-loop pass, which is far too
+            // slow to catch a pulse only microseconds wide - so "no level
+            // changes" means this poll missed them, not that the line is dead.
+            //
+            // The first version of this reported "STUCK LOW - the signal never
+            // moved" while 215 interrupts were being counted on the same pin.
+            // A diagnostic that contradicts itself is worse than none, because
+            // it sends you looking for a wiring fault that is not there.
+            if (pulsesSeen > 0) {
+                Serial.println("  Signal IS arriving - the interrupt counted pulses.");
+                Serial.println("  Zero level changes above just means polling from the main loop");
+                Serial.println("  is too slow to see them, which is expected and not a fault.");
+
+                return;
+            }
+
+            if (watchChanges == 0) {
+                Serial.print("  no pulses and no level change - line sat ");
+                Serial.println(level == HIGH ? "HIGH" : "LOW");
+
+                if (level == HIGH) {
+                    Serial.println("  The internal pull-up is holding it, so nothing is driving the");
+                    Serial.println("  pin. Check: signal wire actually on pin 10; the sensor has its");
+                    Serial.println("  own supply (an open-collector output cannot switch unpowered);");
+                    Serial.println("  and it shares a ground with the Teensy. Also check nothing");
+                    Serial.println("  ELSE is connected to the pin - a second driver wins over a");
+                    Serial.println("  pull-up and over an open-collector sensor both.");
+                }
+                else {
+                    Serial.println("  Something is holding the line at ground and overriding the");
+                    Serial.println("  pull-up. Check for a short, signal and ground swapped, or");
+                    Serial.println("  another output driving this pin - a signal generator left");
+                    Serial.println("  connected and idling low does exactly this.");
+                }
+            }
+        }
+    }
+
     void printStatus() {
         const uint32_t counted = snapshotPulses();
 

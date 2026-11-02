@@ -206,6 +206,45 @@ them, `PMP_AC` and `PMP_RL` in the relays sheet. Those are the remains of the
 abandoned on/off pump path and are harmless, but can be deleted for tidiness
 now that the pump is PWM-only.
 
+## MUST FIX BEFORE FAB: R10, the flow sensor pull-up, is 47k
+
+The DM60's datasheet requires a pull-up of **1.2k to 4.7k** on its
+open-collector signal pin, depending on supply voltage. R10 on this board is
+**47k** - between 10 and 40 times too weak.
+
+Consequence, measured on the breadboard with the Teensy's own ~22k internal
+pull-up standing in: the signal line sits LOW permanently. The sensor's output
+transistor pulls it down, and the weak pull-up cannot bring it back up between
+pulses, so there is no high state to fall from and the falling-edge interrupt
+almost never fires. With water flowing at a good rate the firmware counted
+**4 pulses in 30 seconds**, against an expected ~40,000 pulses per litre. One
+earlier run managed 215 pulses in 12 s, which is the same fault succeeding
+marginally for a moment.
+
+Nothing was wrong with the sensor, the wiring, the pump or the firmware. The
+firmware counted every edge it was given, with zero debounce rejections
+throughout.
+
+**Fix:** change R10 from 47K to **2.2k**. It is already correctly placed between
++3.3 V and the FLOW net; only the value changes.
+
+The rest of that connector is right and worth keeping: `FLOW_SENS1` feeds the
+sensor +5 V while the pull-up goes to +3.3 V. That is the correct arrangement
+for an open-collector output driving a pin that is not 5 V tolerant - the output
+only ever sinks, so the line's high level is set by the 3.3 V pull-up and never
+by the sensor's supply.
+
+Related, not broken but worth revisiting: **R9** (brew switch pull) is also 47k,
+where most other inputs on this board use 10k. A panel switch on a long lead in
+a cabinet with a pump and a 1500 W heater deserves the stronger pull plus a
+100 nF to ground.
+
+**How this was missed twice:** the phase-0 review checked pin assignments and,
+after the pump-net episode, net connectivity. It never checked component VALUES
+against the connected part's datasheet. A pull-up can be present, correctly
+placed, correctly connected, and still be the wrong value - which looks
+identical to a dead sensor.
+
 ## Open hardware question: 5 V next to a 3.3 V-only pin
 
 `PUMP_PWM1` is a 3-pin header: pin 1 the PWM signal, pin 2 **+5 V**, pin 3 GND.
