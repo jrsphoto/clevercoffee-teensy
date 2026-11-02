@@ -143,7 +143,27 @@ instant at which an output is undefined or momentarily energized. Previously tha
 reasoning about the i.MX RT's GPIO reset state plus the board's pulldowns; now it is
 measured.
 
-Not yet verified this way (needs the hardware): pump PWM frequency and duty, the two RTD
+Pump PWM verified this way on 2026-11-02, with the DRV8871 connected and the
+LA2016 on CH3 (Teensy D9), sampling at 10 MHz:
+
+| commanded | measured duty | frequency |
+|-----------|---------------|-----------|
+| 10%       | 10.07%        | 20.14 kHz |
+| 20%       | 19.96%        | 19.96 kHz |
+| 35%       | 35.10%        | 19.84 kHz |
+| 50%       | 49.61%        | 19.84 kHz |
+| 75%       | 75.41%        | 19.67 kHz |
+| 100%      | static HIGH, no switching | - |
+
+Every level within ~0.4% of commanded, and 100% correctly collapses to a
+continuous high rather than a 99.98% duty. The frequency sits 0-2% under 20 kHz,
+which is FlexPWM prescaler/modulus quantisation and of no consequence.
+
+Note for anyone re-running this: the analyser enumerated as
+`kingst-la2016:conn=1.16`, not the `conn=1.9` recorded in earlier notes. Scan
+with `sigrok-cli --scan` rather than trusting a stored connection string.
+
+Not yet verified this way (needs the hardware): the two RTD
 chip-selects on the shared SPI bus, I2C traffic to the encoder and PCF8574, and DM60
 pulse counting. Note the LA2016 also has two PWM *outputs*, which can inject synthetic
 flow pulses at a known rate into pin 10 - that makes the net-new DM60 flow handler
