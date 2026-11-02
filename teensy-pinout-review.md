@@ -245,6 +245,42 @@ against the connected part's datasheet. A pull-up can be present, correctly
 placed, correctly connected, and still be the wrong value - which looks
 identical to a dead sensor.
 
+## Brew switch block, as revised 2026-11-02
+
+JP2 deleted, R9 now 10k, C5 moved onto the signal. Final arrangement:
+
+    R9  10k    BREW_SW -> GND      (pull-down)
+    C5  0.1uF  BREW_SW -> GND      (near the connector)
+    BPSW_SW1   pin1 BREW_SW, pin2 +3.3V, pin3 GND
+    panel switch wired between pin 1 and pin 2
+
+Three reasons this beats the original 47k + solder-jumper version:
+
+1. **The solder jumper was a silent hazard.** `SolderJumper_3_Open` ships with
+   no pads bridged, so a missed build step left pin 24 with NO pull at all -
+   a floating input on the signal that starts a brew. Hard-wiring removes a
+   step whose omission is dangerous rather than merely wrong.
+
+2. **Pull-down fails safe on the likelier cable fault.** The line idles low and
+   the switch pulls it high, so a lead chafing against grounded chassis metal -
+   far more likely inside a machine than shorting to a 3.3 V wire - reads as
+   NOT PRESSED. Wired the other way, that same chafe starts a shot.
+
+3. **C5 earns its keep now.** It was decoupling the 3.3 V pin feeding a passive
+   mechanical switch drawing 0.33 mA, which needed nothing. On the signal with
+   10k it gives a 1 ms time constant - inside the 20 ms firmware debounce, so
+   it filters induced spikes without making the switch feel slow.
+
+The switch also uses adjacent connector pins (1 and 2), keeping the cable's
+current loop tight.
+
+**FIRMWARE CONSEQUENCE, to action when the board is built:** this board is
+external pull-DOWN, active HIGH. `switchHandler` currently defaults to the
+Teensy's INTERNAL pull-up and active LOW, because the breadboard has no
+external resistor on this signal. When the PCB exists, change the defaults to
+`Pull::External` and `setActiveHigh(true)`, or set them at runtime with
+`brewpull x` then `brewsense`.
+
 ## Pull-up audit: every pin where firmware depends on a pull
 
 Done after John asked whether anywhere the code uses an internal pull-up ought
