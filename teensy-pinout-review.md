@@ -245,6 +245,35 @@ against the connected part's datasheet. A pull-up can be present, correctly
 placed, correctly connected, and still be the wrong value - which looks
 identical to a dead sensor.
 
+## Pull-up audit: every pin where firmware depends on a pull
+
+Done after John asked whether anywhere the code uses an internal pull-up ought
+to have an external one instead. Good instinct, and the answer is more specific
+than "yes": the board already HAS external pulls nearly everywhere. Two of them
+are simply the wrong value.
+
+| Pin | Signal | External | Value | Verdict |
+|-----|--------|----------|-------|---------|
+| 18/19 | SDA / SCL | R7, R8 | 4k7 | correct for I2C |
+| 25 | ENC_INT | R13 | 10k | fine - open-drain, short on-board trace |
+| 26 | WATER probe | R14 | 10k | reasonable |
+| 10 | FLOW | R10 | **47k** | **WRONG** - datasheet wants 4k7, see above |
+| 24 | BREW_SW | R9 | **47k** | weak for a long panel lead; 10k + 100nF better |
+| 38/40 | HX711 DAT | none | - | **not needed**, see below |
+
+The HX711 is a genuine exception. Its DOUT is a push-pull CMOS output that
+actively drives both high and low, so a pull-up does nothing for it. The
+firmware enables the internal one purely so that an ABSENT board reads as a
+defined high - which is what `weight::probeDataLine()` keys off to tell a
+missing HX711 from a present one.
+
+**The rule to apply going forward:** anything open-collector or open-drain, and
+anything arriving on a cable from off-board, needs an external pull-up of a
+chosen value. Teensy 4's `INPUT_PULLUP` is 22k (the core writes `PUS(3)` in
+digital.c), which is adequate for a short on-board open-drain line and nowhere
+near enough for a sensor whose datasheet specifies 4k7. An internal pull is a
+default, not a design decision.
+
 ## Open hardware question: 5 V next to a 3.3 V-only pin
 
 `PUMP_PWM1` is a 3-pin header: pin 1 the PWM signal, pin 2 **+5 V**, pin 3 GND.
