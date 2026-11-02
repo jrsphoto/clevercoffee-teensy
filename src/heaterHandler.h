@@ -174,6 +174,58 @@ namespace heater {
     void printStatus();
 
     /**
+     * Bench pin watching ULN2003 output 1, so the firmware can verify its own
+     * output stage rather than assume it.
+     *
+     * The ULN output is open collector: it sinks when its input is high and
+     * floats otherwise. Configured INPUT_PULLUP, this pin supplies the load
+     * that makes "floating" read as a clean high, so the chip can be checked
+     * with no external components at all - the inverse of the heater pin is
+     * what a working buffer produces.
+     *
+     * ONLY VALID WHILE NOTHING ELSE IS ON O1. If that output is ever pulled up
+     * to the 24 V rail, as it would be driving a real SSR, this pin must be
+     * disconnected first - 24 V into a 3.3 V input destroys it.
+     */
+    constexpr int kPinUlnOut1Monitor = 14;
+
+    /**
+     * @brief Verify the ULN2003 actually inverts, by driving it and reading back.
+     *
+     * Drives the heater pin both ways and checks O1 follows inverted. Catches a
+     * dead channel, a missing chip, an unpowered chip and a miswired input -
+     * none of which are visible from the Teensy side alone, where the pin
+     * toggles perfectly whether or not anything downstream is listening.
+     *
+     * Safe to run: both states are held for a few milliseconds, far too briefly
+     * to matter even if an element were attached, and it finishes with the
+     * output off.
+     *
+     * @return true if the output inverted correctly in both directions.
+     */
+    bool testOutputStage();
+
+    /**
+     * @brief Measure the duty actually appearing at the ULN2003 output.
+     *
+     * Non-blocking by necessity: a blocking sample long enough to cover whole
+     * 1000 ms windows would stop the loop refreshing the permit, and the ISR
+     * would correctly drop the heater mid-measurement. So this samples the
+     * monitor pin once per main-loop pass and accumulates, which at normal
+     * loop rates is many thousands of samples per second.
+     *
+     * Reports the measured duty against what the PID asked for. That is the
+     * end-to-end check: PID -> ISR -> Teensy pin -> ULN input -> ULN output.
+     * Everything before the SSR.
+     *
+     * @param seconds how long to measure for; several windows is best
+     */
+    void startOutputDutyMeasurement(uint32_t seconds);
+
+    /** @brief Service a running duty measurement. Call every main-loop pass. */
+    void serviceOutputDutyMeasurement();
+
+    /**
      * @brief Deliberately stall the main loop and prove the heater drops.
      *
      * The permit expiry is the mechanism that protects against a hung control

@@ -288,6 +288,7 @@ void loop() {
     // Boiler PID. Computes continuously; the output is gated and the ISR
     // refuses to energise on a permit this does not keep refreshing.
     heater::loop();
+    heater::serviceOutputDutyMeasurement();
 
     pump::loop();
 
