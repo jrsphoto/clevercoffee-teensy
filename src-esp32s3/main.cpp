@@ -42,10 +42,23 @@ namespace {
 
     bool lcdReady = false;
 
-    /** Redraw rate. The panel is on SPI, telemetry arrives at 5 Hz, and
-     *  repainting faster than the data changes only causes flicker. */
-    constexpr uint32_t kRedrawMs = 250;
+    /**
+     * Redraw pacing.
+     *
+     * Previously a flat 250 ms timer, which on top of the Teensy's 200 ms
+     * telemetry period put 225 ms of average lag on everything - fine for a
+     * boiler temperature, hopeless for a knob.
+     *
+     * Now the redraw is driven by frames ARRIVING rather than by the clock, so
+     * a value pushed early by the Teensy reaches the screen promptly. kRedrawMs
+     * becomes a floor that stops a burst of frames thrashing the SPI bus, and
+     * kIdleRedrawMs still repaints occasionally with no link so the "stale"
+     * indication updates.
+     */
+    constexpr uint32_t kRedrawMs = 60;
+    constexpr uint32_t kIdleRedrawMs = 500;
     uint32_t lastRedraw = 0;
+    uint32_t lastDrawnFrame = 0;
 
     /**
      * @brief Tiny serial console, so display orientation and inversion can be
@@ -200,8 +213,17 @@ void loop() {
     audio::loop();
 
     if (lcdReady) {
-        if (const uint32_t now = millis(); now - lastRedraw >= kRedrawMs) {
+        const uint32_t now = millis();
+        const uint32_t frames = machinelink::framesReceived();
+
+        // Repaint when there is something new to show and the floor has
+        // elapsed, or occasionally anyway so a stale readout still says so.
+        const bool haveNewData = (frames != lastDrawnFrame) && ((now - lastRedraw) >= kRedrawMs);
+        const bool idleRefresh = (now - lastRedraw) >= kIdleRedrawMs;
+
+        if (haveNewData || idleRefresh) {
             lastRedraw = now;
+            lastDrawnFrame = frames;
             display::drawMachineScreen();
         }
     }

@@ -16,6 +16,7 @@
 #include "safetyHandler.h"
 #include "tempHandler.h"
 #include "pumpHandler.h"
+#include "switchHandler.h"
 #include "weightHandler.h"
 #include "updateMode.h"
 
@@ -68,6 +69,16 @@ namespace comms {
 
             return "idle";
         }
+
+        /**
+         * Floor on expedited frames. Spinning the encoder fast must not turn
+         * the link into a flood: at 40 ms a continuous spin costs 25 frames a
+         * second, about 24% of the wire, and still looks instant to a person.
+         */
+        constexpr uint32_t kMinTelemetryGapMs = 40;
+
+        long lastSentEncoder = 0;
+        bool lastSentBrew = false;
 
         void sendTelemetry() {
             char body[linkproto::kMaxFrame];
@@ -205,8 +216,34 @@ namespace comms {
             }
         }
 
-        if (const uint32_t now = millis(); (now - lastTelemetryMs) >= linkproto::kTelemetryIntervalMs) {
+        const uint32_t now = millis();
+
+        // Push a frame the moment something the OPERATOR is looking at
+        // changes, rather than waiting for the next scheduled one.
+        //
+        // The schedule alone made the panel feel broken: 200 ms of telemetry
+        // period plus the head's 250 ms redraw timer is 225 ms of lag on
+        // average and 450 ms at worst. That is fine for a boiler temperature,
+        // which moves slowly, and far too slow for a knob - turning it and
+        // waiting half a second for the screen to agree feels like a fault.
+        //
+        // Only UI values qualify. Temperatures and flow are not included: they
+        // change on every single reading, so triggering on them would simply
+        // send continuously and defeat the rate limit.
+        //
+        // The wire can afford it. A frame is ~110 characters, about 9.5 ms at
+        // 115200 baud, so even at the 40 ms floor below the link sits under a
+        // quarter utilised.
+        const long encoderNow = static_cast<long>(encoder::counter());
+        const bool uiChanged = (encoderNow != lastSentEncoder) || (switches::brewRequested() != lastSentBrew);
+
+        const bool scheduled = (now - lastTelemetryMs) >= linkproto::kTelemetryIntervalMs;
+        const bool expedited = uiChanged && ((now - lastTelemetryMs) >= kMinTelemetryGapMs);
+
+        if (scheduled || expedited) {
             lastTelemetryMs = now;
+            lastSentEncoder = encoderNow;
+            lastSentBrew = switches::brewRequested();
             sendTelemetry();
         }
     }
