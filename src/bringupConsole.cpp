@@ -13,6 +13,7 @@
 #include "commsHandler.h"
 #include "encoderHandler.h"
 #include "flowHandler.h"
+#include "heaterHandler.h"
 #include "hardware/outputs.h"
 #include "i2cHandler.h"
 #include "pumpHandler.h"
@@ -62,6 +63,12 @@ namespace {
         Serial.println("  flowreset         zero the flow volume accumulator");
         Serial.println("  flowcal <ml>      calibrate from a measured volume");
         Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
+        Serial.println("  heater            PID state, duty, and which gate is blocking");
+        Serial.println("  heater on|off     software master enable (default off, never saved)");
+        Serial.println("  setpoint <C>      target boiler temperature");
+        Serial.println("  pid <kp> <tn> <tv>  PID tunings, upstream's form");
+        Serial.println("  drybench <0|1>    BYPASS the dry-fire interlock - NO ELEMENT FITTED");
+        Serial.println("  permittest        stall the loop; the heater must drop (safety test)");
         Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
         Serial.println("  pumpshed <0|1>    heater/pump load-shed interlock");
         Serial.println("  brew              brew switch: raw level, debounced state, sense");
@@ -289,6 +296,63 @@ namespace {
 
             Serial.print("boiler sensor fault injection ");
             Serial.println(on ? "ON - the machine should latch safe within ~2s" : "OFF");
+        }
+        else if (strcasecmp(command, "heater") == 0) {
+            if (argument == nullptr) {
+                heater::printStatus();
+            }
+            else if (strcasecmp(argument, "on") == 0) {
+                heater::setEnabled(true);
+            }
+            else if (strcasecmp(argument, "off") == 0) {
+                heater::setEnabled(false);
+            }
+            else {
+                Serial.println("usage: heater [on|off]");
+            }
+        }
+        else if (strcasecmp(command, "setpoint") == 0) {
+            if (argument == nullptr) {
+                Serial.print("setpoint is ");
+                Serial.print(heater::setpointC(), 1);
+                Serial.println(" C");
+            }
+            else {
+                heater::setSetpointC(atof(argument));
+            }
+        }
+        else if (strcasecmp(command, "pid") == 0) {
+            double kp = 0, tn = 0, tv = 0;
+            heater::tunings(&kp, &tn, &tv);
+
+            char* a2 = strtok(nullptr, " \t");
+            char* a3 = strtok(nullptr, " \t");
+
+            if (argument == nullptr || a2 == nullptr || a3 == nullptr) {
+                Serial.print("Kp ");
+                Serial.print(kp, 2);
+                Serial.print("  Tn ");
+                Serial.print(tn, 2);
+                Serial.print("  Tv ");
+                Serial.println(tv, 2);
+                Serial.println("usage: pid <kp> <tn> <tv>");
+            }
+            else {
+                heater::setTunings(atof(argument), atof(a2), atof(a3));
+            }
+        }
+        else if (strcasecmp(command, "drybench") == 0) {
+            if (argument == nullptr) {
+                Serial.print("dry-fire interlock is ");
+                Serial.println(heater::benchOverride() ? "OVERRIDDEN" : "active");
+                Serial.println("usage: drybench 0 | 1   (1 bypasses it - NO ELEMENT FITTED)");
+            }
+            else {
+                heater::setBenchOverride(atoi(argument) != 0);
+            }
+        }
+        else if (strcasecmp(command, "permittest") == 0) {
+            heater::testPermitExpiry();
         }
         else if (strcasecmp(command, "pump") == 0) {
             if (argument == nullptr) {

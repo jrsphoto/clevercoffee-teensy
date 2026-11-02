@@ -28,6 +28,7 @@
 #include "flowHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
+#include "heaterHandler.h"
 #include "i2cHandler.h"
 #include "pumpHandler.h"
 #include "safetyHandler.h"
@@ -168,6 +169,7 @@ namespace {
         switches::printStatus();
         weight::printStatus();
         pump::printStatus();
+        heater::printStatus();
         encoder::printStatus();
         comms::printStatus();
         bringupConsolePrintHelp();
@@ -219,6 +221,7 @@ void setup() {
     switches::init();
     weight::init();
     pump::init();
+    heater::init();
     comms::init();
 
     if (encoder::init()) {
@@ -262,7 +265,6 @@ void loop() {
     // loopFlow();           // DM60 pulse counter -> volume
     // loopEncoder();        // Duppa gestures + RGB machine status
     // handleMachineState(); // brew / steam / hot water / standby
-    // loopPid();            // heater PID
     // loopComms();          // telemetry out, commands in, non-blocking
 
     // Both RTDs. Latches the machine safe on a boiler sensor fault, an
@@ -283,6 +285,10 @@ void loop() {
     // Pump speed: services the ramp AND the command-expiry rule, so it has to
     // run every pass even when the pump is idle - that is what catches a
     // wedged caller that stopped re-asserting its speed.
+    // Boiler PID. Computes continuously; the output is gated and the ISR
+    // refuses to energise on a permit this does not keep refreshing.
+    heater::loop();
+
     pump::loop();
 
     // HX711 load cell. Non-blocking: drives its own stabilise/tare sequence
