@@ -60,6 +60,44 @@ safety. A touch on its screen is a request sent to the Teensy, which decides.
 is deliberately non critical: if it drops, the Teensy runs the machine on its own.
 Nothing in the control path asks whether the display is present.
 
+## The two resets stay separate
+
+Each board has its own reset, and they are deliberately not tied together.
+
+**The display must never be able to reset the controller.** This is not a
+preference, it is the whole point of the split. The ESP32 runs WiFi, a web
+server and MQTT, which are the parts most likely to crash, hang, or need
+rebooting. If its reset were wired to the Teensy then a wedged WiFi stack, an
+over the air update, or somebody pressing the reset button on the back of the
+display would abandon a shot mid pull and drop the heater. Worse, a display
+stuck in a crash loop would become a machine stuck in a reboot loop. Every
+reason for separating the processors argues against that wire.
+
+**The reverse is not needed either.** The display holds no state worth
+preserving; everything it shows comes from telemetry. It already handles the
+controller disappearing and returning, which is tested regularly because every
+Teensy reflash does exactly that.
+
+What exists instead is a one way, advisory software notification. The Teensy
+sends a Hello frame when it boots. The head treats that as "the controller
+restarted", repaints the screen, and does not carry stale numbers across the
+gap. It costs nothing, cannot wedge anything, and matches the authority model:
+the controller informs the display, never the reverse.
+
+Two things worth knowing:
+
+* If both boards share a power rail, a brownout resets both regardless of what
+  is wired. That is physics rather than design, so the firmware has to handle a
+  simultaneous restart gracefully, and does.
+* The display module used here is an all in one board whose EN pin is not
+  brought out, so a hardware reset line from the Teensy is not an option anyway.
+  If a way to reboot a wedged display is ever wanted, it should be a command
+  sent over the link that makes the head restart itself. That keeps the
+  direction right and needs no extra wire.
+
+If you are reading this because you are about to add a single reset button that
+resets both boards: that is the thing this section exists to argue against.
+
 ## Safety stance
 
 There are no external fail safe relays. The Teensy is the only active line of

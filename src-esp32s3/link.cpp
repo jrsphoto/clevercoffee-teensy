@@ -15,6 +15,10 @@
 namespace machinelink {
 
     namespace {
+        uint32_t hellos = 0;
+    }
+
+    namespace {
 
         linkproto::Parser parser;
         State current;
@@ -112,13 +116,20 @@ namespace machinelink {
                     break;
 
                 case linkproto::FrameType::Hello:
-                    Serial.printf("link hello: %s\n", parser.body());
+                    // The controller booted. Everything shown until now came
+                    // from the previous instance of it.
+                    ++hellos;
+                    Serial.printf("link hello (controller restarted): %s\n", parser.body());
                     break;
 
                 default:
                     break;
             }
         }
+    }
+
+    uint32_t helloCount() {
+        return hellos;
     }
 
     const State& state() {

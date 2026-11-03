@@ -78,6 +78,21 @@ namespace machinelink {
     /** @brief Frames rejected for a bad checksum. Climbing = electrical noise. */
     uint32_t badChecksums();
 
+    /**
+     * @brief How many times the controller has announced itself.
+     *
+     * The Teensy sends a Hello when it boots, so this incrementing means the
+     * CONTROLLER restarted while this board kept running. Worth noticing: every
+     * value on screen came from the old instance and the counters have gone
+     * back to zero, so the display should repaint rather than carry stale
+     * numbers across the gap.
+     *
+     * This is the only coupling between the two resets, and it is deliberately
+     * one-way and advisory. See the note in README on why the display must
+     * never be able to reset the controller.
+     */
+    uint32_t helloCount();
+
     /** @brief Ask the Teensy to do something. It may refuse. */
     void sendCommand(const char* body);
 

@@ -287,25 +287,27 @@ namespace display {
             lcd.fillScreen(kBg);
             drawHeader("ARGENTA SME");
 
-            drawCaption(20, 38, "BOILER");
-            drawCaption(300, 38, "TARGET");
-            drawCaption(300, 86, "GROUP");
+            // Captions sit roughly 20 px above their value. The caption font
+            // is about 14 px tall, so anything less than that and the two
+            // collide - which is exactly what 38/52 did.
+            drawCaption(20, 40, "BOILER");
+            drawCaption(300, 40, "TARGET");
+            drawCaption(300, 96, "GROUP");
 
-            // Heat bar, sitting BELOW the right-hand column rather than
-            // running underneath it. The first version put the bar at y=132
-            // and the group temperature at y=118, so the group value was drawn
-            // on top of the bar.
-            lcd.drawRect(20, 138, 440, 16, kRule);
-            drawCaption(20, 158, "HEATER");
+            // Heat bar below the right-hand column rather than underneath it.
+            // An earlier version put the bar at y=132 with the group value at
+            // y=118, so the value was drawn on top of the bar.
+            lcd.drawRect(20, 150, 440, 16, kRule);
+            drawCaption(20, 172, "HEATER");
 
-            lcd.drawFastHLine(0, 182, kW, kRule);
+            lcd.drawFastHLine(0, 192, kW, kRule);
 
-            drawCaption(24, 190, "WEIGHT");
-            drawCaption(184, 190, "FLOW");
-            drawCaption(344, 190, "PUMP");
+            drawCaption(24, 200, "WEIGHT");
+            drawCaption(184, 200, "FLOW");
+            drawCaption(344, 200, "PUMP");
 
-            lcd.drawFastVLine(160, 186, 76, kRule);
-            lcd.drawFastVLine(320, 186, 76, kRule);
+            lcd.drawFastVLine(160, 196, 70, kRule);
+            lcd.drawFastVLine(320, 196, 70, kRule);
 
             lcd.drawFastHLine(0, kH - kFooterH, kW, kRule);
         }
@@ -379,7 +381,7 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--.-");
             }
 
-            drawField(20, 52, 230, kFontBig, (live && st.boilerOk) ? kAccent : kAlarm, buf, lastBoiler, sizeof(lastBoiler));
+            drawField(20, 60, 230, kFontBig, (live && st.boilerOk) ? kAccent : kAlarm, buf, lastBoiler, sizeof(lastBoiler));
 
             // Unit immediately after the digits. It was at a fixed x=236,
             // which left it marooned a hundred pixels clear of a four-glyph
@@ -387,11 +389,11 @@ namespace display {
             lcd.setFont(kFontValue);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.setCursor(152, 72);
+            lcd.setCursor(152, 82);
             lcd.print("C");
 
             snprintf(buf, sizeof(buf), "%.1f", live ? st.setpointC : 0.0f);
-            drawField(300, 52, 170, kFontValue, kValue, buf, lastSetpoint, sizeof(lastSetpoint));
+            drawField(300, 60, 170, kFontValue, kValue, buf, lastSetpoint, sizeof(lastSetpoint));
 
             if (live && st.groupOk) {
                 snprintf(buf, sizeof(buf), "%.1f", st.groupC);
@@ -400,7 +402,7 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--.-");
             }
 
-            drawField(300, 100, 170, kFontValue, (live && st.groupOk) ? kValue : kDim, buf, lastGroup, sizeof(lastGroup));
+            drawField(300, 116, 170, kFontValue, (live && st.groupOk) ? kValue : kDim, buf, lastGroup, sizeof(lastGroup));
 
             // Heater bar. Width is the duty, colour says whether it is allowed
             // to be doing anything.
@@ -410,17 +412,17 @@ namespace display {
             if (barW != lastHeatBar) {
                 lastHeatBar = barW;
 
-                lcd.fillRect(22, 140, 436, 12, kBg);
+                lcd.fillRect(22, 152, 436, 12, kBg);
 
                 if (barW > 0) {
-                    lcd.fillRect(22, 140, barW, 12, st.heaterEnabled ? kHeat : kDim);
+                    lcd.fillRect(22, 152, barW, 12, st.heaterEnabled ? kHeat : kDim);
                 }
 
-                lcd.fillRect(100, 156, 90, 18, kBg);
+                lcd.fillRect(100, 170, 90, 18, kBg);
                 lcd.setFont(kFontCaption);
                 lcd.setTextSize(1);
                 lcd.setTextColor(st.heaterEnabled ? kHeat : kDim, kBg);
-                lcd.setCursor(100, 156);
+                lcd.setCursor(100, 170);
                 lcd.printf("%d%%", duty);
             }
 
@@ -432,27 +434,27 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--");
             }
 
-            drawField(24, 206, 134, kFontValue, (live && st.weightOk) ? (st.weightCalibrated ? kValue : kHeat) : kDim,
+            drawField(24, 220, 134, kFontValue, (live && st.weightOk) ? (st.weightCalibrated ? kValue : kHeat) : kDim,
                       buf, lastWeight, sizeof(lastWeight));
 
             lcd.setFont(kFontCaption);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.fillRect(24, 240, 130, 16, kBg);
-            lcd.setCursor(24, 240);
+            lcd.fillRect(24, 252, 130, 16, kBg);
+            lcd.setCursor(24, 252);
             lcd.print(st.weightCalibrated ? "grams" : "raw counts");
 
             snprintf(buf, sizeof(buf), "%.1f", live ? st.flowMlPerSec : 0.0f);
-            drawField(184, 206, 134, kFontValue, live ? kValue : kDim, buf, lastFlow, sizeof(lastFlow));
+            drawField(184, 220, 134, kFontValue, live ? kValue : kDim, buf, lastFlow, sizeof(lastFlow));
             lcd.setFont(kFontCaption);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.fillRect(184, 240, 130, 16, kBg);
-            lcd.setCursor(184, 240);
+            lcd.fillRect(184, 252, 130, 16, kBg);
+            lcd.setCursor(184, 252);
             lcd.printf("ml/s   %.0f ml", live ? st.volumeMl : 0.0f);
 
             snprintf(buf, sizeof(buf), "%.0f%%", live ? st.pumpPercent : 0.0f);
-            drawField(344, 206, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
+            drawField(344, 220, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
 
             // Footer status strip.
             uint16_t col = kDim;
