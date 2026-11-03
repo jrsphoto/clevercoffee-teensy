@@ -11,7 +11,9 @@
 #include <i2cEncoderLibV2.h>
 
 #include "hardware/pinmapping.h"
+#include "heaterHandler.h"
 #include "safetyHandler.h"
+#include "shotHandler.h"
 #include "tempHandler.h"
 
 namespace encoder {
@@ -22,6 +24,18 @@ namespace encoder {
         bool present = false;
 
         int32_t lastCounter = 0;
+
+        /**
+         * Button gesture tracking. The DuPPa reports press, release and double
+         * press; long press and the single/double distinction are derived here.
+         */
+        constexpr uint32_t kLongPressMs = 600;
+        constexpr uint32_t kDoublePressWindowMs = 550; // matches writeDoublePushPeriod(50)
+
+        uint32_t pressedAtMs = 0;
+        bool singlePending = false;
+        uint32_t singleDeadlineMs = 0;
+        Gesture pendingGesture = Gesture::None;
         int32_t pendingRotation = 0;
 
         // Sentinel so the first update always writes, even if the computed
@@ -35,7 +49,15 @@ namespace encoder {
          * states that exist today are: faulted, heating toward setpoint, and
          * idle/ready. Brew and steam join this when those handlers land.
          */
+        /**
+         * Colour for the selected shot profile, shown only when nothing more
+         * important needs saying.
+         */
+        uint32_t profileColor = kColorReady;
+
         uint32_t statusColor() {
+            // Safety first, always. A profile colour must never be able to
+            // mask a fault, so these come before anything cosmetic.
             if (safety::isFaulted()) {
                 return kColorError;
             }
@@ -44,10 +66,18 @@ namespace encoder {
                 return kColorError;
             }
 
-            // No PID yet, so "ready" simply means the sensor is healthy and the
-            // machine is not faulted. Once the setpoint exists this becomes the
-            // heating/ready split the ESP32 build used.
-            return kColorReady;
+            if (shot::isRunning()) {
+                return kColorActive;
+            }
+
+            // Heating hard enough to be worth saying so. Below this the PID is
+            // just trimming and the machine is effectively ready.
+            if (heater::enabled() && heater::dutyPercent() > 10.0) {
+                return kColorHeating;
+            }
+
+            // Nothing to report, so show which profile is selected.
+            return profileColor;
         }
 
         void updateStatusColor() {
@@ -139,18 +169,52 @@ namespace encoder {
         }
 
         if (dev->readStatus(i2cEncoderLibV2::PUSHP)) {
-            Serial.println("encoder: button pressed");
+            pressedAtMs = millis();
         }
 
         if (dev->readStatus(i2cEncoderLibV2::PUSHR)) {
-            Serial.println("encoder: button released");
+            const uint32_t heldMs = millis() - pressedAtMs;
+
+            if (heldMs >= kLongPressMs) {
+                pendingGesture = Gesture::Long;
+                singlePending = false;
+
+                Serial.println("encoder: long press");
+            }
+            else {
+                // Hold the single back until the double-press window closes.
+                // The first press of a double is indistinguishable from a
+                // single at this moment, so acting now would fire profile 1
+                // every time somebody asked for profile 2.
+                singlePending = true;
+                singleDeadlineMs = millis() + kDoublePressWindowMs;
+            }
         }
 
         if (dev->readStatus(i2cEncoderLibV2::PUSHD)) {
-            Serial.println("encoder: double-press");
+            // The double arrived, so the single that was waiting was its
+            // first half. Discard it.
+            singlePending = false;
+            pendingGesture = Gesture::Double;
+
+            Serial.println("encoder: double press");
+        }
+
+        if (singlePending && static_cast<int32_t>(millis() - singleDeadlineMs) >= 0) {
+            singlePending = false;
+            pendingGesture = Gesture::Short;
+
+            Serial.println("encoder: short press");
         }
 
         updateStatusColor();
+    }
+
+    Gesture takeGesture() {
+        const Gesture g = pendingGesture;
+        pendingGesture = Gesture::None;
+
+        return g;
     }
 
     bool isPresent() {
@@ -166,6 +230,10 @@ namespace encoder {
 
     int32_t counter() {
         return lastCounter;
+    }
+
+    void setProfileColor(const uint32_t rgb) {
+        profileColor = rgb;
     }
 
     void setLedColor(const uint32_t rgb) {

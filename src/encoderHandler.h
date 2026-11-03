@@ -70,6 +70,38 @@ namespace encoder {
     /** @brief Current absolute counter value. */
     int32_t counter();
 
+    /**
+     * @brief Set the colour shown when the machine is idle and well.
+     *
+     * The shot profile owns this, so the knob says which profile is selected
+     * without anyone reading a screen. SAFETY COLOURS STILL WIN: a fault or an
+     * unhealthy sensor shows red regardless, and heating shows amber. A profile
+     * colour must never be able to hide a fault.
+     */
+    void setProfileColor(uint32_t rgb);
+
+    /**
+     * @enum Gesture
+     * @brief A completed button gesture, consumed once.
+     */
+    enum class Gesture : uint8_t {
+        None,
+        Short,  // one press
+        Double, // two within the double-press window
+        Long,   // held
+    };
+
+    /**
+     * @brief Take the pending gesture, clearing it.
+     *
+     * A SHORT press is deliberately reported late - only once the double-press
+     * window has passed without a second press. It cannot be otherwise: the
+     * first press of a double looks exactly like a single press at the moment
+     * it happens, so acting immediately would start a profile-1 shot every
+     * time somebody asked for profile 2.
+     */
+    Gesture takeGesture();
+
     /** @brief Print encoder state for the console. */
     void printStatus();
 

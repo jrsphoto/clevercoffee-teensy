@@ -287,13 +287,21 @@ namespace audio {
         }
 
         /**
-         * @brief Map 0-100 onto the codec's DAC volume register.
+         * Total span of the volume control, in decibels below 0 dB.
          *
-         * Register 0x32 is half a decibel per step, so stepping it one-for-one
-         * with the percentage gives 0 dB at 100 and about -50 dB at 1. Half-dB
-         * steps are close enough to how hearing works that this feels like a
-         * normal volume control, which a linear amplitude scale would not.
+         * NOT the codec's full range, deliberately. Register 0x32 is half a
+         * decibel per step, so mapping percent one-for-one gave -50 dB at 1%
+         * and -30 dB at 40% - which on this speaker is silence. The whole
+         * usable range was squeezed into the top fifth of the control, and
+         * turning it down a few steps made the machine seem broken rather than
+         * quiet.
+         *
+         * 24 dB spreads the useful part across the whole travel: 100% is 0 dB,
+         * 50% is about -12 dB and still clearly audible, and 0% mutes.
          */
+        constexpr float kVolumeSpanDb = 24.0f;
+
+        /** @brief Map 0-100 onto the codec's DAC volume register. */
         void applyVolume() {
             if (volume == 0) {
                 es8311::setMute(true);
@@ -302,7 +310,12 @@ namespace audio {
             }
 
             es8311::setMute(false);
-            es8311::setVolume(static_cast<uint8_t>(es8311::kVolume0dB - (100 - volume)));
+
+            // Register steps are 0.5 dB, hence the doubling.
+            const float belowFullDb = kVolumeSpanDb * (1.0f - (static_cast<float>(volume) / 100.0f));
+            const int steps = static_cast<int>((belowFullDb * 2.0f) + 0.5f);
+
+            es8311::setVolume(static_cast<uint8_t>(es8311::kVolume0dB - steps));
         }
 
     } // namespace

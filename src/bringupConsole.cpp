@@ -18,6 +18,7 @@
 #include "i2cHandler.h"
 #include "pumpHandler.h"
 #include "safetyHandler.h"
+#include "shotHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
@@ -73,6 +74,10 @@ namespace {
         Serial.println("  permittest        stall the loop; the heater must drop (safety test)");
         Serial.println("  ulntest           verify the ULN2003 output stage actually inverts");
         Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
+        Serial.println("  shot              brew sequence state and settings");
+        Serial.println("  shot start|stop   run or abort a shot");
+        Serial.println("  profile <1|2>     select a shot profile (encoder: 1 press / 2 presses)");
+        Serial.println("  shotset <k> <v>   pre/preamt/soak/brew/grams/ml/maxms");
         Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
         Serial.println("  pumpshed <0|1>    heater/pump load-shed interlock");
         Serial.println("  brew              brew switch: raw level, debounced state, sense");
@@ -380,6 +385,77 @@ namespace {
         }
         else if (strcasecmp(command, "permittest") == 0) {
             heater::testPermitExpiry();
+        }
+        else if (strcasecmp(command, "shot") == 0) {
+            if (argument == nullptr) {
+                shot::printStatus();
+            }
+            else if (strcasecmp(argument, "start") == 0) {
+                shot::start();
+            }
+            else if (strcasecmp(argument, "stop") == 0) {
+                shot::stop("stopped by hand");
+            }
+            else {
+                Serial.println("usage: shot [start|stop]");
+            }
+        }
+        else if (strcasecmp(command, "profile") == 0) {
+            if (argument == nullptr) {
+                Serial.print("profile ");
+                Serial.print(shot::profileIndex() + 1);
+                Serial.print(" - ");
+                Serial.println(shot::profile().name);
+                Serial.println("usage: profile <1|2>     (encoder: one press = 1, two = 2)");
+            }
+            else {
+                shot::selectProfile(static_cast<uint8_t>(atoi(argument) - 1));
+            }
+        }
+        else if (strcasecmp(command, "shotset") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+
+            if (argument == nullptr || a2 == nullptr) {
+                Serial.println("usage: shotset <key> <value>");
+                Serial.println("  pre <ms>      pre-infusion duration   preamt <%>  its pump speed");
+                Serial.println("  soak <ms>     soak duration           brew <%>    extraction speed");
+                Serial.println("  grams <g>     stop weight (0 = off)   ml <ml>     stop volume (0 = off)");
+                Serial.println("  maxms <ms>    hard time limit, 5000-180000, cannot be disabled");
+                Serial.println("  switch <0|1>  let the brew switch start and stop shots");
+            }
+            else if (strcasecmp(argument, "pre") == 0) {
+                shot::setPreInfuse(static_cast<uint32_t>(atol(a2)), 0.0);
+                Serial.println("set - re-issue 'shotset preamt <%>' to set its speed");
+            }
+            else if (strcasecmp(argument, "preamt") == 0) {
+                shot::setPreInfuse(0, atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "soak") == 0) {
+                shot::setPreinfusionPause(static_cast<uint32_t>(atol(a2)));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "brew") == 0) {
+                shot::setBrewPercent(atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "grams") == 0) {
+                shot::setTargetGrams(atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "ml") == 0) {
+                shot::setTargetMl(atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "switch") == 0) {
+                shot::setSwitchControlEnabled(atoi(a2) != 0);
+            }
+            else if (strcasecmp(argument, "maxms") == 0) {
+                shot::setMaxBrewMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else {
+                Serial.println("unknown key - 'shotset' alone lists them");
+            }
         }
         else if (strcasecmp(command, "pump") == 0) {
             if (argument == nullptr) {
