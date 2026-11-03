@@ -37,6 +37,17 @@ namespace {
      */
     constexpr uint32_t kLinkBaud = 115200;
 
+    /**
+     * How long after this board boots a controller Hello is treated as part of
+     * the same power-up rather than as a separate controller restart.
+     *
+     * The Teensy takes a few seconds to reach its Hello: a courtesy wait for a
+     * USB console, then sensor init and the boot self check. Twenty seconds
+     * covers that comfortably while still being far shorter than any real
+     * interval between a power-up and a later reboot.
+     */
+    constexpr uint32_t kColdStartGraceMs = 20000;
+
     constexpr uint32_t kHeartbeatMs = 2000;
     uint32_t lastHeartbeat = 0;
 
@@ -213,7 +224,9 @@ void loop() {
     audio::loop();
 
     // A controller restart means every value on screen came from the previous
-    // instance of it. Repaint rather than carry stale numbers across the gap.
+    // instance of it. Repaint rather than carry stale numbers across the gap,
+    // and play the startup sound so a reboot is audible from across the room -
+    // the machine restarting is worth noticing whichever processor did it.
     static uint32_t lastHello = 0;
 
     if (const uint32_t hellos = machinelink::helloCount(); hellos != lastHello) {
@@ -221,6 +234,15 @@ void loop() {
 
         if (lcdReady) {
             display::invalidate();
+        }
+
+        // Do NOT replay on a cold start. Powering the machine on boots both
+        // boards, so the Teensy's first Hello arrives a few seconds after this
+        // board already played the sound at its own boot - chiming twice for
+        // one power-up. Past that window a Hello means the controller alone
+        // restarted, which is exactly the event worth hearing.
+        if (millis() > kColdStartGraceMs && !audio::isPlaying()) {
+            audio::playStartupSound();
         }
 
         Serial.println("controller restarted - repainting");
