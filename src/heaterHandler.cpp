@@ -174,7 +174,7 @@ namespace heater {
             // already latches a fault on this, which gate 2 would then catch -
             // but the heater should not depend on another module having
             // reacted first.
-            if (temps::boilerC() >= temps::kBoilerOverTempC) {
+            if (temps::boilerC() >= temps::overTempLimitC()) {
                 gateReason = "boiler over temperature";
 
                 return false;
@@ -334,7 +334,7 @@ namespace heater {
         // Clamped well under the over-temperature limit. A setpoint above it
         // would mean the PID asking for heat the gates must then refuse -
         // the machine fighting itself, and confusing to debug.
-        const double ceiling = temps::kBoilerOverTempC - 5.0;
+        const double ceiling = temps::overTempLimitC() - 5.0;
 
         if (celsius < 20.0 || celsius > ceiling) {
             Serial.print("heater: REFUSED - setpoint must be 20 to ");

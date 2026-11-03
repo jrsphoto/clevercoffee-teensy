@@ -147,7 +147,7 @@ namespace temps {
             boilerOk = true;
             boilerLastGoodMs = millis();
 
-            if (boilerReading >= kBoilerOverTempC) {
+            if (boilerReading >= overTempLimitC()) {
                 safety::latchFault(FaultCode::OverTemperature, "boiler over hard limit");
             }
         }
@@ -255,6 +255,60 @@ namespace temps {
             groupSensor->dumpRegisters();
             groupSensor->printDiagnostics();
         }
+    }
+
+    namespace {
+
+        /** Starts at the design limit; only ever moved down, never up. */
+        double activeOverTempC = kBoilerOverTempC;
+
+    } // namespace
+
+    double overTempLimitC() {
+        return activeOverTempC;
+    }
+
+    bool setOverTempLimitC(const double celsius) {
+        // Refuse upward. The whole value of a hard limit is that nothing at
+        // runtime can relax it, so this is the one direction that must be
+        // impossible rather than merely discouraged.
+        if (celsius > kBoilerOverTempC) {
+            Serial.print("temps: REFUSED - the over-temperature limit cannot be raised above ");
+            Serial.print(kBoilerOverTempC, 1);
+            Serial.println(" C");
+
+            return false;
+        }
+
+        // Below this a PT100 in a room would be reading an impossible value
+        // anyway, so the limit could never be satisfied and the machine would
+        // simply be bricked.
+        if (celsius < -20.0) {
+            Serial.println("temps: REFUSED - implausibly low limit");
+
+            return false;
+        }
+
+        activeOverTempC = celsius;
+
+        Serial.print("temps: over-temperature limit now ");
+        Serial.print(activeOverTempC, 1);
+        Serial.println(" C");
+
+        if (celsius < kBoilerOverTempC) {
+            Serial.println("       LOWERED FOR TESTING - 'overtempreset' restores it.");
+            Serial.println("       Not persisted; a reboot restores it too.");
+        }
+
+        return true;
+    }
+
+    void resetOverTempLimit() {
+        activeOverTempC = kBoilerOverTempC;
+
+        Serial.print("temps: over-temperature limit restored to ");
+        Serial.print(activeOverTempC, 1);
+        Serial.println(" C");
     }
 
 } // namespace temps
