@@ -32,6 +32,7 @@
 #include "i2cHandler.h"
 #include "pumpHandler.h"
 #include "safetyHandler.h"
+#include "shotHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
 #include "updateMode.h"
@@ -170,6 +171,7 @@ namespace {
         weight::printStatus();
         pump::printStatus();
         heater::printStatus();
+        shot::printStatus();
         encoder::printStatus();
         comms::printStatus();
         bringupConsolePrintHelp();
@@ -222,6 +224,7 @@ void setup() {
     weight::init();
     pump::init();
     heater::init();
+    shot::init();
     comms::init();
 
     if (encoder::init()) {
@@ -264,7 +267,6 @@ void loop() {
     // loopPressure();       // brew pressure
     // loopFlow();           // DM60 pulse counter -> volume
     // loopEncoder();        // Duppa gestures + RGB machine status
-    // handleMachineState(); // brew / steam / hot water / standby
     // loopComms();          // telemetry out, commands in, non-blocking
 
     // Both RTDs. Latches the machine safe on a boiler sensor fault, an
@@ -289,6 +291,10 @@ void loop() {
     // refuses to energise on a permit this does not keep refreshing.
     heater::loop();
     heater::serviceOutputDutyMeasurement();
+
+    // Brew sequence. Re-asserts the pump every pass on purpose, so a hang
+    // here lets the pump's own command expiry stop it.
+    shot::loop();
 
     pump::loop();
 
