@@ -188,4 +188,29 @@ namespace display {
      */
     void drawMachineScreen();
 
+    /**
+     * @enum Page
+     * @brief Which screen is showing.
+     */
+    enum class Page : uint8_t {
+        Main,  // the readout you watch while pulling a shot
+        Setup, // adjustable settings, reached by the gear
+    };
+
+    /** @brief Current page. */
+    Page page();
+
+    /** @brief Switch page and repaint everything. */
+    void setPage(Page p);
+
+    /**
+     * @brief Handle a touch. Call from the touch poll.
+     *
+     * @return true if the touch hit something and was consumed
+     */
+    bool handleTouch(int x, int y);
+
+    /** @brief Force a full repaint, chrome included. */
+    void invalidate();
+
 } // namespace display

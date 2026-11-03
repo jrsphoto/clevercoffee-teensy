@@ -11,6 +11,7 @@
 
 #include "encoderHandler.h"
 #include "flowHandler.h"
+#include "heaterHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
@@ -88,11 +89,14 @@ namespace comms {
             // because the head must never label raw counts as grams - a
             // plausible wrong weight on screen is worse than no weight.
             snprintf(body, sizeof(body),
-                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,st=%s,flt=%s",
+                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,sp=%.1f,hd=%.0f,hen=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,st=%s,flt=%s",
                      temps::boilerC(),
                      temps::groupC(),
                      temps::boilerHealthy() ? 1 : 0,
                      temps::groupHealthy() ? 1 : 0,
+                     heater::setpointC(),
+                     heater::dutyPercent(),
+                     heater::enabled() ? 1 : 0,
                      flow::rateMlPerSec(),
                      flow::totalMl(),
                      weight::grams(),
@@ -161,6 +165,34 @@ namespace comms {
                 Serial1.flush();
 
                 updateMode::requestAndReboot(&reason); // does not return
+            }
+
+            if (parser.get("setpoint", value, sizeof(value))) {
+                // heater::setSetpointC() does its own range check and refuses
+                // anything near the over-temperature limit, so the head cannot
+                // ask for something dangerous even if its UI is wrong.
+                const double before = heater::setpointC();
+                heater::setSetpointC(atof(value));
+
+                ack("setpoint", heater::setpointC() != before || atof(value) == before, "ok");
+
+                return;
+            }
+
+            if (parser.get("heater", value, sizeof(value))) {
+                const bool want = (atoi(value) != 0);
+                const bool done = heater::setEnabled(want);
+
+                ack("heater", done, done ? "ok" : heater::blockedBy());
+
+                return;
+            }
+
+            if (parser.get("tare", value, sizeof(value))) {
+                weight::startTare();
+                ack("tare", true, "ok");
+
+                return;
             }
 
             if (parser.get("ping", value, sizeof(value))) {

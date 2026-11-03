@@ -40,6 +40,8 @@ namespace machinelink {
             current.volumeMl = floatField("vol", current.volumeMl);
             current.weightG = floatField("wt", current.weightG);
             current.pumpPercent = floatField("pmp", current.pumpPercent);
+            current.setpointC = floatField("sp", current.setpointC);
+            current.heaterDuty = floatField("hd", current.heaterDuty);
 
             char buf[24];
 
@@ -53,6 +55,10 @@ namespace machinelink {
 
             if (parser.get("wok", buf, sizeof(buf))) {
                 current.weightOk = (atoi(buf) != 0);
+            }
+
+            if (parser.get("hen", buf, sizeof(buf))) {
+                current.heaterEnabled = (atoi(buf) != 0);
             }
 
             if (parser.get("wcal", buf, sizeof(buf))) {
