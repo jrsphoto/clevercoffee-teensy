@@ -98,262 +98,544 @@ namespace display {
         int32_t x = 0;
         int32_t y = 0;
 
-        if (!lcd.getTouch(&x, &y)) {
-            return;
+        const bool touching = lcd.getTouch(&x, &y);
+
+        // Act on the RELEASE-to-press edge only. Without this a finger resting
+        // on "+" would repeat at the loop rate, which for a setpoint button
+        // means several degrees before you lift off.
+        static bool wasTouching = false;
+
+        if (touching && !wasTouching) {
+            touchCount++;
+
+            if (handleTouch(static_cast<int>(x), static_cast<int>(y))) {
+                // A consumed touch usually changes something the next frame
+                // will show, so repaint promptly rather than waiting.
+                drawMachineScreen();
+            }
         }
 
-        touchCount++;
+        wasTouching = touching;
+    }
 
-        // Only redraw the readout when the position actually changes, so a
-        // resting finger does not flicker the text.
-        if (x != lastTouchX || y != lastTouchY) {
-            lastTouchX = x;
-            lastTouchY = y;
+    // ======================= UI =====================================
+    //
+    // Two pages: a shot readout and a settings page, switched by the gear in
+    // the header. 480x320 landscape.
+    //
+    // Everything is drawn in two parts. The CHROME - headings, rules, button
+    // outlines - is painted once when a page is entered, because it never
+    // changes and repainting it every frame is what makes a display flicker.
+    // Only the VALUES are repainted, and only when they differ from what is
+    // already on screen. That is why each one keeps a "last drawn" copy.
 
-            lcd.fillRect(0, statusY, lcd.width(), 14, TFT_BLACK);
-            lcd.setCursor(8, statusY);
-            lcd.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
-            lcd.printf("touch: x=%3d y=%3d   count=%lu", static_cast<int>(x), static_cast<int>(y), static_cast<unsigned long>(touchCount));
+    namespace {
 
-            Serial.printf("touch x=%d y=%d\n", static_cast<int>(x), static_cast<int>(y));
+        constexpr int kW = 480;
+        constexpr int kH = 320;
+
+        constexpr int kHeaderH = 30;
+        constexpr int kFooterH = 26;
+
+        // Palette. Dark, because this sits on a machine in a kitchen and a
+        // white screen at 6am is unkind.
+        constexpr uint16_t kBg = 0x0000;         // black
+        constexpr uint16_t kPanel = 0x18E3;      // very dark grey
+        constexpr uint16_t kRule = 0x39E7;       // divider grey
+        constexpr uint16_t kLabel = 0x8410;      // dim grey for captions
+        constexpr uint16_t kValue = 0xFFFF;      // white
+        constexpr uint16_t kAccent = 0x07FF;     // cyan, the boiler
+        constexpr uint16_t kReady = 0x07E0;      // green
+        constexpr uint16_t kHeat = 0xFD20;       // amber
+        constexpr uint16_t kAlarm = 0xF800;      // red
+        constexpr uint16_t kDim = 0x4208;        // disabled
+
+        Page currentPage = Page::Main;
+        bool chromeDrawn = false;
+
+        // Last-drawn values, so a field is only repainted when it changes.
+        char lastBoiler[12] = "";
+        char lastGroup[12] = "";
+        char lastSetpoint[12] = "";
+        char lastWeight[14] = "";
+        char lastFlow[14] = "";
+        char lastPump[10] = "";
+        char lastStatus[28] = "";
+        int lastHeatBar = -1;
+        int lastLink = -1;
+        int lastHeaterOn = -1;
+
+        /** Reset every cached value so the next pass repaints the lot. */
+        void forgetValues() {
+            lastBoiler[0] = lastGroup[0] = lastSetpoint[0] = '\0';
+            lastWeight[0] = lastFlow[0] = lastPump[0] = lastStatus[0] = '\0';
+            lastHeatBar = -1;
+            lastLink = -1;
+            lastHeaterOn = -1;
         }
 
-        // Dot inside the box only, so the readout and header stay legible.
-        if (y > (boxTop + 2) && y < (boxBottom - 2)) {
-            lcd.fillCircle(x, y, 3, TFT_ORANGE);
+        // Proper fonts rather than the built-in 5x7 bitmap scaled up, which is
+        // what made the first version look like a debug screen. Font7 is a
+        // seven-segment face and is digits-only, which suits a temperature and
+        // suits nothing else.
+        const lgfx::IFont* const kFontBig = &fonts::Font7;            // boiler
+        const lgfx::IFont* const kFontValue = &fonts::FreeSansBold18pt7b;
+        const lgfx::IFont* const kFontMid = &fonts::FreeSansBold12pt7b;
+        const lgfx::IFont* const kFontCaption = &fonts::FreeSans9pt7b;
+
+        void drawCaption(const int x, const int y, const char* text) {
+            lcd.setFont(kFontCaption);
+            lcd.setTextSize(1);
+            lcd.setTextColor(kLabel, kBg);
+            lcd.setCursor(x, y);
+            lcd.print(text);
         }
-    }
 
-    void setRotation(const uint8_t rot) {
-        currentRotation = rot & 3;
-        lcd.setRotation(currentRotation);
-        lastTouchX = -1;
-        lastTouchY = -1;
-        showBringupScreen();
-    }
+        /**
+         * @brief Draw a value in a fixed-width cell, only if it changed.
+         *
+         * The cell is cleared first rather than relying on the text background,
+         * because a shorter value would otherwise leave the tail of the longer
+         * one behind.
+         */
+        void drawField(const int x, const int y, const int w, const lgfx::IFont* font,
+                       const uint16_t colour, const char* text, char* last, const size_t lastLen) {
+            if (strncmp(text, last, lastLen) == 0) {
+                return;
+            }
 
-    void toggleInvert() {
-        inverted = !inverted;
-        lcd.invertDisplay(inverted);
-        showBringupScreen();
-    }
+            snprintf(last, lastLen, "%s", text);
 
-    void setBrightness(const uint8_t level) {
-        lcd.setBrightness(level);
-    }
+            lcd.setFont(font);
+            lcd.setTextSize(1);
+
+            // Clear with the FONT's height rather than a guess. Proportional
+            // fonts also mean a shorter value does not cover a longer one, so
+            // the cell is wiped rather than overwritten.
+            lcd.fillRect(x, y, w, lcd.fontHeight(), kBg);
+
+            lcd.setTextColor(colour, kBg);
+            lcd.setCursor(x, y);
+            lcd.print(text);
+        }
+
+        /** @brief A rounded button with a label, used on the setup page. */
+        void drawButton(const int x, const int y, const int w, const int h,
+                        const char* label, const uint16_t edge, const uint16_t textCol) {
+            lcd.fillRoundRect(x, y, w, h, 6, kPanel);
+            lcd.drawRoundRect(x, y, w, h, 6, edge);
+
+            lcd.setFont(kFontMid);
+            lcd.setTextSize(1);
+            lcd.setTextColor(textCol, kPanel);
+
+            // Centre properly: proportional fonts make a character count a bad
+            // estimate of width.
+            const int tw = lcd.textWidth(label);
+            lcd.setCursor(x + (w - tw) / 2, y + (h - lcd.fontHeight()) / 2);
+            lcd.print(label);
+        }
+
+        struct Hit {
+                int x, y, w, h;
+        };
+
+        // Setup page buttons, also used for hit testing so the drawing and the
+        // touch handling cannot drift apart.
+        constexpr Hit kBtnSetMinus = {20, 70, 60, 46};
+        constexpr Hit kBtnSetPlus = {250, 70, 60, 46};
+        constexpr Hit kBtnHeater = {330, 70, 130, 46};
+        constexpr Hit kBtnTare = {20, 140, 130, 46};
+        constexpr Hit kBtnFlowZero = {175, 140, 130, 46};
+        constexpr Hit kBtnClearFault = {330, 140, 130, 46};
+        constexpr Hit kBtnDimmer = {20, 210, 60, 46};
+        constexpr Hit kBtnBrighter = {90, 210, 60, 46};
+        constexpr Hit kBtnBack = {330, 210, 130, 46};
+        constexpr Hit kGear = {kW - 42, 0, 42, kHeaderH};
+
+        bool inside(const Hit& h, const int x, const int y) {
+            return x >= h.x && x < (h.x + h.w) && y >= h.y && y < (h.y + h.h);
+        }
+
+        uint8_t brightness = 200;
+        bool invertOn = true; // this panel needs inversion; see the LGFX config
+
+        void drawHeader(const char* title) {
+            lcd.fillRect(0, 0, kW, kHeaderH, kPanel);
+            lcd.drawFastHLine(0, kHeaderH, kW, kRule);
+
+            lcd.setFont(kFontMid);
+            lcd.setTextSize(1);
+            lcd.setTextColor(kValue, kPanel);
+            lcd.setCursor(10, 5);
+            lcd.print(title);
+
+            // Gear, drawn as a simple cog so it reads at a glance.
+            const int cx = kGear.x + 21;
+            const int cy = kHeaderH / 2;
+            lcd.drawCircle(cx, cy, 9, kLabel);
+            lcd.drawCircle(cx, cy, 4, kLabel);
+
+            for (int a = 0; a < 360; a += 60) {
+                const float r = a * 3.14159f / 180.0f;
+                lcd.drawLine(cx + static_cast<int>(9 * cosf(r)), cy + static_cast<int>(9 * sinf(r)),
+                             cx + static_cast<int>(13 * cosf(r)), cy + static_cast<int>(13 * sinf(r)), kLabel);
+            }
+        }
+
+        void drawMainChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("ARGENTA SME");
+
+            drawCaption(20, 38, "BOILER");
+            drawCaption(300, 38, "TARGET");
+            drawCaption(300, 86, "GROUP");
+
+            // Heat bar, sitting BELOW the right-hand column rather than
+            // running underneath it. The first version put the bar at y=132
+            // and the group temperature at y=118, so the group value was drawn
+            // on top of the bar.
+            lcd.drawRect(20, 138, 440, 16, kRule);
+            drawCaption(20, 158, "HEATER");
+
+            lcd.drawFastHLine(0, 182, kW, kRule);
+
+            drawCaption(24, 190, "WEIGHT");
+            drawCaption(184, 190, "FLOW");
+            drawCaption(344, 190, "PUMP");
+
+            lcd.drawFastVLine(160, 186, 76, kRule);
+            lcd.drawFastVLine(320, 186, 76, kRule);
+
+            lcd.drawFastHLine(0, kH - kFooterH, kW, kRule);
+        }
+
+        void drawSetupChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("SETUP");
+
+            drawCaption(20, 48, "BREW TEMPERATURE");
+            drawButton(kBtnSetMinus.x, kBtnSetMinus.y, kBtnSetMinus.w, kBtnSetMinus.h, "-", kAccent, kAccent);
+            drawButton(kBtnSetPlus.x, kBtnSetPlus.y, kBtnSetPlus.w, kBtnSetPlus.h, "+", kAccent, kAccent);
+
+            drawButton(kBtnTare.x, kBtnTare.y, kBtnTare.w, kBtnTare.h, "TARE", kRule, kValue);
+            drawButton(kBtnFlowZero.x, kBtnFlowZero.y, kBtnFlowZero.w, kBtnFlowZero.h, "ZERO VOL", kRule, kValue);
+            drawButton(kBtnClearFault.x, kBtnClearFault.y, kBtnClearFault.w, kBtnClearFault.h, "CLR FAULT", kAlarm, kAlarm);
+
+            drawCaption(20, 196, "BRIGHTNESS");
+            drawButton(kBtnDimmer.x, kBtnDimmer.y, kBtnDimmer.w, kBtnDimmer.h, "-", kRule, kValue);
+            drawButton(kBtnBrighter.x, kBtnBrighter.y, kBtnBrighter.w, kBtnBrighter.h, "+", kRule, kValue);
+            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
+        }
+
+        /** @brief Status word and colour for the footer and the heater pill. */
+        const char* statusText(const machinelink::State& st, const bool live, uint16_t* colour) {
+            if (!live) {
+                *colour = kHeat;
+
+                return "NO LINK TO CONTROLLER";
+            }
+
+            if (strcmp(st.fault, "none") != 0) {
+                *colour = kAlarm;
+
+                return st.fault;
+            }
+
+            if (!st.boilerOk) {
+                *colour = kAlarm;
+
+                return "BOILER SENSOR FAULT";
+            }
+
+            if (!st.heaterEnabled) {
+                *colour = kDim;
+
+                return "HEATER OFF";
+            }
+
+            if (st.setpointC > 0.0f && st.boilerC >= (st.setpointC - 1.0f)) {
+                *colour = kReady;
+
+                return "READY";
+            }
+
+            *colour = kHeat;
+
+            return "HEATING";
+        }
+
+        void drawMainValues() {
+            const auto& st = machinelink::state();
+            const bool live = machinelink::isConnected();
+
+            char buf[24];
+
+            // Boiler, the number you actually watch.
+            if (live && st.boilerOk) {
+                snprintf(buf, sizeof(buf), "%.1f", st.boilerC);
+            }
+            else {
+                snprintf(buf, sizeof(buf), "--.-");
+            }
+
+            drawField(20, 52, 230, kFontBig, (live && st.boilerOk) ? kAccent : kAlarm, buf, lastBoiler, sizeof(lastBoiler));
+
+            // Unit immediately after the digits. It was at a fixed x=236,
+            // which left it marooned a hundred pixels clear of a four-glyph
+            // reading.
+            lcd.setFont(kFontValue);
+            lcd.setTextSize(1);
+            lcd.setTextColor(kLabel, kBg);
+            lcd.setCursor(152, 72);
+            lcd.print("C");
+
+            snprintf(buf, sizeof(buf), "%.1f", live ? st.setpointC : 0.0f);
+            drawField(300, 52, 170, kFontValue, kValue, buf, lastSetpoint, sizeof(lastSetpoint));
+
+            if (live && st.groupOk) {
+                snprintf(buf, sizeof(buf), "%.1f", st.groupC);
+            }
+            else {
+                snprintf(buf, sizeof(buf), "--.-");
+            }
+
+            drawField(300, 100, 170, kFontValue, (live && st.groupOk) ? kValue : kDim, buf, lastGroup, sizeof(lastGroup));
+
+            // Heater bar. Width is the duty, colour says whether it is allowed
+            // to be doing anything.
+            const int duty = live ? static_cast<int>(st.heaterDuty) : 0;
+            const int barW = (duty * 436) / 100;
+
+            if (barW != lastHeatBar) {
+                lastHeatBar = barW;
+
+                lcd.fillRect(22, 140, 436, 12, kBg);
+
+                if (barW > 0) {
+                    lcd.fillRect(22, 140, barW, 12, st.heaterEnabled ? kHeat : kDim);
+                }
+
+                lcd.fillRect(100, 156, 90, 18, kBg);
+                lcd.setFont(kFontCaption);
+                lcd.setTextSize(1);
+                lcd.setTextColor(st.heaterEnabled ? kHeat : kDim, kBg);
+                lcd.setCursor(100, 156);
+                lcd.printf("%d%%", duty);
+            }
+
+            // Shot row.
+            if (live && st.weightOk) {
+                snprintf(buf, sizeof(buf), st.weightCalibrated ? "%.1f" : "%.0f", st.weightG);
+            }
+            else {
+                snprintf(buf, sizeof(buf), "--");
+            }
+
+            drawField(24, 206, 134, kFontValue, (live && st.weightOk) ? (st.weightCalibrated ? kValue : kHeat) : kDim,
+                      buf, lastWeight, sizeof(lastWeight));
+
+            lcd.setFont(kFontCaption);
+            lcd.setTextSize(1);
+            lcd.setTextColor(kLabel, kBg);
+            lcd.fillRect(24, 240, 130, 16, kBg);
+            lcd.setCursor(24, 240);
+            lcd.print(st.weightCalibrated ? "grams" : "raw counts");
+
+            snprintf(buf, sizeof(buf), "%.1f", live ? st.flowMlPerSec : 0.0f);
+            drawField(184, 206, 134, kFontValue, live ? kValue : kDim, buf, lastFlow, sizeof(lastFlow));
+            lcd.setFont(kFontCaption);
+            lcd.setTextSize(1);
+            lcd.setTextColor(kLabel, kBg);
+            lcd.fillRect(184, 240, 130, 16, kBg);
+            lcd.setCursor(184, 240);
+            lcd.printf("ml/s   %.0f ml", live ? st.volumeMl : 0.0f);
+
+            snprintf(buf, sizeof(buf), "%.0f%%", live ? st.pumpPercent : 0.0f);
+            drawField(344, 206, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
+
+            // Footer status strip.
+            uint16_t col = kDim;
+            const char* text = statusText(st, live, &col);
+
+            if (strncmp(text, lastStatus, sizeof(lastStatus)) != 0) {
+                snprintf(lastStatus, sizeof(lastStatus), "%s", text);
+
+                lcd.fillRect(0, kH - kFooterH + 1, kW, kFooterH - 1, kBg);
+                lcd.setFont(kFontMid);
+                lcd.setTextSize(1);
+                lcd.setTextColor(col, kBg);
+                lcd.setCursor(12, kH - kFooterH + 4);
+                lcd.print(text);
+            }
+
+            // Link pip in the header, so a stale screen is obvious.
+            const int linkState = live ? 1 : 0;
+
+            if (linkState != lastLink) {
+                lastLink = linkState;
+                lcd.fillCircle(kW - 60, kHeaderH / 2, 5, live ? kReady : kAlarm);
+            }
+        }
+
+        void drawSetupValues() {
+            const auto& st = machinelink::state();
+            char buf[24];
+
+            snprintf(buf, sizeof(buf), "%.1f C", st.setpointC);
+            drawField(96, 76, 150, kFontValue, kAccent, buf, lastSetpoint, sizeof(lastSetpoint));
+
+            const int heaterOn = st.heaterEnabled ? 1 : 0;
+
+            if (heaterOn != lastHeaterOn) {
+                lastHeaterOn = heaterOn;
+                drawButton(kBtnHeater.x, kBtnHeater.y, kBtnHeater.w, kBtnHeater.h,
+                           heaterOn ? "HEAT ON" : "HEAT OFF", heaterOn ? kHeat : kRule,
+                           heaterOn ? kHeat : kValue);
+            }
+
+            snprintf(buf, sizeof(buf), "%d", brightness);
+            drawField(170, 220, 100, kFontMid, kValue, buf, lastPump, sizeof(lastPump));
+        }
+
+    } // namespace
 
     uint8_t rotation() {
         return currentRotation;
     }
 
-    void drawMachineScreen() {
+    void setRotation(const uint8_t r) {
+        currentRotation = r & 3;
+        lcd.setRotation(currentRotation);
+
+        // Geometry changed under everything, so nothing on screen is valid.
+        invalidate();
+        drawMachineScreen();
+    }
+
+    void toggleInvert() {
+        invertOn = !invertOn;
+        lcd.invertDisplay(invertOn);
+    }
+
+    void setBrightness(const uint8_t level) {
+        brightness = level;
+        lcd.setBrightness(level);
+    }
+
+    Page page() {
+        return currentPage;
+    }
+
+    void invalidate() {
+        chromeDrawn = false;
+        forgetValues();
+    }
+
+    void setPage(const Page p) {
+        currentPage = p;
+        invalidate();
+    }
+
+    bool handleTouch(const int x, const int y) {
+        if (currentPage == Page::Main) {
+            if (inside(kGear, x, y)) {
+                setPage(Page::Setup);
+
+                return true;
+            }
+
+            return false;
+        }
+
+        // Setup page. Every action is a REQUEST sent to the Teensy, which is
+        // free to refuse it - the screen never assumes it worked, it waits for
+        // the next telemetry frame to say so.
+        if (inside(kBtnBack, x, y) || inside(kGear, x, y)) {
+            setPage(Page::Main);
+
+            return true;
+        }
+
         const auto& st = machinelink::state();
-        const bool live = machinelink::isConnected();
+        char cmd[48];
 
-        const int w = lcd.width();
+        if (inside(kBtnSetMinus, x, y)) {
+            snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC - 0.5f);
+            machinelink::sendCommand(cmd);
 
-        lcd.setTextSize(2);
-        lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-        lcd.setCursor(8, 8);
-        lcd.print("CleverCoffee   ");
-
-        // Link state. Said plainly, because a stale readout that looks live is
-        // the one genuinely dangerous thing a display can do here.
-        lcd.setTextSize(1);
-        lcd.setCursor(w - 110, 14);
-
-        if (live) {
-            lcd.setTextColor(TFT_GREEN, TFT_BLACK);
-            lcd.print("LINK OK     ");
-        }
-        else {
-            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
-            lcd.print("LINK STALE  ");
+            return true;
         }
 
-        // Boiler temperature, the number that matters most.
-        lcd.setTextSize(1);
-        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-        lcd.setCursor(12, 56);
-        lcd.print("BOILER");
+        if (inside(kBtnSetPlus, x, y)) {
+            snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC + 0.5f);
+            machinelink::sendCommand(cmd);
 
-        lcd.setTextSize(4);
-        lcd.setCursor(12, 70);
-
-        if (live && st.boilerOk) {
-            lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-            lcd.printf("%5.1f", st.boilerC);
-        }
-        else {
-            lcd.setTextColor(TFT_RED, TFT_BLACK);
-            lcd.print(" --.-");
+            return true;
         }
 
-        lcd.setTextSize(2);
-        lcd.setCursor(150, 84);
-        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-        lcd.print("C");
+        if (inside(kBtnHeater, x, y)) {
+            snprintf(cmd, sizeof(cmd), "heater=%d", st.heaterEnabled ? 0 : 1);
+            machinelink::sendCommand(cmd);
 
-        // Group temperature, smaller - it is a hint, not a control value.
-        lcd.setTextSize(1);
-        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-        lcd.setCursor(250, 56);
-        lcd.print("GROUP");
-
-        lcd.setTextSize(2);
-        lcd.setCursor(250, 70);
-
-        if (live && st.groupOk) {
-            lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-            lcd.printf("%5.1f C", st.groupC);
-        }
-        else {
-            lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-            lcd.print(" --.- C");
+            return true;
         }
 
-        // Flow and delivered volume.
-        lcd.setTextSize(1);
-        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-        lcd.setCursor(12, 140);
-        lcd.print("FLOW");
-        lcd.setCursor(130, 140);
-        lcd.print("VOLUME");
-        lcd.setCursor(250, 140);
-        lcd.print("PUMP");
-        lcd.setCursor(360, 140);
-        lcd.print("ENCODER");
+        if (inside(kBtnTare, x, y)) {
+            machinelink::sendCommand("tare=1");
 
-        lcd.setTextSize(2);
-        lcd.setTextColor(live ? TFT_GREENYELLOW : TFT_DARKGREY, TFT_BLACK);
-        lcd.setCursor(12, 154);
-        lcd.printf("%4.1f ml/s", st.flowMlPerSec);
-        lcd.setCursor(130, 154);
-        lcd.printf("%5.1f ml", st.volumeMl);
-        lcd.setCursor(250, 154);
-        lcd.printf("%3.0f%%", st.pumpPercent);
-        lcd.setCursor(360, 154);
-        lcd.printf("%6ld", st.encoder);
+            return true;
+        }
 
-        // Brew weight. Big, because during a shot it is the number being
-        // watched - but labelled honestly: the unit is "g" only when the scale
-        // has actually been calibrated, and "raw" otherwise. Showing raw ADC
-        // counts next to a "g" would invite someone to trust a dose that is
-        // nonsense, which is worse than showing nothing.
-        lcd.setTextSize(1);
-        lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-        lcd.setCursor(12, 190);
-        lcd.print("WEIGHT");
+        if (inside(kBtnFlowZero, x, y)) {
+            machinelink::sendCommand("flowreset=1");
 
-        // Left-aligned at a fixed left edge, with the unit immediately after
-        // the digits. Getting here took three wrong turns worth recording,
-        // because each one looked reasonable:
-        //
-        //   1. Unit at a fixed column sized for six characters. An eight
-        //      character raw count overran it and "raw" sat on the digits.
-        //   2. Unit positioned from getCursorX(), then the row tidied with a
-        //      fillRect afterwards. The tidy-up clipped the label.
-        //   3. Fixed-width RIGHT-aligned number. Nothing overlapped, but a
-        //      short value floated off to the right, dragging the unit with it.
-        //
-        // The actual requirement is: number pinned left, unit adjacent, no
-        // leftovers from a wider previous value. That needs the row cleared
-        // BEFORE drawing rather than patched afterwards - and to avoid the
-        // flicker a 4 Hz clear-and-repaint would cause, the whole thing is
-        // skipped unless the text has changed since the last frame.
-        constexpr int kWeightX = 12;
-        constexpr int kWeightY = 204;
-        /**
-         * Deliberately size 3, between the two scales already on this screen.
-         *
-         * At size 4 it matched the boiler temperature and competed with it, and
-         * the boiler is the number that actually matters when the machine is
-         * idle. At size 2 it would disappear into the flow/volume/encoder row,
-         * and brew weight is more important than any of those once a shot is
-         * running. Three is the honest middle.
-         */
-        constexpr int kWeightSize = 3;
-        constexpr int kWeightRowHeight = 8 * kWeightSize; // glyph is 8 px tall
+            return true;
+        }
 
-        char weightText[16];
-        const char* weightUnit = "g";
-        uint16_t weightColour = TFT_YELLOW;
+        if (inside(kBtnClearFault, x, y)) {
+            machinelink::sendCommand("clearfault=1");
 
-        if (live && st.weightOk) {
-            if (st.weightCalibrated) {
-                snprintf(weightText, sizeof(weightText), "%.1f", st.weightG);
+            return true;
+        }
+
+        if (inside(kBtnDimmer, x, y)) {
+            brightness = (brightness > 40) ? (brightness - 40) : 10;
+            lcd.setBrightness(brightness);
+            lastPump[0] = '\0';
+
+            return true;
+        }
+
+        if (inside(kBtnBrighter, x, y)) {
+            brightness = (brightness < 215) ? (brightness + 40) : 255;
+            lcd.setBrightness(brightness);
+            lastPump[0] = '\0';
+
+            return true;
+        }
+
+        return false;
+    }
+
+    void drawMachineScreen() {
+        if (!chromeDrawn) {
+            chromeDrawn = true;
+
+            if (currentPage == Page::Main) {
+                drawMainChrome();
             }
             else {
-                // Raw ADC counts, printed whole - a tenth of a count is not a
-                // real quantity. Orange and spelled out, so an uncalibrated
-                // reading cannot be mistaken for a dose.
-                snprintf(weightText, sizeof(weightText), "%.0f", st.weightG);
-                weightUnit = "raw";
-                weightColour = TFT_ORANGE;
+                drawSetupChrome();
             }
         }
-        else {
-            snprintf(weightText, sizeof(weightText), "--.-");
-            weightColour = TFT_DARKGREY;
-        }
 
-        static char lastWeightText[16] = "";
-        static char lastWeightUnit[8] = "";
-
-        // The clear below only covers the current font's row height, so a
-        // change in text SIZE between builds could leave taller glyphs behind.
-        // One full-height wipe on the first pass deals with that.
-        static bool weightRowWiped = false;
-
-        if (!weightRowWiped) {
-            weightRowWiped = true;
-            lcd.fillRect(kWeightX, kWeightY, lcd.width() - kWeightX, 8 * 4, TFT_BLACK);
-        }
-
-        if (strcmp(weightText, lastWeightText) != 0 || strcmp(weightUnit, lastWeightUnit) != 0) {
-            snprintf(lastWeightText, sizeof(lastWeightText), "%s", weightText);
-            snprintf(lastWeightUnit, sizeof(lastWeightUnit), "%s", weightUnit);
-
-            lcd.fillRect(kWeightX, kWeightY, lcd.width() - kWeightX, kWeightRowHeight, TFT_BLACK);
-
-            lcd.setTextSize(kWeightSize);
-            lcd.setTextColor(weightColour, TFT_BLACK);
-            lcd.setCursor(kWeightX, kWeightY);
-            lcd.print(weightText);
-
-            // Immediately after the digits, sitting on their baseline.
-            const int unitX = lcd.getCursorX() + 8;
-
-            lcd.setTextSize(2);
-            lcd.setTextColor(weightColour == TFT_ORANGE ? TFT_ORANGE : TFT_LIGHTGREY, TFT_BLACK);
-            lcd.setCursor(unitX, kWeightY + kWeightRowHeight - 16);
-            lcd.print(weightUnit);
-        }
-
-        // Machine state and any latched fault.
-        lcd.setTextSize(2);
-        lcd.setCursor(12, 260);
-
-        if (!live) {
-            lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
-            lcd.printf("no telemetry (%lus)   ", static_cast<unsigned long>(machinelink::msSinceLastFrame() / 1000));
-        }
-        else if (strcmp(st.fault, "none") != 0) {
-            lcd.setTextColor(TFT_RED, TFT_BLACK);
-            lcd.printf("FAULT: %-16s", st.fault);
+        if (currentPage == Page::Main) {
+            drawMainValues();
         }
         else {
-            lcd.setTextColor(TFT_GREEN, TFT_BLACK);
-            lcd.printf("state: %-16s", st.status);
+            drawSetupValues();
         }
-
-        // Frame counters, small, for bring-up confidence.
-        lcd.setTextSize(1);
-        lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-        lcd.setCursor(12, lcd.height() - 14);
-        lcd.printf("frames %lu  badsum %lu        ",
-                   static_cast<unsigned long>(machinelink::framesReceived()),
-                   static_cast<unsigned long>(machinelink::badChecksums()));
     }
 
 } // namespace display

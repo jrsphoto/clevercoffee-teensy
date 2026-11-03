@@ -42,6 +42,11 @@ namespace machinelink {
         /** Pump speed actually applied, 0-100%. */
         float pumpPercent = 0.0f;
 
+        /** Boiler setpoint in Celsius, and the duty the PID is asking for. */
+        float setpointC = 0.0f;
+        float heaterDuty = 0.0f;
+        bool heaterEnabled = false;
+
         long encoder = 0;
         char status[16] = "?";
         char fault[24] = "?";
