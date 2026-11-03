@@ -212,6 +212,20 @@ void loop() {
     // Called before the redraw so a slow screen paint cannot starve it.
     audio::loop();
 
+    // A controller restart means every value on screen came from the previous
+    // instance of it. Repaint rather than carry stale numbers across the gap.
+    static uint32_t lastHello = 0;
+
+    if (const uint32_t hellos = machinelink::helloCount(); hellos != lastHello) {
+        lastHello = hellos;
+
+        if (lcdReady) {
+            display::invalidate();
+        }
+
+        Serial.println("controller restarted - repainting");
+    }
+
     if (lcdReady) {
         const uint32_t now = millis();
         const uint32_t frames = machinelink::framesReceived();
