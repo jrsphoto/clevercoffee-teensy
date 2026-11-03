@@ -68,6 +68,8 @@ namespace {
         Serial.println("  setpoint <C>      target boiler temperature");
         Serial.println("  pid <kp> <tn> <tv>  PID tunings, upstream's form");
         Serial.println("  drybench <0|1>    BYPASS the dry-fire interlock - NO ELEMENT FITTED");
+        Serial.println("  overtemp <C>      LOWER the over-temp cutoff to test it (cannot raise)");
+        Serial.println("  overtempreset     restore the over-temp cutoff to its design limit");
         Serial.println("  permittest        stall the loop; the heater must drop (safety test)");
         Serial.println("  ulntest           verify the ULN2003 output stage actually inverts");
         Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
@@ -358,6 +360,23 @@ namespace {
         }
         else if (strcasecmp(command, "ulntest") == 0) {
             heater::testOutputStage();
+        }
+        else if (strcasecmp(command, "overtemp") == 0) {
+            if (argument == nullptr) {
+                Serial.print("over-temperature limit is ");
+                Serial.print(temps::overTempLimitC(), 1);
+                Serial.print(" C (design limit ");
+                Serial.print(temps::kBoilerOverTempC, 1);
+                Serial.println(" C)");
+                Serial.println("usage: overtemp <celsius>   lower it below the current boiler");
+                Serial.println("       temperature and the cutoff must fire immediately.");
+            }
+            else {
+                temps::setOverTempLimitC(atof(argument));
+            }
+        }
+        else if (strcasecmp(command, "overtempreset") == 0) {
+            temps::resetOverTempLimit();
         }
         else if (strcasecmp(command, "permittest") == 0) {
             heater::testPermitExpiry();

@@ -43,6 +43,35 @@ namespace temps {
     constexpr double kBoilerOverTempC = 140.0;
 
     /**
+     * @brief The over-temperature limit actually in force.
+     *
+     * Normally kBoilerOverTempC. It can be LOWERED at runtime, which exists for
+     * one reason: a cutoff that has never fired is a cutoff nobody has tested,
+     * and a bench boiler cannot be driven to 140 C to find out. Dropping the
+     * limit below ambient makes the gate fire immediately and proves the whole
+     * path - detection, fault latching, and the heater refusing to run.
+     *
+     * It can never be RAISED above kBoilerOverTempC. A settable safety limit
+     * that can be moved upward is not a safety limit, so setOverTempLimitC()
+     * refuses, and the ceiling is a compile-time constant rather than anything
+     * a config file or the display could reach.
+     *
+     * Deliberately not persisted. A lowered limit is safe but surprising, and
+     * it should not survive a reboot and quietly make the machine useless.
+     */
+    double overTempLimitC();
+
+    /**
+     * @brief Lower the over-temperature limit, for testing the cutoff.
+     *
+     * @return false if refused - above kBoilerOverTempC, or implausibly low
+     */
+    bool setOverTempLimitC(double celsius);
+
+    /** @brief Restore the limit to kBoilerOverTempC. */
+    void resetOverTempLimit();
+
+    /**
      * Range outside which a reading is treated as physically impossible rather
      * than merely alarming. A PT100 reading -40 C or 300 C in a kitchen is a
      * broken sensor or broken wiring, not a temperature.
