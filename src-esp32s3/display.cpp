@@ -4,6 +4,7 @@
  * @brief LovyanGFX bring-up for the 4.0" ESP32-S3 board
  */
 
+#include "audio.h"
 #include "display.h"
 
 #include "link.h"
@@ -187,6 +188,7 @@ namespace display {
         const lgfx::IFont* const kFontValue = &fonts::FreeSansBold18pt7b;
         const lgfx::IFont* const kFontMid = &fonts::FreeSansBold12pt7b;
         const lgfx::IFont* const kFontCaption = &fonts::FreeSans9pt7b;
+        const lgfx::IFont* const kFontButton = &fonts::FreeSansBold9pt7b;
 
         void drawCaption(const int x, const int y, const char* text) {
             lcd.setFont(kFontCaption);
@@ -230,7 +232,10 @@ namespace display {
             lcd.fillRoundRect(x, y, w, h, 6, kPanel);
             lcd.drawRoundRect(x, y, w, h, 6, edge);
 
-            lcd.setFont(kFontMid);
+            // Smaller than the value font. Button labels are read once to
+            // learn the layout and then hit by position, so they do not need
+            // to compete with the numbers.
+            lcd.setFont(kFontButton);
             lcd.setTextSize(1);
             lcd.setTextColor(textCol, kPanel);
 
@@ -247,15 +252,24 @@ namespace display {
 
         // Setup page buttons, also used for hit testing so the drawing and the
         // touch handling cannot drift apart.
-        constexpr Hit kBtnSetMinus = {20, 70, 60, 46};
-        constexpr Hit kBtnSetPlus = {250, 70, 60, 46};
-        constexpr Hit kBtnHeater = {330, 70, 130, 46};
-        constexpr Hit kBtnTare = {20, 140, 130, 46};
-        constexpr Hit kBtnFlowZero = {175, 140, 130, 46};
-        constexpr Hit kBtnClearFault = {330, 140, 130, 46};
-        constexpr Hit kBtnDimmer = {20, 210, 60, 46};
-        constexpr Hit kBtnBrighter = {90, 210, 60, 46};
-        constexpr Hit kBtnBack = {330, 210, 130, 46};
+        // Three even rows of 52 px buttons. Minus and plus FLANK their value
+        // rather than sitting at opposite ends of the row, which is how the
+        // first version read: a "+" marooned 150 px from the number it changes
+        // does not look like it belongs to it.
+        constexpr Hit kBtnSetMinus = {20, 56, 60, 50};
+        constexpr Hit kBtnSetPlus = {246, 56, 60, 50};
+        constexpr Hit kBtnHeater = {320, 56, 140, 50};
+        constexpr Hit kBtnTare = {20, 118, 136, 50};
+        constexpr Hit kBtnFlowZero = {172, 118, 136, 50};
+        constexpr Hit kBtnClearFault = {324, 118, 136, 50};
+
+        // Captions for this row sit at y=178 and are about 14 px tall, so the
+        // buttons start at 196 rather than butting straight up against them.
+        constexpr Hit kBtnDimmer = {20, 196, 56, 46};
+        constexpr Hit kBtnBrighter = {82, 196, 56, 46};
+        constexpr Hit kBtnVolDown = {250, 196, 56, 46};
+        constexpr Hit kBtnVolUp = {312, 196, 56, 46};
+        constexpr Hit kBtnBack = {324, 254, 136, 46};
         // Generous: the whole right end of the header, and a little below it.
         // A 42x30 box in the extreme corner is exactly where a capacitive
         // panel is least accurate, and there is nothing else up there to hit
@@ -332,17 +346,22 @@ namespace display {
             lcd.fillScreen(kBg);
             drawHeader("SETUP");
 
-            drawCaption(20, 48, "BREW TEMPERATURE");
+            drawCaption(20, 38, "BREW TEMPERATURE");
             drawButton(kBtnSetMinus.x, kBtnSetMinus.y, kBtnSetMinus.w, kBtnSetMinus.h, "-", kAccent, kAccent);
             drawButton(kBtnSetPlus.x, kBtnSetPlus.y, kBtnSetPlus.w, kBtnSetPlus.h, "+", kAccent, kAccent);
 
             drawButton(kBtnTare.x, kBtnTare.y, kBtnTare.w, kBtnTare.h, "TARE", kRule, kValue);
             drawButton(kBtnFlowZero.x, kBtnFlowZero.y, kBtnFlowZero.w, kBtnFlowZero.h, "ZERO VOL", kRule, kValue);
-            drawButton(kBtnClearFault.x, kBtnClearFault.y, kBtnClearFault.w, kBtnClearFault.h, "CLR FAULT", kAlarm, kAlarm);
+            drawButton(kBtnClearFault.x, kBtnClearFault.y, kBtnClearFault.w, kBtnClearFault.h, "CLEAR", kAlarm, kAlarm);
 
-            drawCaption(20, 196, "BRIGHTNESS");
+            drawCaption(20, 178, "BRIGHTNESS");
             drawButton(kBtnDimmer.x, kBtnDimmer.y, kBtnDimmer.w, kBtnDimmer.h, "-", kRule, kValue);
             drawButton(kBtnBrighter.x, kBtnBrighter.y, kBtnBrighter.w, kBtnBrighter.h, "+", kRule, kValue);
+
+            drawCaption(250, 178, "VOLUME");
+            drawButton(kBtnVolDown.x, kBtnVolDown.y, kBtnVolDown.w, kBtnVolDown.h, "-", kRule, kValue);
+            drawButton(kBtnVolUp.x, kBtnVolUp.y, kBtnVolUp.w, kBtnVolUp.h, "+", kRule, kValue);
+
             drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
         }
 
@@ -501,7 +520,7 @@ namespace display {
             char buf[24];
 
             snprintf(buf, sizeof(buf), "%.1f C", st.setpointC);
-            drawField(96, 76, 150, kFontValue, kAccent, buf, lastSetpoint, sizeof(lastSetpoint));
+            drawField(90, 68, 150, kFontValue, kAccent, buf, lastSetpoint, sizeof(lastSetpoint));
 
             const int heaterOn = st.heaterEnabled ? 1 : 0;
 
@@ -513,7 +532,18 @@ namespace display {
             }
 
             snprintf(buf, sizeof(buf), "%d", brightness);
-            drawField(170, 220, 100, kFontMid, kValue, buf, lastPump, sizeof(lastPump));
+            drawField(146, 206, 90, kFontMid, kValue, buf, lastPump, sizeof(lastPump));
+
+            snprintf(buf, sizeof(buf), "%d%%", audio::volumePercent());
+            drawField(376, 206, 90, kFontMid, kValue, buf, lastFlow, sizeof(lastFlow));
+
+            // What the boiler is actually doing, so the effect of a setpoint
+            // change is visible without switching pages.
+            uint16_t col = kDim;
+            const char* text = statusText(st, machinelink::isConnected(), &col);
+
+            snprintf(buf, sizeof(buf), "%.1f C  %s", st.boilerC, text);
+            drawField(20, 262, 290, kFontMid, col, buf, lastStatus, sizeof(lastStatus));
         }
 
     } // namespace
@@ -629,6 +659,30 @@ namespace display {
             brightness = (brightness < 215) ? (brightness + 40) : 255;
             lcd.setBrightness(brightness);
             lastPump[0] = '\0';
+
+            return true;
+        }
+
+        // Volume is local to this board - the speaker is on it, so there is
+        // nothing to ask the controller about.
+        if (inside(kBtnVolDown, x, y)) {
+            const uint8_t v = audio::volumePercent();
+            audio::setVolumePercent(v > 10 ? (v - 10) : 0);
+            lastFlow[0] = '\0';
+
+            return true;
+        }
+
+        if (inside(kBtnVolUp, x, y)) {
+            const uint8_t v = audio::volumePercent();
+            audio::setVolumePercent(v < 90 ? (v + 10) : 100);
+            lastFlow[0] = '\0';
+
+            // Play the chime so the new level is audible immediately. Setting
+            // a volume you cannot hear is guesswork.
+            if (!audio::isPlaying()) {
+                audio::playStartupSound();
+            }
 
             return true;
         }
