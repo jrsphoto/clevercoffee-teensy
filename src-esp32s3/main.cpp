@@ -223,6 +223,15 @@ void loop() {
     // Called before the redraw so a slow screen paint cannot starve it.
     audio::loop();
 
+    // Poll the touch panel. This was missing entirely once the machine screen
+    // replaced the bring-up screen, so every touch handler and hit box in
+    // display.cpp was dead code - the buttons were drawn and could never be
+    // pressed. Nothing reported an error because nothing was wrong: the code
+    // was correct and simply never ran.
+    if (lcdReady) {
+        display::loop();
+    }
+
     // A controller restart means every value on screen came from the previous
     // instance of it. Repaint rather than carry stale numbers across the gap,
     // and play the startup sound so a reboot is audible from across the room -

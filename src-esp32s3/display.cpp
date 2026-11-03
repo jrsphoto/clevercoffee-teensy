@@ -108,6 +108,11 @@ namespace display {
         if (touching && !wasTouching) {
             touchCount++;
 
+            // Logged because a touch that hits nothing is indistinguishable
+            // from a touch that was not registered at all, and those need
+            // opposite fixes.
+            Serial.printf("touch x=%d y=%d\n", static_cast<int>(x), static_cast<int>(y));
+
             if (handleTouch(static_cast<int>(x), static_cast<int>(y))) {
                 // A consumed touch usually changes something the next frame
                 // will show, so repaint promptly rather than waiting.
@@ -251,7 +256,11 @@ namespace display {
         constexpr Hit kBtnDimmer = {20, 210, 60, 46};
         constexpr Hit kBtnBrighter = {90, 210, 60, 46};
         constexpr Hit kBtnBack = {330, 210, 130, 46};
-        constexpr Hit kGear = {kW - 42, 0, 42, kHeaderH};
+        // Generous: the whole right end of the header, and a little below it.
+        // A 42x30 box in the extreme corner is exactly where a capacitive
+        // panel is least accurate, and there is nothing else up there to hit
+        // by mistake.
+        constexpr Hit kGear = {kW - 110, 0, 110, kHeaderH + 10};
 
         bool inside(const Hit& h, const int x, const int y) {
             return x >= h.x && x < (h.x + h.w) && y >= h.y && y < (h.y + h.h);
@@ -271,7 +280,14 @@ namespace display {
             lcd.print(title);
 
             // Gear, drawn as a simple cog so it reads at a glance.
-            const int cx = kGear.x + 21;
+            //
+            // Its position is FIXED in the corner and deliberately not derived
+            // from the hit box. The touch target is much larger than the icon,
+            // because the extreme corner is where a capacitive panel is least
+            // accurate - but enlarging the box should not drag the icon out of
+            // the corner with it, which is exactly what happened when the two
+            // shared a coordinate.
+            const int cx = kW - 21;
             const int cy = kHeaderH / 2;
             lcd.drawCircle(cx, cy, 9, kLabel);
             lcd.drawCircle(cx, cy, 4, kLabel);
