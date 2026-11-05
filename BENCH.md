@@ -103,7 +103,35 @@ because they failed on every push and sent John an email each time.
 
 ## KiCad
 
-Project: `../clevercoffee-hardware/CleverCoffee_Teensy41_Dev_SMD/`
+**This board:**
+
+```
+/home/john/projects/Astoria SME 1N JUN Espresso Machine/clevercoffee-hardware/CleverCoffee_Teensy41_Dev_SMD/
+```
+
+**Check the folder name every time.** `clevercoffee-hardware/` holds SIX KiCad
+projects and five of them are the old ESP32 boards:
+
+```
+CleverCoffee_Teensy41_Dev_SMD    <-- THIS ONE
+CleverCoffee_ESP32_Dev           CleverCoffee_ESP32_Dev_SMD
+CleverCoffee_ESP32_minimal       CleverCoffee_ESP32_minimal_SMD
+ABP2_Breakoutboard               (the brew pressure sensor breakout)
+```
+
+`CleverCoffee_ESP32_Dev_SMD` is the board currently running the machine. It is
+NOT the one being worked on, and its pin numbers are different - see the
+`#else` branch in `src/hardware/pinmapping.h`.
+
+The Teensy project has **two sheets**:
+
+* `CleverCoffee_Teensy41_Dev_SMD.kicad_sch` - the Teensy itself, SPI, I2C,
+  flow, the link header, the pump PWM header
+* `relays.kicad_sch` - the ULN2003, the brew switch, the water probe, and the
+  sensor connectors
+
+A global label appears in only one sheet, so grep both before concluding a net
+is dangling.
 
 * **Read** `.kicad_sch` to answer pin questions. Never eyeball the PNG render.
 * **Never edit** `.kicad_sch` / `.kicad_pcb`. Give exact click-by-click steps.
