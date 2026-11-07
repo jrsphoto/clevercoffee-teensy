@@ -28,6 +28,7 @@
 #include "display.h"
 #include "es8311.h"
 #include "link.h"
+#include "net.h"
 
 namespace {
 
@@ -94,6 +95,15 @@ namespace {
             const String body = line.substring(4);
             machinelink::sendCommand(body.c_str());
             Serial.printf("sent: %s\n", body.c_str());
+        }
+        else if (line == "net" || line == "wifi") {
+            net::printStatus();
+        }
+        else if (line == "wifireset") {
+            // Upstream exposes this as a POST endpoint. Same effect: forget the
+            // stored network and come back up in the setup portal.
+            Serial.println("forgetting the network and restarting...");
+            net::forgetNetworkAndRestart();
         }
         else if (line.startsWith("cfg ")) {
             // "cfg <key> <value>". Pushes one setting to the Teensy, in this
@@ -263,11 +273,19 @@ void setup() {
     if (audio::init()) {
         audio::playStartupSound();
     }
+
+    // LAST, because WiFiManager's autoConnect blocks for up to its connect
+    // timeout. By this point the link is open and the screen is drawing, so a
+    // ten-second stall shows a "connecting" message instead of a dead panel -
+    // and the Teensy has been running the machine throughout regardless.
+    net::mountFilesystem();
+    net::begin();
 }
 
 void loop() {
     serviceConsole();
     machinelink::loop();
+    net::loop();
 
     // Feeds the I2S DMA while a sound is playing; a no-op the rest of the time.
     // Called before the redraw so a slow screen paint cannot starve it.

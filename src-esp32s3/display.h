@@ -161,6 +161,24 @@ namespace display {
     void showBringupScreen();
 
     /**
+     * @brief Full-screen message. Three lines, big enough to read across a room.
+     *
+     * Exists for the WiFi setup portal, which is useless if nobody knows it is
+     * there: somebody has to be told the access point's name and address, and
+     * on a machine with a screen the screen is where that belongs. Upstream
+     * does the same with displayLogo() during its config portal.
+     *
+     * Kept generic rather than a showNetworkScreen(), so that display does not
+     * have to know about net - net calls this. Otherwise the two would include
+     * each other.
+     *
+     * Any later drawMachineScreen() overwrites it, which is correct: a
+     * telemetry frame arriving means the machine has something more useful to
+     * say than a message about setup.
+     */
+    void showMessage(const char* title, const char* line1, const char* line2);
+
+    /**
      * @brief Set rotation (0-3) and redraw. 1 and 3 are landscape.
      */
     void setRotation(uint8_t rotation);
@@ -192,9 +210,25 @@ namespace display {
      * @enum Page
      * @brief Which screen is showing.
      */
+    /**
+     * @enum Page
+     * @brief Screens, arranged as a shallow tree rather than a flat list.
+     *
+     * Setup is going to collect sub-pages - WiFi first, then whatever else
+     * needs more room than a single row of buttons. So Back works off a
+     * declared PARENT per page (see parentOf) instead of a hardcoded "go to
+     * Main". Adding a sub-page then means adding an enum value, its parent, a
+     * draw case and a touch case, and nothing else has to change.
+     *
+     * A parent table rather than a navigation stack on purpose: the tree is two
+     * deep and a stack would add state that can be wrong - a stack that leaks
+     * entries sends Back somewhere surprising, which is a bug nobody notices
+     * until they are standing at the machine.
+     */
     enum class Page : uint8_t {
-        Main,  // the readout you watch while pulling a shot
-        Setup, // adjustable settings, reached by the gear
+        Main,      // the readout you watch while pulling a shot
+        Setup,     // adjustable settings, reached by the gear
+        SetupWifi, // network status, and starting the setup portal
     };
 
     /** @brief Current page. */
@@ -202,6 +236,14 @@ namespace display {
 
     /** @brief Switch page and repaint everything. */
     void setPage(Page p);
+
+    /**
+     * @brief Which page Back goes to from here.
+     *
+     * Main is its own parent, so Back on the top page does nothing rather than
+     * falling off the end.
+     */
+    Page parentOf(Page p);
 
     /**
      * @brief Handle a touch. Call from the touch poll.
