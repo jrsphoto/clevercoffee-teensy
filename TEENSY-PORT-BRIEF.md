@@ -264,3 +264,55 @@ This closes the question left open in section 4. **Agreed with John 2026-11-06.*
 **Known gap, not a bug.** `hardware.sensors.temperature.rtd_reference` and the other `hardware.sensors.temperature.*` keys come back as `notmine` because the MAX31865's reference resistor and wire count are compiled in rather than settable. They are reboot-required settings, so adding them means deciding how a reboot-required change travels over the link. Left for when the web UI needs them.
 
 **Front end delivery: a LittleFS image, upstream's way.** Keeps upstream's `frontend/` directory portable unchanged and lets HTML be iterated without a firmware rebuild. The cost is a second upload command, which is precisely the trap the startup-sound comment in `platformio.ini` warns about, so the command belongs in `BENCH.md` rather than in anybody's memory.
+
+
+### 9.7 On-panel graphs, and what the measurements say about how (2026-11-07)
+
+**Wanted, not yet built.** John wants pressure and temperature plotted on the
+machine's own screen, not only in the browser. Recording the groundwork now
+because a measurement taken today decides the approach.
+
+**The constraint.** A full repaint of the 480x320 panel measures **139 ms**
+(`drawbench` on the head's console, 30 passes). That is dominated by pixel
+throughput, not by software: a full-screen clear alone is 480 x 320 x 2 bytes
+= 307 KB, which at 40 MHz SPI is ~61 ms before a single glyph is drawn.
+
+So a strip chart **must not full-redraw**. At 139 ms a chart would run at
+7 fps and visibly crawl.
+
+**The approach that follows:** an `LGFX_Sprite` covering only the chart area,
+scrolled and pushed once per sample. Updating a 440x180 region is roughly an
+eighth of the pixels of a full screen, and `pushSprite` is one bus transaction
+rather than hundreds of primitives.
+
+**Memory, with real numbers rather than worry.** This panel is RGB565, so:
+
+| buffer | bytes |
+|---|---|
+| full screen 480x320 | 307 KB |
+| chart region 440x180 | 158 KB |
+
+Both fit easily in the board's 8 MB PSRAM. Advice to drop sprites to 4-bit or
+8-bit palettes to save memory is sized for boards without PSRAM and does not
+apply here. **The real tradeoff is speed, not space:** PSRAM blits more slowly
+than internal RAM, and the S3 has only ~320 KB of internal DRAM, so a chart
+sprite of this size realistically lives in PSRAM. Measure a `pushSprite` from
+PSRAM before committing to a refresh rate.
+
+**Already done and worth keeping:** `lcd.startWrite()` / `endWrite()` now wrap
+the whole redraw. Measured 133.6 ms against 139.6 ms without - about 4%. Real
+and free, but far from the large win it is sometimes claimed to be, for the
+reason above: it removes per-call bus locking, which was never the bottleneck.
+`drawbench <n>` on the head's console exists so this stays measurable.
+
+**Where the data comes from.** Telemetry is 5 Hz, which is a sample every
+200 ms - ample for a temperature trace and marginal for a pressure profile
+during a shot. If shot pressure graphing needs finer resolution, the rate is a
+link parameter (`kTelemetryIntervalMs`) and the wire is only ~24% utilised at
+the current expedited floor, so there is headroom. Raising it is a protocol
+change, not a redesign.
+
+**Not to be adopted:** the suggestion that touch commands become a binary
+packet. The protocol is deliberately ASCII so it can be read in a terminal and
+typed by hand (`linkProtocol.h`, design rule 2). At these rates the bytes are
+free and debuggability is not.

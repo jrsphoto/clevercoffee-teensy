@@ -124,6 +124,12 @@ namespace {
                 Serial.println("validating setter declined it, 'notmine' means not a control key");
             }
         }
+        else if (line.startsWith("drawbench")) {
+            const int n = line.substring(9).toInt();
+            const uint8_t iters = (n > 0 && n < 100) ? static_cast<uint8_t>(n) : 20;
+            Serial.printf("full redraw: %lu us average over %u passes\n",
+                          static_cast<unsigned long>(display::benchmarkRedraw(iters)), iters);
+        }
         else if (line == "redraw") {
             display::showBringupScreen();
             Serial.println("redrawn");

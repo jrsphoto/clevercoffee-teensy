@@ -983,6 +983,18 @@ namespace display {
     }
 
     void drawMachineScreen() {
+        // Hold the SPI bus open across the whole redraw.
+        //
+        // Without this, every primitive acquires and releases the bus on its
+        // own, and a page is dozens of them. The pixels come out identical
+        // either way; what changes is the per-call transaction overhead.
+        //
+        // Safe to hold here because everything between these two calls is
+        // local drawing. No touch read - that is a separate I2C bus - no link
+        // service, nothing that blocks or yields. Do not put anything of that
+        // kind inside this block.
+        lcd.startWrite();
+
         if (!chromeDrawn) {
             chromeDrawn = true;
 
@@ -1002,6 +1014,21 @@ namespace display {
             case Page::SetupDisplay: drawDisplayValues(); break;
             case Page::SetupWifi: drawWifiValues(); break;
         }
+
+        lcd.endWrite();
+    }
+
+    uint32_t benchmarkRedraw(const uint8_t iterations) {
+        // Forces a FULL repaint each pass - chrome and every value - so the
+        // number is the worst case rather than the usual change-detected one.
+        const uint32_t start = micros();
+
+        for (uint8_t i = 0; i < iterations; i++) {
+            invalidate();
+            drawMachineScreen();
+        }
+
+        return (micros() - start) / iterations;
     }
 
 } // namespace display

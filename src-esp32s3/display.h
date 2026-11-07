@@ -207,6 +207,16 @@ namespace display {
     void drawMachineScreen();
 
     /**
+     * @brief Average microseconds for one FULL repaint, over n iterations.
+     *
+     * Forces chrome and values to redraw every pass, so it measures the worst
+     * case rather than the change-detected path the machine normally takes.
+     * Exists so claims about drawing performance can be measured instead of
+     * asserted.
+     */
+    uint32_t benchmarkRedraw(uint8_t iterations);
+
+    /**
      * @enum Page
      * @brief Which screen is showing.
      */
