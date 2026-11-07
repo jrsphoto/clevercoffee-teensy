@@ -316,8 +316,11 @@ namespace display {
         // and the status line clears everything below it whenever it updates,
         // so a button ending at 300 had its bottom edge repeatedly chopped
         // off. 246+44=290 clears it.
-        constexpr Hit kBtnWifi = {20, 246, 136, 44};
-        constexpr Hit kBtnBack = {324, 246, 136, 44};
+        // The sub-page row. 52 px of space between the row above (ends 242)
+        // and the footer rule (294), so 248..290 with a little margin either
+        // side. Anything taller collides with one or the other.
+        constexpr Hit kBtnWifi = {20, 248, 136, 42};
+        constexpr Hit kBtnBack = {324, 248, 136, 42};
 
         // WiFi sub-page.
         constexpr Hit kBtnWifiSetup = {20, 180, 200, 56};
@@ -414,7 +417,11 @@ namespace display {
             drawButton(kBtnVolDown.x, kBtnVolDown.y, kBtnVolDown.w, kBtnVolDown.h, "-", kRule, kValue);
             drawButton(kBtnVolUp.x, kBtnVolUp.y, kBtnVolUp.w, kBtnVolUp.h, "+", kRule, kValue);
 
-            drawCaption(20, 232, "SETTINGS");
+            // NO caption on this row, and there is no room for one. The
+            // brightness and volume buttons above end at y=242 and the footer
+            // rule is at y=294, so the whole row has 52 px. A caption at 232
+            // was drawn straight on top of those buttons, which is what made
+            // the bottom of this page look like a jumble.
             drawButton(kBtnWifi.x, kBtnWifi.y, kBtnWifi.w, kBtnWifi.h, "WIFI", kAccent, kAccent);
 
             drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
