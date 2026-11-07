@@ -14,6 +14,7 @@
 #include "heaterHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
+#include "configStore.h"
 #include "safetyHandler.h"
 #include "shotHandler.h"
 #include "tempHandler.h"
@@ -166,6 +167,43 @@ namespace comms {
         }
 
         /**
+         * @brief Apply one config value pushed by the head.
+         *
+         * Body is `k=<dotted.key>,v=<value>`. The head holds the master copy
+         * and the whole schema; this side only validates, applies, persists and
+         * acknowledges. See TEENSY-PORT-BRIEF.md 9.6.
+         *
+         * Every value goes through configStore, which routes it to the owning
+         * handler's validating setter. Nothing here writes a control variable
+         * directly, which is what stops a wrong web form doing something a
+         * person at the panel could not.
+         *
+         * A key this firmware does not own is acked as "notmine" rather than
+         * refused. The head pushes its entire config, which legitimately
+         * contains WiFi, MQTT and display settings; treating those as errors
+         * would make a normal handshake look like a fault.
+         */
+        void handleConfig() {
+            char key[64];
+            char value[48];
+
+            if (!parser.get("k", key, sizeof(key)) || !parser.get("v", value, sizeof(value))) {
+                ack("cfg", false, "malformed");
+
+                return;
+            }
+
+            const char* why = "";
+            const bool ok = configStore::apply(key, value, &why);
+
+            // The ack names the KEY rather than just "cfg", so the head can
+            // match a reply to the specific setting it sent during a burst.
+            char what[72];
+            snprintf(what, sizeof(what), "cfg:%s", key);
+            ack(what, ok, why);
+        }
+
+        /**
          * @brief Act on a command from the head.
          *
          * Everything here is a REQUEST. Each one goes through the same gates a
@@ -279,6 +317,10 @@ namespace comms {
             switch (parser.type()) {
                 case linkproto::FrameType::Command:
                     handleCommand();
+                    break;
+
+                case linkproto::FrameType::Config:
+                    handleConfig();
                     break;
 
                 case linkproto::FrameType::Heartbeat:

@@ -95,6 +95,24 @@ namespace {
             machinelink::sendCommand(body.c_str());
             Serial.printf("sent: %s\n", body.c_str());
         }
+        else if (line.startsWith("cfg ")) {
+            // "cfg <key> <value>". Pushes one setting to the Teensy, in this
+            // board's units - seconds for durations, as upstream stores them.
+            const String rest = line.substring(4);
+            const int sp = rest.indexOf(' ');
+
+            if (sp <= 0) {
+                Serial.println("usage: cfg <key> <value>   e.g. cfg brew.pre_infusion.time 4.5");
+            }
+            else {
+                const String key = rest.substring(0, sp);
+                const String value = rest.substring(sp + 1);
+                machinelink::sendConfig(key.c_str(), value.c_str());
+                Serial.printf("sent config: %s = %s\n", key.c_str(), value.c_str());
+                Serial.println("watch the Teensy console for the ack - 'refused' means a");
+                Serial.println("validating setter declined it, 'notmine' means not a control key");
+            }
+        }
         else if (line == "redraw") {
             display::showBringupScreen();
             Serial.println("redrawn");

@@ -161,4 +161,23 @@ namespace machinelink {
         }
     }
 
+    void sendConfig(const char* key, const char* value) {
+        char body[linkproto::kMaxFrame];
+
+        if (snprintf(body, sizeof(body), "k=%s,v=%s", key, value) >= static_cast<int>(sizeof(body))) {
+            // Silently dropping would be worse than saying so: a setting that
+            // never arrived looks exactly like one the Teensy ignored.
+            Serial.printf("config: key+value too long to send: %s\n", key);
+
+            return;
+        }
+
+        char frame[linkproto::kMaxFrame];
+        const size_t n = linkproto::buildFrame(frame, sizeof(frame), linkproto::FrameType::Config, body);
+
+        if (n > 0) {
+            Serial1.write(reinterpret_cast<const uint8_t*>(frame), n);
+        }
+    }
+
 } // namespace machinelink

@@ -24,6 +24,7 @@
 
 #include "bringupConsole.h"
 #include "commsHandler.h"
+#include "configStore.h"
 #include "encoderHandler.h"
 #include "flowHandler.h"
 #include "hardware/outputs.h"
@@ -225,6 +226,14 @@ void setup() {
     pump::init();
     heater::init();
     shot::init();
+
+    // AFTER every handler's init(), because restoring a setting calls that
+    // handler's setter and those have to be ready to receive it. Before
+    // comms::init() so the machine is already running the operator's settings
+    // when the first telemetry frame goes out, rather than reporting defaults
+    // for a moment and then changing its mind.
+    configStore::begin();
+
     comms::init();
 
     if (encoder::init()) {
@@ -311,6 +320,10 @@ void loop() {
     // Link to the display head. Telemetry out, commands in. Never blocks, and
     // never gates anything - a missing head is not a machine fault.
     comms::loop();
+
+    // Deferred EEPROM write for settings pushed over the link. Coalesces the
+    // burst the head sends on handshake into a single write.
+    configStore::loop();
 
     if (safety::isFaulted()) {
         // Belt and braces. The fault path already forced everything off; this

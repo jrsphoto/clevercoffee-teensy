@@ -26,6 +26,24 @@ sitting in `src/`. Keep the `esp32_usb` exclusion list in step with the
 **Teensy uploads fail transiently** maybe one time in five, with no error text.
 Just run it again. A real failure shows a compiler or linker error.
 
+**After a Teensy reflash the USB port takes a moment to come back.** A script
+that opens `/dev/ttyACM0` immediately gets `FileNotFoundError`. Wait, or check
+`/dev/serial/by-id/` first.
+
+**The display head's web front end is a SEPARATE upload.** Decided 2026-11-06
+to keep upstream's `frontend/` layout portable, which means the HTML does not
+travel with the firmware:
+
+```
+/home/john/.platformio/penv/bin/pio run -e esp32s3 -t upload        # firmware
+/home/john/.platformio/penv/bin/pio run -e esp32s3 -t uploadfs      # the web UI
+```
+
+Flashing only the firmware leaves the old web UI in place, or no web UI at all
+on a fresh board - and it looks like a broken server rather than a missing
+upload. This is exactly the trap the startup-sound comment in `platformio.ini`
+warns about, which is why the command is written down here instead.
+
 ## Serial ports
 
 Auto-detect picks the **wrong** device on this bench - there is a Prolific
@@ -159,6 +177,9 @@ The ones worth knowing:
 
 ```
 status temp rtd failsensor          sensors and fault injection
+config                              settings pushed by the head, EEPROM cache
+groupsim groupreal                  force the group reading (cooling flush tests)
+coolflush                           automatic pre-shot cooling flush
 flow flowwatch flowfast flowcal     flow sensor, including a MHz pin sampler
 scale scaletare scalecal scalediag  load cells
 brew brewwatch brewpull brewsense   brew switch
@@ -168,6 +189,7 @@ drybench <0|1>                      BYPASS dry-fire interlock, no element fitted
 permittest ulntest ulnduty          safety and output-stage tests
 overtemp <C> overtempreset          lower the over-temp cutoff to test it
 shot [start|stop] shotset profile   brew sequence and profiles
+flush backflush                     manual flush and the backflush cycle
 i2c enc link update clear           bus scan, encoder, link, update mode
 ```
 

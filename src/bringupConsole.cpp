@@ -18,6 +18,7 @@
 #include "i2cHandler.h"
 #include "pumpHandler.h"
 #include "safetyHandler.h"
+#include "configStore.h"
 #include "shotHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
@@ -76,6 +77,7 @@ namespace {
         Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
         Serial.println("  shot              brew sequence state and settings");
         Serial.println("  shot start|stop   run or abort a shot");
+        Serial.println("  config            settings pushed by the head, and their EEPROM cache");
         Serial.println("  coolflush         automatic pre-shot cooling flush (HX machine)");
         Serial.println("  coolflush on|off  enable it; off by default, coefficient uncalibrated");
         Serial.println("  groupsim <C>      force the group reading, to test the cooling flush dry");
@@ -446,6 +448,46 @@ namespace {
             }
             else {
                 Serial.println("usage: flush start|stop | flush pump <%> | flush maxms <ms>");
+            }
+        }
+        else if (strcasecmp(command, "config") == 0) {
+            if (argument == nullptr) {
+                configStore::printStatus();
+                Serial.println("usage: config save | config clear | config set <key> <value>");
+                Serial.println("  The HEAD holds the master copy - see TEENSY-PORT-BRIEF.md 9.6.");
+                Serial.println("  Changes made from this console are NOT saved and are overwritten");
+                Serial.println("  the next time the head connects. That is deliberate.");
+            }
+            else if (strcasecmp(argument, "save") == 0) {
+                configStore::save();
+            }
+            else if (strcasecmp(argument, "clear") == 0) {
+                configStore::clearStored();
+            }
+            else if (strcasecmp(argument, "set") == 0) {
+                // Bench aid: apply a key exactly as the head would, so the
+                // whole receive path - validation, unit scaling, EEPROM - is
+                // testable with the head's USB unplugged. It is the SAME code
+                // path configStore uses for a link frame, so a pass here is a
+                // real pass rather than a parallel implementation agreeing
+                // with itself.
+                char* k = strtok(nullptr, " \t");
+                char* v = strtok(nullptr, " \t");
+
+                if (k == nullptr || v == nullptr) {
+                    Serial.println("usage: config set <key> <value>   (value in the HEAD's units)");
+                }
+                else {
+                    const char* why = "";
+                    const bool ok = configStore::apply(k, v, &why);
+                    Serial.print(ok ? "applied: " : "NOT applied: ");
+                    Serial.print(k);
+                    Serial.print(" -> ");
+                    Serial.println(why);
+                }
+            }
+            else {
+                Serial.println("usage: config | config save | config clear");
             }
         }
         else if (strcasecmp(command, "coolflush") == 0) {
