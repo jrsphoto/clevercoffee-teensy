@@ -26,6 +26,7 @@
 
 #include "audio.h"
 #include "display.h"
+#include "headConfig.h"
 #include "es8311.h"
 #include "link.h"
 #include "net.h"
@@ -279,13 +280,25 @@ void setup() {
     // ten-second stall shows a "connecting" message instead of a dead panel -
     // and the Teensy has been running the machine throughout regardless.
     net::mountFilesystem();
+
+    // After the filesystem (the config lives on it) and after the link is
+    // open, so the first edit has somewhere to go. Before net::begin() so the
+    // web server has a populated registry the moment it starts listening.
+    headconfig::begin();
+
     net::begin();
+
+    // Tell the controller what the settings actually are. The head holds the
+    // master copy, so without this the Teensy would keep running on whatever
+    // its EEPROM cache happened to hold. See TEENSY-PORT-BRIEF.md 9.6.
+    headconfig::pushAllToController();
 }
 
 void loop() {
     serviceConsole();
     machinelink::loop();
     net::loop();
+    headconfig::loop();
 
     // Feeds the I2S DMA while a sound is playing; a no-op the rest of the time.
     // Called before the redraw so a slow screen paint cannot starve it.
@@ -323,6 +336,10 @@ void loop() {
         }
 
         Serial.println("controller restarted - repainting");
+
+        // It came up on its EEPROM cache, which may be older than what is on
+        // this board. The head holds the master, so it says so.
+        headconfig::pushAllToController();
     }
 
     if (lcdReady) {

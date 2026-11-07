@@ -25,7 +25,10 @@
 #include <Preferences.h>
 #include <WiFi.h>
 
+#include "ParameterRegistry.h"
+
 #include "display.h"
+#include "headConfig.h"
 #include "link.h"
 
 namespace net {
@@ -169,11 +172,157 @@ namespace net {
             return {};
         }
 
+        /**
+         * @brief GET /parameters - the schema and current values.
+         *
+         * Shaped to match upstream's endpoint, because the front end in
+         * frontend/js/app.js is upstream's and expects that shape: a
+         * "parameters" array of objects carrying id, displayName, type,
+         * section, value and the min/max. Changing the shape would mean
+         * forking their JavaScript, which is the largest single chunk of
+         * their code and the last thing worth diverging on.
+         *
+         * Streamed rather than built in a String. The registry is small today
+         * but this is the response that grows with every setting added, and a
+         * 16 KB String on a board also running WiFi and a framebuffer is the
+         * kind of thing that works until it suddenly does not.
+         */
+        void sendParameters(AsyncWebServerRequest* request) {
+            requests++;
+
+            if (!headconfig::ready()) {
+                request->send(503, "application/json",
+                              "{\"error\":\"config store not ready\"}");
+
+                return;
+            }
+
+            String filter;
+
+            if (request->hasParam("filter")) {
+                filter = request->getParam("filter")->value();
+            }
+
+            AsyncResponseStream* response = request->beginResponseStream("application/json");
+            response->print("{\"parameters\":[");
+
+            bool first = true;
+
+            for (const auto& param : ParameterRegistry::getInstance().getParameters()) {
+                if (!param || !param->shouldShow()) {
+                    continue;
+                }
+
+                if (!filter.isEmpty() && !String(param->getId()).startsWith(filter)) {
+                    continue;
+                }
+
+                if (!first) {
+                    response->print(",");
+                }
+
+                first = false;
+
+                response->print("{\"id\":\"");
+                response->print(param->getId());
+                response->print("\",\"displayName\":\"");
+                response->print(param->getDisplayName());
+                response->print("\",\"type\":");
+                response->print(static_cast<int>(param->getType()));
+                response->print(",\"section\":");
+                response->print(param->getSection());
+                response->print(",\"position\":");
+                response->print(param->getPosition());
+                response->print(",\"min\":");
+                response->print(param->getMinValue());
+                response->print(",\"max\":");
+                response->print(param->getMaxValue());
+                response->print(",\"hasHelpText\":");
+                response->print(param->hasHelpText() ? "true" : "false");
+                response->print(",\"value\":");
+
+                if (param->getType() == kCString) {
+                    response->print("\"");
+                    response->print(param->getStringValue());
+                    response->print("\"");
+                }
+                else {
+                    response->print(param->getValue());
+                }
+
+                response->print("}");
+            }
+
+            response->print("]}");
+            request->send(response);
+        }
+
+        /**
+         * @brief POST /parameters - change settings.
+         *
+         * Each form field is one parameter id. Writing it goes through the
+         * registered setter, which writes this board's master copy and pushes
+         * the value to the Teensy - see headConfig.cpp.
+         *
+         * THE TEENSY MAY REFUSE, and that is not an error here. Its setters
+         * enforce the real limits (a shot time cap that cannot be disabled, a
+         * setpoint that cannot approach the over-temperature cutoff), and they
+         * are the authority. The reply says what was accepted locally; the
+         * machine's own state is what telemetry reports afterwards.
+         */
+        void applyParameters(AsyncWebServerRequest* request) {
+            requests++;
+
+            if (!headconfig::ready()) {
+                request->send(503, "text/plain", "config store not ready");
+
+                return;
+            }
+
+            auto& registry = ParameterRegistry::getInstance();
+            int applied = 0;
+            int unknown = 0;
+
+            for (size_t i = 0; i < request->params(); i++) {
+                const AsyncWebParameter* p = request->getParam(i);
+
+                if (!p->isPost()) {
+                    continue;
+                }
+
+                const auto param = registry.getParameterById(p->name().c_str());
+
+                if (!param) {
+                    unknown++;
+
+                    continue;
+                }
+
+                if (param->getType() == kCString) {
+                    param->setStringValue(p->value());
+                }
+                else {
+                    param->setValue(p->value().toDouble());
+                }
+
+                applied++;
+            }
+
+            char body[96];
+            snprintf(body, sizeof(body), "applied %d, unknown %d", applied, unknown);
+            request->send(unknown > 0 ? 207 : 200, "text/plain", body);
+        }
+
         void registerRoutes() {
             // Telemetry for the browser. Read-only by construction - there is
             // no endpoint here that can change the machine, because changing
             // the machine means sending the Teensy a request it may refuse,
             // and that lands with the parameters work rather than here.
+            // Upstream's endpoint, same path and same JSON shape, because
+            // frontend/js/app.js is upstream's and drives everything off it.
+            server.on("/parameters", HTTP_GET, sendParameters);
+            server.on("/parameters", HTTP_POST, applyParameters);
+
             server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request) {
                 requests++;
                 request->send(200, "application/json", telemetryJson());
