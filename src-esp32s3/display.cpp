@@ -202,6 +202,12 @@ namespace display {
 
         // WiFi sub-page. Up here with the rest rather than next to the code
         // that draws them, so forgetValues() below can reach them.
+        /** Two-tap confirm for FORGET. Times out so it cannot stay armed. */
+        bool forgetArmed = false;
+        int lastForgetArmed = -1;
+        uint32_t forgetArmedAtMs = 0;
+        constexpr uint32_t kForgetArmedMs = 5000;
+
         char lastNetState[20] = "";
         char lastNetName[40] = "";
         char lastNetAddr[24] = "";
@@ -218,6 +224,7 @@ namespace display {
             // page drew the chrome and left the three values blank until one
             // of them happened to change.
             lastNetState[0] = lastNetName[0] = lastNetAddr[0] = '\0';
+            lastForgetArmed = -1;
         }
 
         // Proper fonts rather than the built-in 5x7 bitmap scaled up, which is
@@ -245,6 +252,17 @@ namespace display {
          * because a shorter value would otherwise leave the tail of the longer
          * one behind.
          */
+        /** Draw into a cleared cell. The caller has already decided it changed. */
+        void drawFieldForced(const int x, const int y, const int w, const lgfx::IFont* font,
+                             const uint16_t colour, const char* text) {
+            lcd.setFont(font);
+            lcd.setTextSize(1);
+            lcd.fillRect(x, y, w, lcd.fontHeight(), kBg);
+            lcd.setTextColor(colour, kBg);
+            lcd.setCursor(x, y);
+            lcd.print(text);
+        }
+
         void drawField(const int x, const int y, const int w, const lgfx::IFont* font,
                        const uint16_t colour, const char* text, char* last, const size_t lastLen) {
             if (strncmp(text, last, lastLen) == 0) {
@@ -290,45 +308,54 @@ namespace display {
                 int x, y, w, h;
         };
 
-        // Setup page buttons, also used for hit testing so the drawing and the
-        // touch handling cannot drift apart.
-        // Three even rows of 52 px buttons. Minus and plus FLANK their value
-        // rather than sitting at opposite ends of the row, which is how the
-        // first version read: a "+" marooned 150 px from the number it changes
-        // does not look like it belongs to it.
-        constexpr Hit kBtnSetMinus = {20, 56, 60, 50};
-        constexpr Hit kBtnSetPlus = {246, 56, 60, 50};
-        constexpr Hit kBtnHeater = {320, 56, 140, 50};
-        constexpr Hit kBtnTare = {20, 118, 136, 50};
-        constexpr Hit kBtnFlowZero = {172, 118, 136, 50};
-        constexpr Hit kBtnClearFault = {324, 118, 136, 50};
+        // LAYOUT, 480x320 landscape, header occupies 0..30.
+        //
+        // Setup is a MENU of sub-pages. Everything does NOT fit on one page -
+        // trying to make it fit is what produced a cramped, overlapping mess -
+        // so each group of controls gets its own page with space around it.
+        //
+        // Every page keeps BACK in the same place, so it is muscle memory
+        // rather than a hunt.
+        constexpr Hit kBtnBack = {324, 252, 136, 46};
 
-        // Captions for this row sit at y=178 and are about 14 px tall, so the
-        // buttons start at 196 rather than butting straight up against them.
-        constexpr Hit kBtnDimmer = {20, 196, 56, 46};
-        constexpr Hit kBtnBrighter = {82, 196, 56, 46};
-        constexpr Hit kBtnVolDown = {250, 196, 56, 46};
-        constexpr Hit kBtnVolUp = {312, 196, 56, 46};
-        // The bottom row of the setup page is the SUB-PAGE row. WiFi is the
-        // first of these; the gap beside it is deliberate headroom for the
-        // next one, so adding a sub-page does not mean re-laying out the page.
-        // y=246 h=44, not 254 h=46: the footer rule sits at kH-kFooterH (294)
-        // and the status line clears everything below it whenever it updates,
-        // so a button ending at 300 had its bottom edge repeatedly chopped
-        // off. 246+44=290 clears it.
-        // The sub-page row. 52 px of space between the row above (ends 242)
-        // and the footer rule (294), so 248..290 with a little margin either
-        // side. Anything taller collides with one or the other.
-        constexpr Hit kBtnWifi = {20, 248, 136, 42};
-        constexpr Hit kBtnBack = {324, 248, 136, 42};
+        // --- Setup menu: big tiles, two per row -------------------------
+        constexpr Hit kTileBrew = {20, 54, 210, 84};
+        constexpr Hit kTileDisplay = {250, 54, 210, 84};
+        constexpr Hit kTileWifi = {20, 152, 210, 84};
 
-        // WiFi sub-page.
-        constexpr Hit kBtnWifiSetup = {20, 180, 200, 56};
-        constexpr Hit kBtnWifiForget = {240, 180, 200, 56};
+        // --- Setup > Brew -----------------------------------------------
+        constexpr Hit kBtnSetMinus = {20, 70, 70, 60};
+        constexpr Hit kBtnSetPlus = {270, 70, 70, 60};
+        constexpr Hit kBtnHeater = {360, 70, 100, 60};
+        constexpr Hit kBtnTare = {20, 160, 136, 56};
+        constexpr Hit kBtnFlowZero = {172, 160, 136, 56};
+        constexpr Hit kBtnClearFault = {324, 160, 136, 56};
+
+        // --- Setup > Display ---------------------------------------------
+        constexpr Hit kBtnDimmer = {20, 80, 80, 64};
+        constexpr Hit kBtnBrighter = {116, 80, 80, 64};
+        constexpr Hit kBtnVolDown = {20, 176, 80, 64};
+        constexpr Hit kBtnVolUp = {116, 176, 80, 64};
+
+        // --- Setup > WiFi --------------------------------------------------
+        // WiFi page, worked out rather than estimated. kFontMid is ~24 px and
+        // drawField/drawFieldForced treat y as the TOP, clearing downward:
+        //
+        //   header                 0..30
+        //   STATUS caption         46      value 62..86
+        //   NETWORK caption        100     value 116..140
+        //   ADDRESS caption        154     value 170..194
+        //   SET UP / FORGET        206..250
+        //   BACK (shared)          252..298
+        //
+        // The previous version put these buttons at 186, straight through the
+        // ADDRESS value.
+        constexpr Hit kBtnWifiSetup = {20, 206, 200, 44};
+        constexpr Hit kBtnWifiForget = {240, 206, 200, 44};
+
         // Generous: the whole right end of the header, and a little below it.
-        // A 42x30 box in the extreme corner is exactly where a capacitive
-        // panel is least accurate, and there is nothing else up there to hit
-        // by mistake.
+        // A small box in the extreme corner is exactly where a capacitive
+        // panel is least accurate, and there is nothing else up there to hit.
         constexpr Hit kGear = {kW - 110, 0, 110, kHeaderH + 10};
 
         bool inside(const Hit& h, const int x, const int y) {
@@ -397,110 +424,6 @@ namespace display {
             lcd.drawFastHLine(0, kH - kFooterH, kW, kRule);
         }
 
-        void drawSetupChrome() {
-            lcd.fillScreen(kBg);
-            drawHeader("SETUP");
-
-            drawCaption(20, 38, "BREW TEMPERATURE");
-            drawButton(kBtnSetMinus.x, kBtnSetMinus.y, kBtnSetMinus.w, kBtnSetMinus.h, "-", kAccent, kAccent);
-            drawButton(kBtnSetPlus.x, kBtnSetPlus.y, kBtnSetPlus.w, kBtnSetPlus.h, "+", kAccent, kAccent);
-
-            drawButton(kBtnTare.x, kBtnTare.y, kBtnTare.w, kBtnTare.h, "TARE", kRule, kValue);
-            drawButton(kBtnFlowZero.x, kBtnFlowZero.y, kBtnFlowZero.w, kBtnFlowZero.h, "ZERO VOL", kRule, kValue);
-            drawButton(kBtnClearFault.x, kBtnClearFault.y, kBtnClearFault.w, kBtnClearFault.h, "CLEAR", kAlarm, kAlarm);
-
-            drawCaption(20, 178, "BRIGHTNESS");
-            drawButton(kBtnDimmer.x, kBtnDimmer.y, kBtnDimmer.w, kBtnDimmer.h, "-", kRule, kValue);
-            drawButton(kBtnBrighter.x, kBtnBrighter.y, kBtnBrighter.w, kBtnBrighter.h, "+", kRule, kValue);
-
-            drawCaption(250, 178, "VOLUME");
-            drawButton(kBtnVolDown.x, kBtnVolDown.y, kBtnVolDown.w, kBtnVolDown.h, "-", kRule, kValue);
-            drawButton(kBtnVolUp.x, kBtnVolUp.y, kBtnVolUp.w, kBtnVolUp.h, "+", kRule, kValue);
-
-            // NO caption on this row, and there is no room for one. The
-            // brightness and volume buttons above end at y=242 and the footer
-            // rule is at y=294, so the whole row has 52 px. A caption at 232
-            // was drawn straight on top of those buttons, which is what made
-            // the bottom of this page look like a jumble.
-            drawButton(kBtnWifi.x, kBtnWifi.y, kBtnWifi.w, kBtnWifi.h, "WIFI", kAccent, kAccent);
-
-            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
-        }
-
-        /**
-         * The WiFi sub-page.
-         *
-         * Reports state and offers the two actions that make sense here. There
-         * is deliberately no on-screen keyboard: see the note in handleTouch.
-         */
-        void drawWifiChrome() {
-            lcd.fillScreen(kBg);
-            drawHeader("WIFI");
-
-            drawCaption(20, 38, "STATUS");
-            drawCaption(20, 92, "NETWORK");
-            drawCaption(20, 146, "ADDRESS");
-
-            drawButton(kBtnWifiSetup.x, kBtnWifiSetup.y, kBtnWifiSetup.w, kBtnWifiSetup.h,
-                       "SET UP WIFI", kAccent, kAccent);
-            drawButton(kBtnWifiForget.x, kBtnWifiForget.y, kBtnWifiForget.w, kBtnWifiForget.h,
-                       "FORGET", kAlarm, kAlarm);
-
-            lcd.setFont(kFontCaption);
-            lcd.setTextSize(1);
-            lcd.setTextColor(kLabel, kBg);
-            lcd.setCursor(20, 250);
-            lcd.print("Both restart this display into setup mode.");
-            lcd.setCursor(20, 264);
-            lcd.print("Join its network, then enter your WiFi details");
-            lcd.setCursor(20, 278);
-            lcd.print("on the page that opens. The machine keeps running.");
-
-            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
-        }
-
-        void drawWifiValues() {
-            // Same change-detection discipline as every other page: repaint a
-            // field only when it differs, so the panel does not flicker.
-            if (strcmp(lastNetState, net::stateName()) != 0) {
-                snprintf(lastNetState, sizeof(lastNetState), "%s", net::stateName());
-
-                const uint16_t col = (net::state() == net::State::Online) ? kReady
-                                     : (net::state() == net::State::Portal) ? kHeat
-                                                                            : kLabel;
-
-                lcd.fillRect(20, 54, 440, 30, kBg);
-                lcd.setFont(kFontMid);
-                lcd.setTextSize(1);
-                lcd.setTextColor(col, kBg);
-                lcd.setCursor(20, 54);
-                lcd.print(lastNetState);
-            }
-
-            if (strcmp(lastNetName, net::networkName()) != 0) {
-                snprintf(lastNetName, sizeof(lastNetName), "%s", net::networkName());
-
-                lcd.fillRect(20, 108, 440, 30, kBg);
-                lcd.setFont(kFontMid);
-                lcd.setTextSize(1);
-                lcd.setTextColor(kValue, kBg);
-                lcd.setCursor(20, 108);
-                lcd.print(lastNetName);
-            }
-
-            if (strcmp(lastNetAddr, net::addressText()) != 0) {
-                snprintf(lastNetAddr, sizeof(lastNetAddr), "%s", net::addressText());
-
-                lcd.fillRect(20, 162, 440, 30, kBg);
-                lcd.setFont(kFontMid);
-                lcd.setTextSize(1);
-                lcd.setTextColor(kAccent, kBg);
-                lcd.setCursor(20, 162);
-                lcd.print(lastNetAddr);
-            }
-        }
-
-        /** @brief Status word and colour for the footer and the heater pill. */
         const char* statusText(const machinelink::State& st, const bool live, uint16_t* colour) {
             if (!live) {
                 *colour = kHeat;
@@ -535,6 +458,164 @@ namespace display {
             *colour = kHeat;
 
             return "HEATING";
+        }
+
+        /** @brief A large menu tile with a label. */
+        void drawTile(const Hit& h, const char* label, const uint16_t edge) {
+            lcd.fillRoundRect(h.x, h.y, h.w, h.h, 8, kPanel);
+            lcd.drawRoundRect(h.x, h.y, h.w, h.h, 8, edge);
+
+            lcd.setFont(kFontMid);
+            lcd.setTextSize(1);
+            lcd.setTextColor(edge, kPanel);
+
+            const int tw = lcd.textWidth(label);
+            lcd.setCursor(h.x + (h.w - tw) / 2, h.y + (h.h - lcd.fontHeight()) / 2);
+            lcd.print(label);
+        }
+
+        /**
+         * The setup MENU.
+         *
+         * Deliberately almost empty. Everything used to be crammed onto this
+         * one page and it looked it; the controls now live behind these tiles
+         * with room around them. Adding a group means adding a tile and a
+         * page, not squeezing another row into space that does not exist.
+         */
+        void drawSetupChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("SETUP");
+
+            drawTile(kTileBrew, "BREW", kAccent);
+            drawTile(kTileDisplay, "DISPLAY", kValue);
+            drawTile(kTileWifi, "WIFI", kAccent);
+
+            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
+        }
+
+        void drawSetupValues() {
+            // Nothing live on the menu itself.
+        }
+
+        void drawBrewChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("BREW");
+
+            drawCaption(20, 52, "BREW TEMPERATURE");
+            drawButton(kBtnSetMinus.x, kBtnSetMinus.y, kBtnSetMinus.w, kBtnSetMinus.h, "-", kAccent, kAccent);
+            drawButton(kBtnSetPlus.x, kBtnSetPlus.y, kBtnSetPlus.w, kBtnSetPlus.h, "+", kAccent, kAccent);
+
+            drawButton(kBtnTare.x, kBtnTare.y, kBtnTare.w, kBtnTare.h, "TARE", kRule, kValue);
+            drawButton(kBtnFlowZero.x, kBtnFlowZero.y, kBtnFlowZero.w, kBtnFlowZero.h, "ZERO VOL", kRule, kValue);
+            drawButton(kBtnClearFault.x, kBtnClearFault.y, kBtnClearFault.w, kBtnClearFault.h, "CLEAR", kAlarm, kAlarm);
+
+            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
+        }
+
+        void drawBrewValues() {
+            const auto& st = machinelink::state();
+            char buf[24];
+
+            snprintf(buf, sizeof(buf), "%.1f C", st.setpointC);
+            drawField(104, 82, 160, kFontValue, kAccent, buf, lastSetpoint, sizeof(lastSetpoint));
+
+            const int heaterOn = st.heaterEnabled ? 1 : 0;
+
+            if (heaterOn != lastHeaterOn) {
+                lastHeaterOn = heaterOn;
+                drawButton(kBtnHeater.x, kBtnHeater.y, kBtnHeater.w, kBtnHeater.h,
+                           heaterOn ? "HEAT ON" : "HEAT OFF", heaterOn ? kHeat : kRule,
+                           heaterOn ? kHeat : kValue);
+            }
+
+            // What the boiler is actually doing, so the effect of a setpoint
+            // change is visible without going back to the main page. Below
+            // the buttons (160..216), clear of BACK (252..298).
+            uint16_t col = kDim;
+            const char* text = statusText(st, machinelink::isConnected(), &col);
+
+            snprintf(buf, sizeof(buf), "%.1f C  %s", st.boilerC, text);
+            drawField(20, 228, 290, kFontMid, col, buf, lastStatus, sizeof(lastStatus));
+        }
+
+        void drawDisplayChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("DISPLAY");
+
+            drawCaption(20, 62, "BRIGHTNESS");
+            drawButton(kBtnDimmer.x, kBtnDimmer.y, kBtnDimmer.w, kBtnDimmer.h, "-", kRule, kValue);
+            drawButton(kBtnBrighter.x, kBtnBrighter.y, kBtnBrighter.w, kBtnBrighter.h, "+", kRule, kValue);
+
+            drawCaption(20, 158, "VOLUME");
+            drawButton(kBtnVolDown.x, kBtnVolDown.y, kBtnVolDown.w, kBtnVolDown.h, "-", kRule, kValue);
+            drawButton(kBtnVolUp.x, kBtnVolUp.y, kBtnVolUp.w, kBtnVolUp.h, "+", kRule, kValue);
+
+            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
+        }
+
+        void drawDisplayValues() {
+            char buf[16];
+
+            snprintf(buf, sizeof(buf), "%d", brightness);
+            drawField(216, 96, 120, kFontValue, kValue, buf, lastPump, sizeof(lastPump));
+
+            snprintf(buf, sizeof(buf), "%d%%", audio::volumePercent());
+            drawField(216, 192, 120, kFontValue, kValue, buf, lastFlow, sizeof(lastFlow));
+        }
+
+        /**
+         * The WiFi sub-page.
+         *
+         * Reports state and offers the two actions that make sense here. No
+         * on-screen keyboard: see the note in handleTouch.
+         */
+        void drawWifiChrome() {
+            lcd.fillScreen(kBg);
+            drawHeader("WIFI");
+
+            drawCaption(20, 46, "STATUS");
+            drawCaption(20, 100, "NETWORK");
+            drawCaption(20, 154, "ADDRESS");
+
+            drawButton(kBtnWifiSetup.x, kBtnWifiSetup.y, kBtnWifiSetup.w, kBtnWifiSetup.h,
+                       "SET UP WIFI", kAccent, kAccent);
+
+            drawButton(kBtnBack.x, kBtnBack.y, kBtnBack.w, kBtnBack.h, "BACK", kReady, kReady);
+        }
+
+        void drawWifiValues() {
+            // Let an armed forget lapse rather than sit waiting indefinitely.
+            if (forgetArmed && (millis() - forgetArmedAtMs) > kForgetArmedMs) {
+                forgetArmed = false;
+                lastForgetArmed = -1;
+            }
+
+            if (lastForgetArmed != (forgetArmed ? 1 : 0)) {
+                lastForgetArmed = forgetArmed ? 1 : 0;
+
+                drawButton(kBtnWifiForget.x, kBtnWifiForget.y, kBtnWifiForget.w, kBtnWifiForget.h,
+                           forgetArmed ? "TAP AGAIN" : "FORGET", kAlarm, kAlarm);
+            }
+
+            if (strcmp(lastNetState, net::stateName()) != 0) {
+                snprintf(lastNetState, sizeof(lastNetState), "%s", net::stateName());
+
+                const uint16_t col = (net::state() == net::State::Online)   ? kReady
+                                     : (net::state() == net::State::Portal) ? kHeat
+                                                                            : kLabel;
+
+                drawFieldForced(20, 62, 440, kFontMid, col, lastNetState);
+            }
+
+            if (strcmp(lastNetName, net::networkName()) != 0) {
+                snprintf(lastNetName, sizeof(lastNetName), "%s", net::networkName());
+                drawFieldForced(20, 116, 440, kFontMid, kValue, lastNetName);
+            }
+
+            if (strcmp(lastNetAddr, net::addressText()) != 0) {
+                snprintf(lastNetAddr, sizeof(lastNetAddr), "%s", net::addressText());
+                drawFieldForced(20, 170, 440, kFontMid, kAccent, lastNetAddr);
+            }
         }
 
         void drawMainValues() {
@@ -650,36 +731,6 @@ namespace display {
             }
         }
 
-        void drawSetupValues() {
-            const auto& st = machinelink::state();
-            char buf[24];
-
-            snprintf(buf, sizeof(buf), "%.1f C", st.setpointC);
-            drawField(90, 68, 150, kFontValue, kAccent, buf, lastSetpoint, sizeof(lastSetpoint));
-
-            const int heaterOn = st.heaterEnabled ? 1 : 0;
-
-            if (heaterOn != lastHeaterOn) {
-                lastHeaterOn = heaterOn;
-                drawButton(kBtnHeater.x, kBtnHeater.y, kBtnHeater.w, kBtnHeater.h,
-                           heaterOn ? "HEAT ON" : "HEAT OFF", heaterOn ? kHeat : kRule,
-                           heaterOn ? kHeat : kValue);
-            }
-
-            snprintf(buf, sizeof(buf), "%d", brightness);
-            drawField(146, 206, 90, kFontMid, kValue, buf, lastPump, sizeof(lastPump));
-
-            snprintf(buf, sizeof(buf), "%d%%", audio::volumePercent());
-            drawField(376, 206, 90, kFontMid, kValue, buf, lastFlow, sizeof(lastFlow));
-
-            // What the boiler is actually doing, so the effect of a setpoint
-            // change is visible without switching pages.
-            uint16_t col = kDim;
-            const char* text = statusText(st, machinelink::isConnected(), &col);
-
-            snprintf(buf, sizeof(buf), "%.1f C  %s", st.boilerC, text);
-            drawField(20, 262, 290, kFontMid, col, buf, lastStatus, sizeof(lastStatus));
-        }
 
     } // namespace
 
@@ -723,6 +774,8 @@ namespace display {
     Page parentOf(const Page p) {
         switch (p) {
             case Page::SetupWifi:
+            case Page::SetupBrew:
+            case Page::SetupDisplay:
                 return Page::Setup;
 
             case Page::Setup:
@@ -748,52 +801,44 @@ namespace display {
             return false;
         }
 
-        // Setup page. Every action is a REQUEST sent to the Teensy, which is
-        // free to refuse it - the screen never assumes it worked, it waits for
-        // the next telemetry frame to say so.
-        // Back follows the declared parent, so this one line serves every
+        // From here down we are somewhere in the setup tree. Every action is
+        // a REQUEST sent to the Teensy, which is free to refuse it - the
+        // screen never assumes it worked, it waits for the next telemetry
+        // frame to say so.
+
+        // BACK follows the declared parent, so this one line serves every
         // page including ones not written yet. The gear always jumps straight
         // out to Main, because it is the way in and should be the way out.
         if (inside(kBtnBack, x, y)) {
+            forgetArmed = false;
             setPage(parentOf(currentPage));
 
             return true;
         }
 
         if (inside(kGear, x, y)) {
+            forgetArmed = false;
             setPage(Page::Main);
 
             return true;
         }
 
-        // --- WiFi sub-page ---------------------------------------------
-        //
-        // NO on-screen keyboard here, and that is a decision rather than an
-        // omission. Typing a WiFi password on a 4 inch panel is miserable, and
-        // WiFiManager already serves a credential page far better suited to
-        // the phone that is already in the owner's hand. So this page reports
-        // state and starts the portal; the typing happens elsewhere.
-        //
-        // It also keeps credentials out of this firmware entirely: they go
-        // from the person straight into the ESP32's flash, never through a
-        // config file or a repository.
-        if (currentPage == Page::SetupWifi) {
-            if (inside(kBtnWifiSetup, x, y)) {
-                // Restarts into the portal rather than raising it here:
-                // WiFiManager's startConfigPortal blocks for its whole
-                // timeout, which from inside a touch handler would freeze the
-                // screen and stop the link being serviced for minutes. The
-                // boot path already brings the portal up and puts its name and
-                // password on this screen, so reuse it.
-                display::showMessage("WiFi setup", "restarting", "into setup mode");
-                net::forgetNetworkAndRestart();
+        // --- The setup MENU: tiles into sub-pages ------------------------
+        if (currentPage == Page::Setup) {
+            if (inside(kTileBrew, x, y)) {
+                setPage(Page::SetupBrew);
 
                 return true;
             }
 
-            if (inside(kBtnWifiForget, x, y)) {
-                display::showMessage("WiFi", "forgetting", "network...");
-                net::forgetNetworkAndRestart();
+            if (inside(kTileDisplay, x, y)) {
+                setPage(Page::SetupDisplay);
+
+                return true;
+            }
+
+            if (inside(kTileWifi, x, y)) {
+                setPage(Page::SetupWifi);
 
                 return true;
             }
@@ -801,92 +846,137 @@ namespace display {
             return false;
         }
 
-        if (inside(kBtnWifi, x, y)) {
-            setPage(Page::SetupWifi);
+        // --- Setup > Brew -------------------------------------------------
+        if (currentPage == Page::SetupBrew) {
+            const auto& st = machinelink::state();
+            char cmd[48];
 
-            return true;
-        }
+            if (inside(kBtnSetMinus, x, y)) {
+                snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC - 0.5f);
+                machinelink::sendCommand(cmd);
 
-        const auto& st = machinelink::state();
-        char cmd[48];
-
-        if (inside(kBtnSetMinus, x, y)) {
-            snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC - 0.5f);
-            machinelink::sendCommand(cmd);
-
-            return true;
-        }
-
-        if (inside(kBtnSetPlus, x, y)) {
-            snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC + 0.5f);
-            machinelink::sendCommand(cmd);
-
-            return true;
-        }
-
-        if (inside(kBtnHeater, x, y)) {
-            snprintf(cmd, sizeof(cmd), "heater=%d", st.heaterEnabled ? 0 : 1);
-            machinelink::sendCommand(cmd);
-
-            return true;
-        }
-
-        if (inside(kBtnTare, x, y)) {
-            machinelink::sendCommand("tare=1");
-
-            return true;
-        }
-
-        if (inside(kBtnFlowZero, x, y)) {
-            machinelink::sendCommand("flowreset=1");
-
-            return true;
-        }
-
-        if (inside(kBtnClearFault, x, y)) {
-            machinelink::sendCommand("clearfault=1");
-
-            return true;
-        }
-
-        if (inside(kBtnDimmer, x, y)) {
-            brightness = (brightness > 40) ? (brightness - 40) : 10;
-            lcd.setBrightness(brightness);
-            lastPump[0] = '\0';
-
-            return true;
-        }
-
-        if (inside(kBtnBrighter, x, y)) {
-            brightness = (brightness < 215) ? (brightness + 40) : 255;
-            lcd.setBrightness(brightness);
-            lastPump[0] = '\0';
-
-            return true;
-        }
-
-        // Volume is local to this board - the speaker is on it, so there is
-        // nothing to ask the controller about.
-        if (inside(kBtnVolDown, x, y)) {
-            const uint8_t v = audio::volumePercent();
-            audio::setVolumePercent(v > 10 ? (v - 10) : 0);
-            lastFlow[0] = '\0';
-
-            return true;
-        }
-
-        if (inside(kBtnVolUp, x, y)) {
-            const uint8_t v = audio::volumePercent();
-            audio::setVolumePercent(v < 90 ? (v + 10) : 100);
-            lastFlow[0] = '\0';
-
-            // Play the chime so the new level is audible immediately. Setting
-            // a volume you cannot hear is guesswork.
-            if (!audio::isPlaying()) {
-                audio::playStartupSound();
+                return true;
             }
 
-            return true;
+            if (inside(kBtnSetPlus, x, y)) {
+                snprintf(cmd, sizeof(cmd), "setpoint=%.1f", st.setpointC + 0.5f);
+                machinelink::sendCommand(cmd);
+
+                return true;
+            }
+
+            if (inside(kBtnHeater, x, y)) {
+                snprintf(cmd, sizeof(cmd), "heater=%d", st.heaterEnabled ? 0 : 1);
+                machinelink::sendCommand(cmd);
+
+                return true;
+            }
+
+            if (inside(kBtnTare, x, y)) {
+                machinelink::sendCommand("tare=1");
+
+                return true;
+            }
+
+            if (inside(kBtnFlowZero, x, y)) {
+                machinelink::sendCommand("flowreset=1");
+
+                return true;
+            }
+
+            if (inside(kBtnClearFault, x, y)) {
+                machinelink::sendCommand("clearfault=1");
+
+                return true;
+            }
+
+            return false;
+        }
+
+        // --- Setup > Display ----------------------------------------------
+        if (currentPage == Page::SetupDisplay) {
+            if (inside(kBtnDimmer, x, y)) {
+                brightness = (brightness > 40) ? (brightness - 40) : 10;
+                lcd.setBrightness(brightness);
+                lastPump[0] = '\0';
+
+                return true;
+            }
+
+            if (inside(kBtnBrighter, x, y)) {
+                brightness = (brightness < 215) ? (brightness + 40) : 255;
+                lcd.setBrightness(brightness);
+                lastPump[0] = '\0';
+
+                return true;
+            }
+
+            if (inside(kBtnVolDown, x, y)) {
+                const int v = audio::volumePercent();
+                audio::setVolumePercent(static_cast<uint8_t>(v > 10 ? v - 10 : 0));
+                lastFlow[0] = '\0';
+
+                return true;
+            }
+
+            if (inside(kBtnVolUp, x, y)) {
+                const int v = audio::volumePercent();
+                audio::setVolumePercent(static_cast<uint8_t>(v < 90 ? v + 10 : 100));
+                lastFlow[0] = '\0';
+
+                return true;
+            }
+
+            return false;
+        }
+
+        // --- Setup > WiFi ---------------------------------------------------
+        //
+        // NO on-screen keyboard here, and that is a decision rather than an
+        // omission. Typing a WiFi password on a 4 inch panel is miserable, and
+        // WiFiManager already serves a credential page far better suited to
+        // the phone already in the owner's hand. So this page reports state
+        // and starts the portal; the typing happens there.
+        //
+        // It also keeps credentials out of this firmware entirely: they go
+        // from the person straight into the ESP32's flash, never through a
+        // config file or a repository.
+        if (currentPage == Page::SetupWifi) {
+            if (inside(kBtnWifiSetup, x, y)) {
+                // NON-DESTRUCTIVE. Asks for the portal on the next boot and
+                // leaves the stored credentials alone, so cancelling puts the
+                // machine back on the network it was already using.
+                //
+                // This used to call forgetNetworkAndRestart(), so tapping it
+                // to find out what it did wiped the network. It did exactly
+                // that the first time the button worked.
+                display::showMessage("WiFi setup", "restarting", "into setup mode");
+                net::requestPortalOnNextBoot();
+
+                return true;
+            }
+
+            if (inside(kBtnWifiForget, x, y)) {
+                // DESTRUCTIVE, so it takes two taps: the first arms it and
+                // relabels the button, the second does it.
+                if (!forgetArmed) {
+                    forgetArmed = true;
+                    forgetArmedAtMs = millis();
+
+                    return true;
+                }
+
+                forgetArmed = false;
+                display::showMessage("WiFi", "forgetting", "network...");
+                net::forgetNetworkAndRestart();
+
+                return true;
+            }
+
+            // A tap anywhere else on this page cancels a pending forget.
+            forgetArmed = false;
+
+            return false;
         }
 
         return false;
@@ -897,32 +987,20 @@ namespace display {
             chromeDrawn = true;
 
             switch (currentPage) {
-                case Page::Main:
-                    drawMainChrome();
-                    break;
-
-                case Page::Setup:
-                    drawSetupChrome();
-                    break;
-
-                case Page::SetupWifi:
-                    drawWifiChrome();
-                    break;
+                case Page::Main: drawMainChrome(); break;
+                case Page::Setup: drawSetupChrome(); break;
+                case Page::SetupBrew: drawBrewChrome(); break;
+                case Page::SetupDisplay: drawDisplayChrome(); break;
+                case Page::SetupWifi: drawWifiChrome(); break;
             }
         }
 
         switch (currentPage) {
-            case Page::Main:
-                drawMainValues();
-                break;
-
-            case Page::Setup:
-                drawSetupValues();
-                break;
-
-            case Page::SetupWifi:
-                drawWifiValues();
-                break;
+            case Page::Main: drawMainValues(); break;
+            case Page::Setup: drawSetupValues(); break;
+            case Page::SetupBrew: drawBrewValues(); break;
+            case Page::SetupDisplay: drawDisplayValues(); break;
+            case Page::SetupWifi: drawWifiValues(); break;
         }
     }
 
