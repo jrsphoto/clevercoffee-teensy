@@ -42,6 +42,7 @@
 #include "Config.h"
 #include "ParameterRegistry.h"
 
+#include "headConfig.h"
 #include "link.h"
 
 // The static member ParameterRegistry.cpp would normally define.
@@ -220,3 +221,87 @@ void ParameterRegistry::initialize(Config& config) {
 
     _ready = true;
 }
+
+
+namespace headconfig {
+
+    namespace {
+
+        Config store;
+        bool started = false;
+
+    } // namespace
+
+    bool begin() {
+        // Upstream's Config::begin() loads the JSON from the filesystem and
+        // writes a fresh one from the registered defaults if there is none -
+        // the right behaviour on a new board, so a missing file is not an
+        // error.
+        if (!store.begin()) {
+            Serial.println("config: could not open or create the store");
+
+            return false;
+        }
+
+        ParameterRegistry::getInstance().initialize(store);
+        started = true;
+
+        Serial.printf("config: %d parameters registered\n", parameterCount());
+
+        return true;
+    }
+
+    void loop() {
+        if (started) {
+            // Upstream's debounce: a burst of edits becomes one write.
+            ParameterRegistry::getInstance().processPeriodicSave();
+        }
+    }
+
+    Config& config() {
+        return store;
+    }
+
+    bool ready() {
+        return started;
+    }
+
+    int parameterCount() {
+        return static_cast<int>(ParameterRegistry::getInstance().getParameters().size());
+    }
+
+    void pushAllToController() {
+        if (!started) {
+            return;
+        }
+
+        int sent = 0;
+
+        for (const auto& param : ParameterRegistry::getInstance().getParameters()) {
+            if (!param) {
+                continue;
+            }
+
+            // Strings are not pushed. Every controller-owned setting is
+            // numeric; the only string parameters are the head's own, which
+            // the Teensy would answer "notmine" to anyway.
+            if (param->getType() == kCString) {
+                continue;
+            }
+
+            char text[24];
+            snprintf(text, sizeof(text), "%g", param->getValue());
+            machinelink::sendConfig(param->getId(), text);
+            sent++;
+
+            // Paced deliberately. Twenty-odd frames back to back would
+            // overrun the Teensy's serial buffer while it is also sending
+            // telemetry, and a dropped config frame is a setting that
+            // silently did not apply.
+            delay(20);
+        }
+
+        Serial.printf("config: pushed %d values to the controller\n", sent);
+    }
+
+} // namespace headconfig

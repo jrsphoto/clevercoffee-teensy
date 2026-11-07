@@ -389,6 +389,56 @@ class Config {
             _configDefs.emplace("hardware.sensors.scale.calibration", ConfigDef::forDouble(SCALE_CALIBRATION_FACTOR, SCALE_CALIBRATION_MIN, SCALE_CALIBRATION_MAX));
             _configDefs.emplace("hardware.sensors.scale.calibration2", ConfigDef::forDouble(SCALE_CALIBRATION_FACTOR, SCALE_CALIBRATION_MIN, SCALE_CALIBRATION_MAX));
             _configDefs.emplace("hardware.sensors.scale.known_weight", ConfigDef::forDouble(SCALE_KNOWN_WEIGHT, SCALE_KNOWN_WEIGHT_MIN, SCALE_KNOWN_WEIGHT_MAX));
+
+            // ----------------------------------------------------------------
+            // THIS FORK'S OWN SETTINGS. Upstream has no equivalent for any of
+            // these: its pump is on/off, so it has no speeds to set, and it
+            // runs on single-boiler machines, so it has no heat exchanger to
+            // flush.
+            //
+            // Every default here MATCHES THE TEENSY'S COMPILED DEFAULT, and
+            // that is not cosmetic. The head holds the master copy and pushes
+            // it to the controller at every handshake, so a default that
+            // disagreed would quietly overwrite the controller's own with a
+            // different number the first time the two boards met.
+            //
+            // Omitting them did exactly that in a more obvious way: an
+            // unregistered key reads as 0, so the head pushed zeros and the
+            // Teensy refused seven of them for being out of range. The safety
+            // checks caught it, which is the system working, but the defaults
+            // were still wrong.
+            //
+            // Durations are in SECONDS, as upstream stores them. The Teensy's
+            // configStore table carries the x1000.
+
+            // Pump speeds through the shot (shotHandler.h).
+            _configDefs.emplace("brew.pre_infusion.pump_percent", ConfigDef::forDouble(30.0, 0.0, 100.0));
+            _configDefs.emplace("brew.pump_percent", ConfigDef::forDouble(100.0, 0.0, 100.0));
+
+            // Stop by volume, parallel to upstream's stop by weight. 0 = off.
+            _configDefs.emplace("brew.by_volume.target_volume", ConfigDef::forDouble(0.0, 0.0, 500.0));
+
+            // Manual flush. Upstream's runs for as long as the switch is held
+            // and has nothing to configure; this one has a speed and a cap.
+            _configDefs.emplace("flush.pump_percent", ConfigDef::forDouble(100.0, 0.0, 100.0));
+            _configDefs.emplace("flush.max_time", ConfigDef::forDouble(20.0, 1.0, 60.0));
+
+            // Cooling flush (TEENSY-PORT-BRIEF.md 9.5). Default OFF, and the
+            // two uncalibrated coefficients keep the placeholder values the
+            // firmware ships with so that turning it on without measuring
+            // them behaves the same whichever side you look from.
+            _configDefs.emplace("cooling_flush.enabled", ConfigDef::forBool(false));
+            _configDefs.emplace("cooling_flush.calibrated", ConfigDef::forBool(false));
+            _configDefs.emplace("cooling_flush.target_temperature", ConfigDef::forDouble(95.0, 70.0, 110.0));
+            _configDefs.emplace("cooling_flush.ms_per_degree", ConfigDef::forInt(200, 10.0, 5000.0));
+            _configDefs.emplace("cooling_flush.min_idle_time", ConfigDef::forDouble(120.0, 0.0, 3600.0));
+            _configDefs.emplace("cooling_flush.recovery_time", ConfigDef::forDouble(3.0, 0.0, 30.0));
+            _configDefs.emplace("cooling_flush.max_time", ConfigDef::forDouble(15.0, 1.0, 60.0));
+            _configDefs.emplace("cooling_flush.pump_percent", ConfigDef::forDouble(100.0, 0.0, 100.0));
+
+            // Load shed. Upstream has no 15 A problem to solve. Defaults ON
+            // until the MG304's draw is measured.
+            _configDefs.emplace("pump.load_shed", ConfigDef::forBool(true));
         }
 
         /**

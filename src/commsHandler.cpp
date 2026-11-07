@@ -296,6 +296,24 @@ namespace comms {
     void init() {
         Serial1.begin(linkproto::kBaud);
 
+        // ENLARGE THE RECEIVE BUFFER. Teensy's default is 64 bytes, which is
+        // about ONE frame of this protocol.
+        //
+        // That is ample for the head's heartbeat and the occasional command,
+        // and badly short for a burst: when the head pushes its whole config
+        // at handshake, 26 frames arrive faster than the main loop consumes
+        // them and the overflow is discarded silently. Measured, not guessed -
+        // 26 frames sent, 19 applied, none refused, badsum and malformed both
+        // zero. The missing seven never reached the parser.
+        //
+        // A dropped config frame is a setting that quietly did not apply,
+        // which is the worst way for this to fail: nothing reports an error
+        // and the machine simply runs on a different number than the screen
+        // shows. 1 kB holds roughly twenty frames, so the loop can fall a long
+        // way behind without losing any.
+        static uint8_t rxBuffer[1024];
+        Serial1.addMemoryForRead(rxBuffer, sizeof(rxBuffer));
+
         char body[64];
         snprintf(body, sizeof(body), "who=teensy,fw=%s", "0.1.0-phase2");
         send(linkproto::FrameType::Hello, body);
