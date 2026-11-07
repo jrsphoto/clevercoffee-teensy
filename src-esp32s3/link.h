@@ -96,4 +96,26 @@ namespace machinelink {
     /** @brief Ask the Teensy to do something. It may refuse. */
     void sendCommand(const char* body);
 
+    /**
+     * @brief Push one config value to the Teensy.
+     *
+     * This head holds the master copy of the configuration; the Teensy keeps a
+     * validated EEPROM cache of the control values it needs, so it runs
+     * correctly with this board unplugged. Reasoning in
+     * TEENSY-PORT-BRIEF.md 9.6.
+     *
+     * The Teensy may REFUSE a value, and that is not a failure of the link - it
+     * means a validating setter did its job. Watch the Ack: `ok=0,why=refused`
+     * is the Teensy declining something out of range, and `why=notmine` simply
+     * means the key is not a control setting, which is normal for WiFi, MQTT
+     * and display keys.
+     *
+     * Values are sent as ASCII in THIS BOARD'S units, which for durations means
+     * seconds, matching upstream's config. The Teensy converts.
+     *
+     * @param key    dotted path, e.g. "brew.pre_infusion.time"
+     * @param value  the value as text
+     */
+    void sendConfig(const char* key, const char* value);
+
 } // namespace machinelink

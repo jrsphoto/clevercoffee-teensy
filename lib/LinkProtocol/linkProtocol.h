@@ -75,6 +75,29 @@ namespace linkproto {
                          ///< only so the Teensy can say whether a head is
                          ///< attached. Replying would double the traffic to
                          ///< report something neither side acts on.
+
+        /**
+         * head -> Teensy. One config value: `k=<dotted.key>,v=<value>`.
+         *
+         * Separate from Command because the two are different in kind. A
+         * Command asks the machine to DO something now; a Config frame changes
+         * a stored setting that outlives the frame. Keeping them apart means
+         * an Ack can name the key it applies to, and means a flood of config
+         * on handshake cannot be confused with somebody mashing start.
+         *
+         * The head holds the master copy and the whole schema - display names,
+         * ranges, help text, sections - because that is what the web UI
+         * renders. The Teensy only receives, validates through its existing
+         * setters, persists to EEPROM and acknowledges. See
+         * TEENSY-PORT-BRIEF.md 9.6.
+         *
+         * Values arrive as ASCII. A key the Teensy does not own is NOT an
+         * error: the head's config legitimately contains settings that are
+         * nothing to do with control, such as WiFi and display brightness.
+         * Those are acked as ignored rather than refused.
+         */
+        Config = 'G',
+
         Unknown = '?',
     };
 

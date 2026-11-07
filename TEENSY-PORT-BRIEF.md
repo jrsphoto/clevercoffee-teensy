@@ -229,3 +229,24 @@ Both are called out by `coolflush on` and by `printStatus()` until `coolflush ca
 | shot clock | the shot reported 45.0 s having had 10 s of flush and recovery before it, confirming the baselines are taken at extraction |
 
 `HEATER` and `FILL` stayed flat low throughout every test. `BREW_SW` stayed released, and the console-started shot was not killed by it, which is the 9.4 fix holding.
+
+### 9.6 Config authority across the link: the ESP32 holds the master (2026-11-06)
+
+This closes the question left open in section 4. **Agreed with John 2026-11-06.**
+
+**Upstream already contains the seam.** `ParameterRegistry::addNumericConfigParam` and its siblings do two things: write the JSON config store, which is persisted to the filesystem, and *optionally mirror the value into a `globalVar` pointer* that the control code reads. So upstream's config store is already the master and the globals are already a fast local cache. Splitting across two processors replaces that pointer with a wire. It is not a redesign of upstream's config system.
+
+**Decision:**
+
+- The **ESP32 holds the persistent master**, exactly as upstream does, because it is the board with the filesystem and the web UI.
+- The **Teensy keeps its own EEPROM cache** of the control values it needs, so it boots and runs correctly with no head attached. This is a cache, not a second master.
+- The **head pushes config on each link handshake.** The Teensy applies each value through the setters that already exist, so every range check and refusal is enforced on the receiving side.
+- The **Teensy publishes no schema.** Display names, min/max, help text and sections live in the head's registry, compiled in, because that is what the web UI renders. The Teensy only receives, validates, persists and acknowledges.
+
+**The cost, named rather than discovered:** a setting changed on the Teensy's serial console is overwritten the next time the head connects. That is accepted. It keeps exactly one master and avoids a merge problem, and bench console changes are already temporary - nothing on the Teensy persists them today.
+
+**Rejected alternative:** Teensy as config master with the head as a pure view. A cleaner authority story, and it was considered seriously because "the Teensy is authoritative" is the project's whole stance. But the Teensy has no filesystem for the JSON, every settings page load would become a link round-trip, and upstream's config system assumes a filesystem throughout - so it would mean diverging from upstream on the single largest piece of their code.
+
+**The invariant that must survive this.** No config value may weaken a safety limit. `setMaxBrewMs`, `setMaxFlushMs` and `setMaxCoolingFlushMs` already refuse out-of-range values and cannot be disabled, and `heater::setSetpointC` already refuses anything near the over-temperature cutoff. The link path therefore goes through those setters and must never write the underlying variables directly. A wrong or malicious UI must be unable to do anything a person at the panel could not.
+
+**Front end delivery: a LittleFS image, upstream's way.** Keeps upstream's `frontend/` directory portable unchanged and lets HTML be iterated without a firmware rebuild. The cost is a second upload command, which is precisely the trap the startup-sound comment in `platformio.ini` warns about, so the command belongs in `BENCH.md` rather than in anybody's memory.
