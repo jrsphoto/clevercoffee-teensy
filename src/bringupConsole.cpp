@@ -76,6 +76,13 @@ namespace {
         Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
         Serial.println("  shot              brew sequence state and settings");
         Serial.println("  shot start|stop   run or abort a shot");
+        Serial.println("  backflush         backflush: armed state, cycle, timings");
+        Serial.println("  backflush on|off  arm or disarm (armed: a brew-switch press backflushes)");
+        Serial.println("  backflush start|stop   run or abort a cycle");
+        Serial.println("  flush             manual grouphead flush: state and settings");
+        Serial.println("  flush start|stop  run or stop a flush (on the machine: hold brew switch)");
+        Serial.println("  flush pump <%>    pump speed during a flush");
+        Serial.println("  flush maxms <ms>  flush time cap, 1000-60000, cannot be disabled");
         Serial.println("  profile <1|2>     select a shot profile (encoder: 1 press / 2 presses)");
         Serial.println("  shotset <k> <v>   pre/preamt/soak/brew/grams/ml/maxms");
         Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
@@ -398,6 +405,93 @@ namespace {
             }
             else {
                 Serial.println("usage: shot [start|stop]");
+            }
+        }
+        else if (strcasecmp(command, "flush") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+
+            if (argument == nullptr) {
+                Serial.print("flush: ");
+                Serial.print(shot::isFlushing() ? "RUNNING " : "idle");
+
+                if (shot::isFlushing()) {
+                    Serial.print(shot::flushElapsedMs() / 1000.0, 1);
+                    Serial.print(" s");
+                }
+
+                Serial.print(", last stop: ");
+                Serial.println(shot::lastFlushStopReason());
+                Serial.println("usage: flush start|stop | flush pump <%> | flush maxms <ms>");
+                Serial.println("       on the machine: hold the brew switch (momentary only)");
+            }
+            else if (strcasecmp(argument, "start") == 0) {
+                // The console form has no finger holding it, so the time cap
+                // is the only thing that will end it. That is on purpose for
+                // bench use, and it is why the cap cannot be disabled.
+                shot::startFlush("console");
+            }
+            else if (strcasecmp(argument, "stop") == 0) {
+                shot::stopFlush("stopped by hand");
+            }
+            else if (strcasecmp(argument, "pump") == 0 && a2 != nullptr) {
+                shot::setFlushPercent(atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "maxms") == 0 && a2 != nullptr) {
+                shot::setMaxFlushMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else {
+                Serial.println("usage: flush start|stop | flush pump <%> | flush maxms <ms>");
+            }
+        }
+        else if (strcasecmp(command, "backflush") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+
+            if (argument == nullptr) {
+                Serial.print("backflush: ");
+                Serial.print(shot::backflushArmed() ? "ARMED, " : "disarmed, ");
+                Serial.print(shot::backflushStateName());
+
+                if (shot::isBackflushing()) {
+                    Serial.print(" cycle ");
+                    Serial.print(shot::backflushCycle());
+                }
+
+                Serial.println();
+                Serial.println("usage: backflush on|off          arm or disarm (armed: a press backflushes)");
+                Serial.println("       backflush start|stop      run or abort a cycle");
+                Serial.println("       backflush cycles <n>      2-20");
+                Serial.println("       backflush fill <ms>       3000-10000");
+                Serial.println("       backflush flushms <ms>    5000-20000");
+                Serial.println("       backflush pump <%>        fill-stage pump speed");
+            }
+            else if (strcasecmp(argument, "on") == 0) {
+                shot::setBackflushArmed(true);
+            }
+            else if (strcasecmp(argument, "off") == 0) {
+                shot::setBackflushArmed(false);
+            }
+            else if (strcasecmp(argument, "start") == 0) {
+                shot::startBackflush("console");
+            }
+            else if (strcasecmp(argument, "stop") == 0) {
+                shot::stopBackflush("stopped by hand");
+            }
+            else if (strcasecmp(argument, "cycles") == 0 && a2 != nullptr) {
+                shot::setBackflushCycles(static_cast<uint8_t>(atoi(a2)));
+            }
+            else if (strcasecmp(argument, "fill") == 0 && a2 != nullptr) {
+                shot::setBackflushFillMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else if (strcasecmp(argument, "flushms") == 0 && a2 != nullptr) {
+                shot::setBackflushFlushMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else if (strcasecmp(argument, "pump") == 0 && a2 != nullptr) {
+                shot::setBackflushPercent(atof(a2));
+                Serial.println("set");
+            }
+            else {
+                Serial.println("usage: backflush on|off|start|stop | cycles <n> | fill <ms> | flushms <ms> | pump <%>");
             }
         }
         else if (strcasecmp(command, "profile") == 0) {

@@ -67,6 +67,137 @@ namespace shot {
          */
         bool switchWasReleased = true;
 
+        // --- Manual flush ------------------------------------------------
+        FlushState flush = FlushState::Idle;
+
+        uint32_t flushStartedMs = 0;
+        double flushPercent = kDefaultFlushPercent;
+        uint32_t maxFlushMs = kDefaultMaxFlushMs;
+        const char* flushStopReason = "never run";
+
+
+        // --- Backflush ---------------------------------------------------
+        BackflushState backflush = BackflushState::Idle;
+
+        bool backflushIsArmed = false;
+        uint8_t backflushCycles = kDefaultBackflushCycles;
+        uint8_t backflushCycleNow = 1;
+        uint32_t backflushFillMs = kDefaultBackflushFillMs;
+        uint32_t backflushFlushMs = kDefaultBackflushFlushMs;
+        double backflushPercent = kDefaultBackflushPercent;
+        uint32_t backflushStageStartedMs = 0;
+        const char* backflushStopReason = "never run";
+
+        // --- Brew switch gesture machine ---------------------------------
+        SwitchState switchStateNow = SwitchState::Idle;
+
+        /**
+         * @brief Turn the switch level into a gesture.
+         *
+         * A direct port of upstream's checkBrewSwitch() (brewHandler.h), both
+         * branches, with upstream's state names. The only substantive change is
+         * that this reads switches::brewRequested() rather than a raw pin, so
+         * the debounce, the sense correction and the released-since-boot latch
+         * are already applied - see switchHandler.h.
+         *
+         * Upstream also blocks the switch on an empty water tank and while hot
+         * water is being drawn. Neither applies here: the water-level probe
+         * circuit does not exist yet, and this machine's hot water is a manual
+         * tap with no firmware involvement. The dry-fire interlock still gates
+         * the heater, and outputs::set() still refuses while faulted, so
+         * nothing is weakened by their absence.
+         */
+        void updateSwitchState() {
+            const bool pressed = switches::brewRequested();
+
+            if (!switches::momentary()) {
+                // TOGGLE. The switch is a level: on means brew, off means stop.
+                // longPressDetected() is hardwired false for toggles upstream,
+                // so there is no flush gesture on this path at all.
+                switch (switchStateNow) {
+                    case SwitchState::Idle:
+                        if (pressed) {
+                            switchStateNow = SwitchState::ShortPressed;
+                        }
+
+                        break;
+
+                    case SwitchState::ShortPressed:
+                        if (!pressed) {
+                            switchStateNow = SwitchState::Idle;
+                        }
+                        else if (current == State::Finished) {
+                            switchStateNow = SwitchState::WaitForRelease;
+                        }
+
+                        break;
+
+                    case SwitchState::WaitForRelease:
+                        if (!pressed) {
+                            switchStateNow = SwitchState::Idle;
+                        }
+
+                        break;
+
+                    default:
+                        switchStateNow = SwitchState::Idle;
+
+                        break;
+                }
+
+                return;
+            }
+
+            // MOMENTARY. A press is held in Pressed until it resolves one way
+            // or the other: released inside the threshold is a short press,
+            // still held past it is a long press. This waiting is why a shot
+            // starts on release rather than on contact.
+            switch (switchStateNow) {
+                case SwitchState::Idle:
+                    if (pressed) {
+                        switchStateNow = SwitchState::Pressed;
+                    }
+
+                    break;
+
+                case SwitchState::Pressed:
+                    if (!pressed) {
+                        switchStateNow = SwitchState::ShortPressed;
+                    }
+                    else if (switches::longPressed()) {
+                        switchStateNow = SwitchState::LongPressed;
+                    }
+
+                    break;
+
+                case SwitchState::ShortPressed:
+                    // The switch is released by now, so a HIGH here is a NEW
+                    // press, which upstream treats as "stop what is running".
+                    if (pressed) {
+                        switchStateNow = SwitchState::WaitForRelease;
+                    }
+                    else if (current == State::Finished) {
+                        switchStateNow = SwitchState::WaitForRelease;
+                    }
+
+                    break;
+
+                case SwitchState::LongPressed:
+                    if (!pressed) {
+                        switchStateNow = SwitchState::WaitForRelease;
+                    }
+
+                    break;
+
+                case SwitchState::WaitForRelease:
+                    if (!pressed) {
+                        switchStateNow = SwitchState::Idle;
+                    }
+
+                    break;
+            }
+        }
+
         /** @brief Valve and pump to their resting state. */
         void allOff() {
             pump::stop();
@@ -129,6 +260,22 @@ namespace shot {
 
     void init() {
         current = State::Idle;
+        flush = FlushState::Idle;
+        backflush = BackflushState::Idle;
+
+        // Never armed at boot. A backflush diverts the brew switch away from
+        // brewing, so coming up armed after a power cut would mean the first
+        // press of the day backflushed instead of making coffee.
+        backflushIsArmed = false;
+
+        // Arm the gesture machine according to what the switch is doing RIGHT
+        // NOW. Starting it in Idle with the switch already closed would make
+        // the first press look like a completed gesture and could fire a shot
+        // or a flush at boot. switchHandler's released-since-boot latch also
+        // guards this, so this is the second of two independent defences.
+        switchStateNow = switches::brewRequested() ? SwitchState::WaitForRelease : SwitchState::Idle;
+        switchWasReleased = !switches::brewRequested();
+
         allOff();
 
         Serial.print("shot: ready. pre-infuse ");
@@ -149,6 +296,15 @@ namespace shot {
     bool start() {
         if (isRunning()) {
             Serial.println("shot: already running");
+
+            return false;
+        }
+
+        // Both want the valve and the pump, so they cannot overlap. Refusing
+        // here rather than quietly stopping the flush, because a shot that
+        // silently cancelled a flush would be a surprise mid-flush.
+        if (flush != FlushState::Idle) {
+            Serial.println("shot: REFUSED - a manual flush is running");
 
             return false;
         }
@@ -215,23 +371,78 @@ namespace shot {
         //   the switch returning to idle ABORTS from any state;
         //   a shot runs once per press, never restarting under a held switch.
         if (switchControl) {
-            const bool pressed = switches::brewRequested();
+            // EVERYTHING HERE KEYS OFF EDGES, NOT LEVELS, and that distinction
+            // is the whole correctness of this block.
+            //
+            // The obvious way to write the abort is "if the switch is idle,
+            // stop whatever is running". That is wrong, and wrong in a way
+            // that looks right: the switch is idle almost all the time, so
+            // anything NOT started by the switch - a console command, later a
+            // tap on the display - gets killed on the very next loop pass. It
+            // started and stopped inside one millisecond.
+            //
+            // Upstream never hit this because upstream has no way to start a
+            // shot except the switch, so its gesture state is never Idle while
+            // something is running. The moment a second way in exists, the
+            // level test breaks and the edge test is the one that holds.
+            //
+            // Keying on the edge also keeps the switch's authority intact: a
+            // console-started shot can still be stopped at the panel, because
+            // pressing and releasing the switch produces a real transition
+            // back to Idle.
+            const SwitchState before = switchStateNow;
+            updateSwitchState();
+            const SwitchState after = switchStateNow;
 
-            if (!pressed) {
+            if (after == SwitchState::Idle) {
                 switchWasReleased = true;
+            }
 
-                // Releasing mid-shot stops it. Upstream does the same, and it
-                // is the behaviour anyone operating the machine expects: let
-                // go and it stops.
+            // ABORT, upstream's rule: the gesture machine RETURNING to Idle
+            // ends whatever is running. On a toggle that is the switch being
+            // turned off; on a momentary it is the release after a second
+            // press. Applies to a backflush as well as a shot.
+            if (const bool justReleased = (after == SwitchState::Idle && before != SwitchState::Idle); justReleased) {
+                if (isBackflushing()) {
+                    stopBackflush("brew switch released");
+                }
+
                 if (isRunning()) {
                     stop("brew switch released");
 
                     return;
                 }
             }
-            else if (switchWasReleased && current == State::Idle) {
-                switchWasReleased = false;
-                start();
+
+            // MANUAL FLUSH is hold-to-run, so it starts when the switch
+            // ENTERS the long press and stops when it LEAVES it. Both edges,
+            // for the same reason as above - a console flush never enters
+            // LongPressed, so it is untouched by either.
+            if (after == SwitchState::LongPressed && before != SwitchState::LongPressed) {
+                if (flush == FlushState::Idle && !isRunning()) {
+                    startFlush("brew switch held");
+                }
+            }
+            else if (before == SwitchState::LongPressed && after != SwitchState::LongPressed && flush == FlushState::Running) {
+                stopFlush("brew switch released");
+            }
+
+            // A COMPLETED SHORT PRESS starts a shot - or a BACKFLUSH, if one
+            // is armed. Upstream diverts the same gesture the same way, so the
+            // one switch never has to mean two things at once: arming
+            // backflush is what decides which.
+            //
+            // On a momentary switch this edge arrives on release, which is the
+            // cost of being able to tell a press from a hold at all.
+            if (after == SwitchState::ShortPressed && before != SwitchState::ShortPressed && switchWasReleased && flush == FlushState::Idle) {
+                if (backflushIsArmed && backflush == BackflushState::Idle) {
+                    switchWasReleased = false;
+                    startBackflush("brew switch");
+                }
+                else if (current == State::Idle && backflush == BackflushState::Idle) {
+                    switchWasReleased = false;
+                    start();
+                }
             }
         }
 
@@ -278,7 +489,104 @@ namespace shot {
             return;
         }
 
+        if (flush == FlushState::Running && safety::isFaulted()) {
+            stopFlush("fault latched");
+        }
+
+        if (isBackflushing() && safety::isFaulted()) {
+            stopBackflush("fault latched");
+        }
+
+        // Disarming mid-cycle stops the cycle, as upstream does - its comment
+        // reads "Force reset in case backflushOn is reset during backflush".
+        if (isBackflushing() && !backflushIsArmed) {
+            stopBackflush("disarmed");
+        }
+
         const uint32_t now = millis();
+
+        // --- Manual flush ------------------------------------------------
+        //
+        // Serviced before the shot stages below, and deliberately not inside
+        // that switch: a flush is not a brew stage, it is a separate thing
+        // that happens to use the same two actuators. Upstream keeps them as
+        // two functions for the same reason.
+        //
+        // The valve and pump are re-asserted every pass, exactly as the shot
+        // stages do, so that a hang here lets the pump's own command expiry
+        // stop it rather than leaving it running.
+        if (flush == FlushState::Running) {
+            if ((now - flushStartedMs) >= maxFlushMs) {
+                stopFlush("MAXIMUM TIME - check the brew switch is not stuck");
+            }
+            else {
+                outputs::set(outputs::Channel::Valve, true);
+                pump::setSpeed(flushPercent);
+            }
+        }
+
+        // --- Backflush ---------------------------------------------------
+        //
+        // A direct port of upstream's backflush(), same states and the same
+        // cycle counting. Every stage is bounded by its own timer and there is
+        // no sensor anywhere in the sequence, so unlike a shot there is nothing
+        // here that needs a separate time backstop: the cycle cannot run long
+        // without the timers themselves being wrong. A hang in this handler is
+        // caught by the pump's command expiry, which stops the pump whether or
+        // not this code ever runs again.
+        switch (backflush) {
+            case BackflushState::Idle:
+                break;
+
+            case BackflushState::Filling:
+                outputs::set(outputs::Channel::Valve, true);
+                pump::setSpeed(backflushPercent);
+
+                if ((now - backflushStageStartedMs) >= backflushFillMs) {
+                    backflushStageStartedMs = now;
+                    allOff();
+
+                    // The last cycle's flush is Ending rather than Flushing, so
+                    // the state machine has somewhere to go that is not "start
+                    // another fill". Upstream splits it the same way.
+                    backflush = (backflushCycleNow >= backflushCycles) ? BackflushState::Ending : BackflushState::Flushing;
+
+                    Serial.println("backflush: flushing into the drip tray");
+                }
+
+                break;
+
+            case BackflushState::Flushing:
+                allOff();
+
+                if ((now - backflushStageStartedMs) >= backflushFlushMs) {
+                    backflushStageStartedMs = now;
+                    backflushCycleNow++;
+                    backflush = BackflushState::Filling;
+
+                    Serial.print("backflush: cycle ");
+                    Serial.print(backflushCycleNow);
+                    Serial.print(" of ");
+                    Serial.print(backflushCycles);
+                    Serial.println(" - filling");
+                }
+
+                break;
+
+            case BackflushState::Ending:
+                allOff();
+
+                if ((now - backflushStageStartedMs) >= backflushFlushMs) {
+                    backflush = BackflushState::Finished;
+                }
+
+                break;
+
+            case BackflushState::Finished:
+                stopBackflush("completed");
+
+                break;
+        }
 
         switch (current) {
             case State::Idle:
@@ -332,12 +640,336 @@ namespace shot {
         }
     }
 
+    // --- Manual flush --------------------------------------------------
+
+    bool startFlush(const char* why) {
+        if (flush == FlushState::Running) {
+            return false;
+        }
+
+        if (isRunning()) {
+            Serial.println("flush: REFUSED - a shot is running");
+
+            return false;
+        }
+
+        if (safety::isFaulted()) {
+            Serial.print("flush: REFUSED - fault latched (");
+            Serial.print(safetyFaultName(safety::latchedFault));
+            Serial.println(")");
+
+            return false;
+        }
+
+        flushStartedMs = millis();
+        flush = FlushState::Running;
+        flushStopReason = "running";
+
+        // The actuators are not touched here. loop() asserts them on its next
+        // pass, which keeps every valve-open and pump-on command in exactly
+        // one place and means the re-assertion rule has no exception to it.
+        Serial.print("flush: START - ");
+        Serial.print(why);
+        Serial.print(", pump ");
+        Serial.print(flushPercent, 0);
+        Serial.print("%, max ");
+        Serial.print(maxFlushMs / 1000.0, 0);
+        Serial.println(" s");
+
+        return true;
+    }
+
+    void stopFlush(const char* why) {
+        if (flush == FlushState::Idle) {
+            return;
+        }
+
+        allOff();
+
+        flush = FlushState::Idle;
+        flushStopReason = why;
+
+        Serial.print("flush: STOPPED after ");
+        Serial.print((millis() - flushStartedMs) / 1000.0, 1);
+        Serial.print(" s - ");
+        Serial.println(why);
+    }
+
+    FlushState flushState() {
+        return flush;
+    }
+
+    bool isFlushing() {
+        return flush == FlushState::Running;
+    }
+
+    uint32_t flushElapsedMs() {
+        if (flush == FlushState::Idle) {
+            return 0;
+        }
+
+        return millis() - flushStartedMs;
+    }
+
+    const char* lastFlushStopReason() {
+        return flushStopReason;
+    }
+
+    void setFlushPercent(const double percent) {
+        flushPercent = (percent < 0.0) ? 0.0 : ((percent > 100.0) ? 100.0 : percent);
+    }
+
+    bool setMaxFlushMs(const uint32_t ms) {
+        // Same reasoning as setMaxBrewMs: this is the only thing that stops a
+        // flush if the switch is stuck, so it cannot be disabled or stretched
+        // until it stops being a backstop.
+        if (ms < 1000 || ms > 60000) {
+            Serial.println("flush: REFUSED - the time cap must be 1 to 60 s. It cannot be disabled.");
+
+            return false;
+        }
+
+        maxFlushMs = ms;
+
+        Serial.print("flush: maximum flush time now ");
+        Serial.print(maxFlushMs / 1000.0, 1);
+        Serial.println(" s");
+
+        return true;
+    }
+
+    // --- Backflush ------------------------------------------------------
+
+    void setBackflushArmed(const bool armed) {
+        backflushIsArmed = armed;
+
+        if (!armed) {
+            // loop() also catches this, but doing it here means disarming
+            // takes effect on the spot rather than on the next pass.
+            if (isBackflushing()) {
+                stopBackflush("disarmed");
+            }
+
+            Serial.println("backflush: DISARMED");
+
+            return;
+        }
+
+        Serial.println("backflush: ARMED - a short press on the brew switch now backflushes,");
+        Serial.println("           it does NOT brew. 'backflush off' to disarm.");
+        Serial.println();
+        Serial.println("  WARNING, and the firmware cannot check any of this:");
+        Serial.println("  This drives the pump against a blind basket. The MG304 is a gear pump");
+        Serial.println("  with no internal pressure relief, so a closed outlet means pressure");
+        Serial.println("  rises until something gives. A mechanical relief valve is MANDATORY");
+        Serial.println("  and is not fitted yet. There is no brew pressure sensor either, so");
+        Serial.println("  nothing here can detect over-pressure. Bench use only for now.");
+    }
+
+    bool backflushArmed() {
+        return backflushIsArmed;
+    }
+
+    bool startBackflush(const char* why) {
+        if (backflush != BackflushState::Idle) {
+            return false;
+        }
+
+        if (!backflushIsArmed) {
+            Serial.println("backflush: REFUSED - not armed. 'backflush on' first.");
+
+            return false;
+        }
+
+        if (isRunning() || flush != FlushState::Idle) {
+            Serial.println("backflush: REFUSED - a shot or flush is running");
+
+            return false;
+        }
+
+        if (safety::isFaulted()) {
+            Serial.print("backflush: REFUSED - fault latched (");
+            Serial.print(safetyFaultName(safety::latchedFault));
+            Serial.println(")");
+
+            return false;
+        }
+
+        backflushCycleNow = 1;
+        backflushStageStartedMs = millis();
+        backflush = BackflushState::Filling;
+        backflushStopReason = "running";
+
+        Serial.print("backflush: START - ");
+        Serial.print(why);
+        Serial.print(", ");
+        Serial.print(backflushCycles);
+        Serial.print(" cycles of ");
+        Serial.print(backflushFillMs / 1000.0, 1);
+        Serial.print(" s fill at ");
+        Serial.print(backflushPercent, 0);
+        Serial.print("% / ");
+        Serial.print(backflushFlushMs / 1000.0, 1);
+        Serial.println(" s flush");
+        Serial.println("backflush: cycle 1 - filling");
+
+        return true;
+    }
+
+    void stopBackflush(const char* why) {
+        if (backflush == BackflushState::Idle) {
+            return;
+        }
+
+        allOff();
+
+        const uint8_t completed = backflushCycleNow;
+
+        backflush = BackflushState::Idle;
+        backflushCycleNow = 1;
+        backflushStopReason = why;
+
+        // A press is only consumed once. Upstream advances the switch to
+        // WaitForRelease when a backflush finishes, and that matters here: a
+        // shot gets the same treatment for free because stop() leaves the shot
+        // in Finished, which updateSwitchState() watches for. A backflush has
+        // no lingering Finished state to watch, so it has to say so itself -
+        // otherwise the gesture machine would sit in ShortPressed with nothing
+        // to move it on.
+        if (switchStateNow == SwitchState::ShortPressed || switchStateNow == SwitchState::Pressed) {
+            switchStateNow = SwitchState::WaitForRelease;
+        }
+
+        switchWasReleased = false;
+
+        Serial.print("backflush: STOPPED after ");
+        Serial.print(completed);
+        Serial.print(" of ");
+        Serial.print(backflushCycles);
+        Serial.print(" cycles - ");
+        Serial.println(why);
+    }
+
+    BackflushState backflushState() {
+        return backflush;
+    }
+
+    const char* backflushStateName() {
+        switch (backflush) {
+            case BackflushState::Idle:
+                return "idle";
+            case BackflushState::Filling:
+                return "filling";
+            case BackflushState::Flushing:
+                return "flushing";
+            case BackflushState::Ending:
+                return "ending";
+            case BackflushState::Finished:
+                return "finished";
+        }
+
+        return "?";
+    }
+
+    bool isBackflushing() {
+        return backflush != BackflushState::Idle;
+    }
+
+    uint8_t backflushCycle() {
+        return backflushCycleNow;
+    }
+
+    bool setBackflushCycles(const uint8_t cycles) {
+        if (cycles < kMinBackflushCycles || cycles > kMaxBackflushCycles) {
+            Serial.print("backflush: REFUSED - cycles must be ");
+            Serial.print(kMinBackflushCycles);
+            Serial.print(" to ");
+            Serial.println(kMaxBackflushCycles);
+
+            return false;
+        }
+
+        backflushCycles = cycles;
+        Serial.println("set");
+
+        return true;
+    }
+
+    bool setBackflushFillMs(const uint32_t ms) {
+        if (ms < kMinBackflushFillMs || ms > kMaxBackflushFillMs) {
+            Serial.print("backflush: REFUSED - fill must be ");
+            Serial.print(kMinBackflushFillMs);
+            Serial.print(" to ");
+            Serial.print(kMaxBackflushFillMs);
+            Serial.println(" ms");
+
+            return false;
+        }
+
+        backflushFillMs = ms;
+        Serial.println("set");
+
+        return true;
+    }
+
+    bool setBackflushFlushMs(const uint32_t ms) {
+        if (ms < kMinBackflushFlushMs || ms > kMaxBackflushFlushMs) {
+            Serial.print("backflush: REFUSED - flush must be ");
+            Serial.print(kMinBackflushFlushMs);
+            Serial.print(" to ");
+            Serial.print(kMaxBackflushFlushMs);
+            Serial.println(" ms");
+
+            return false;
+        }
+
+        backflushFlushMs = ms;
+        Serial.println("set");
+
+        return true;
+    }
+
+    void setBackflushPercent(const double percent) {
+        backflushPercent = (percent < 0.0) ? 0.0 : ((percent > 100.0) ? 100.0 : percent);
+    }
+
+    SwitchState switchState() {
+        return switchStateNow;
+    }
+
+    const char* switchStateName() {
+        switch (switchStateNow) {
+            case SwitchState::Idle:
+                return "idle";
+            case SwitchState::Pressed:
+                return "pressed (deciding)";
+            case SwitchState::ShortPressed:
+                return "short press";
+            case SwitchState::LongPressed:
+                return "long press (flush)";
+            case SwitchState::WaitForRelease:
+                return "waiting for release";
+        }
+
+        return "?";
+    }
+
+    bool isBusy() {
+        return isRunning() || isFlushing() || isBackflushing();
+    }
+
     void setSwitchControlEnabled(const bool enabled) {
         switchControl = enabled;
 
         // Re-arm, so enabling control with the switch already held does not
-        // immediately fire a shot.
+        // immediately fire a shot or a flush. Same reasoning as init().
+        switchStateNow = switches::brewRequested() ? SwitchState::WaitForRelease : SwitchState::Idle;
         switchWasReleased = !switches::brewRequested();
+
+        // Disabling switch control must not abandon a flush the switch started.
+        if (!enabled && flush == FlushState::Running) {
+            stopFlush("switch control disabled");
+        }
 
         Serial.print("shot: brew switch control ");
         Serial.println(enabled ? "ENABLED" : "disabled");
@@ -517,10 +1149,66 @@ namespace shot {
         Serial.print(maxBrewMs / 1000);
         Serial.println(" s (always enforced)");
 
+        Serial.print("      flush ");
+
+        if (flush == FlushState::Running) {
+            Serial.print("RUNNING, ");
+            Serial.print(flushElapsedMs() / 1000.0, 1);
+            Serial.print(" s");
+        }
+        else {
+            Serial.print("idle");
+        }
+
+        Serial.print(" - pump ");
+        Serial.print(flushPercent, 0);
+        Serial.print("%, cap ");
+        Serial.print(maxFlushMs / 1000.0, 1);
+        Serial.print(" s, last stop: ");
+        Serial.println(flushStopReason);
+
+        Serial.print("      backflush ");
+        Serial.print(backflushIsArmed ? "ARMED" : "disarmed");
+        Serial.print(", ");
+        Serial.print(backflushStateName());
+
+        if (isBackflushing()) {
+            Serial.print(" cycle ");
+            Serial.print(backflushCycleNow);
+            Serial.print("/");
+            Serial.print(backflushCycles);
+        }
+
+        Serial.print(" - ");
+        Serial.print(backflushCycles);
+        Serial.print(" x (");
+        Serial.print(backflushFillMs / 1000.0, 1);
+        Serial.print(" s @ ");
+        Serial.print(backflushPercent, 0);
+        Serial.print("% + ");
+        Serial.print(backflushFlushMs / 1000.0, 1);
+        Serial.print(" s), last stop: ");
+        Serial.println(backflushStopReason);
+
+        if (backflushIsArmed) {
+            Serial.println("      WARNING: armed - a short press backflushes, it does NOT brew.");
+            Serial.println("               No relief valve fitted and no pressure sensor. Bench only.");
+        }
+
         Serial.print("      brew switch control ");
         Serial.print(switchControl ? "on" : "off");
-        Serial.print(", switch currently ");
-        Serial.println(switches::brewRequested() ? "PRESSED" : "released");
+        Serial.print(", ");
+        Serial.print(switches::momentary() ? "momentary" : "toggle");
+        Serial.print(", currently ");
+        Serial.print(switches::brewRequested() ? "PRESSED" : "released");
+        Serial.print(", gesture ");
+        Serial.println(switchStateName());
+
+        if (!switches::momentary()) {
+            Serial.println("      NOTE: a toggle switch has no manual flush - upstream hardwires");
+            Serial.println("            longPressDetected() false for toggles. Use 'flush' here, or");
+            Serial.println("            'brewtype' to switch to momentary.");
+        }
 
         Serial.print("      last stop: ");
         Serial.println(stopReason);

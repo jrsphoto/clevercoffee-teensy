@@ -15,6 +15,7 @@
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
+#include "shotHandler.h"
 #include "tempHandler.h"
 #include "pumpHandler.h"
 #include "switchHandler.h"
@@ -54,10 +55,48 @@ namespace comms {
 
         /**
          * @brief One short word describing what the machine is doing.
+         *
+         * Ordered by what the operator most needs to know, not by the
+         * machine's internals. What the pump is doing matters less than WHY it
+         * is doing it, so a shot reports "brewing" rather than "pump" - the
+         * pump duty is a separate field anyway.
+         *
+         * Heating comes last of the active states because the heater is on for
+         * most of the machine's life and would otherwise mask everything else.
+         *
+         * Keep every word under 16 characters: that is the head's buffer size
+         * (link.h, State::status).
          */
         const char* stateWord() {
             if (safety::isFaulted()) {
                 return "fault";
+            }
+
+            if (shot::isBackflushing()) {
+                return "backflush";
+            }
+
+            if (shot::isFlushing()) {
+                return "flushing";
+            }
+
+            // Deliberately NOT shot::stateName(): that is written for a human
+            // reading a console and returns "preinfusion pause", which is 17
+            // characters and contains a space - too long for the head's buffer
+            // and a space in a frame field is asking for trouble. Short,
+            // single-word forms here, chosen for the wire rather than for
+            // prose.
+            if (shot::isRunning()) {
+                switch (shot::state()) {
+                    case shot::State::Preinfusion:
+                        return "preinfuse";
+
+                    case shot::State::PreinfusionPause:
+                        return "soak";
+
+                    default:
+                        return "brewing";
+                }
             }
 
             if (outputs::isOn(outputs::Channel::Heater)) {

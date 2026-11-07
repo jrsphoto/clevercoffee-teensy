@@ -206,7 +206,63 @@ them, `PMP_AC` and `PMP_RL` in the relays sheet. Those are the remains of the
 abandoned on/off pump path and are harmless, but can be deleted for tidiness
 now that the pump is PWM-only.
 
-## MUST FIX BEFORE FAB: R10, the flow sensor pull-up, is 47k
+## FIXED 2026-11-05: R10, R9 and the 5 V pin are all resolved
+
+Re-read from the saved schematic files, not assumed:
+
+| item | was | now |
+|---|---|---|
+| R10, flow sensor pull-up | 47K | **4K7** |
+| R9, brew switch pull | 47K, with JP2 solder jumper | **10K pull-down, JP2 deleted, C5 on the signal** |
+| `PUMP_PWM1` header | 3-pin, +5 V next to D9 | **2-pin JST XH, 5 V pin removed** |
+
+All three pre-fab blockers below are therefore closed. The sections are kept
+because the reasoning is worth having, but **do not act on them as if they were
+outstanding.**
+
+Still open from the sections below: nothing. The board has no known pre-fab
+blockers as of 2026-11-05.
+
+## FOUND AND FIXED 2026-11-05: the ULN2003 inputs were swapped
+
+A fourth class of fault, and the one this review was least equipped to catch.
+
+The three signals arrived at the wrong ULN channels. Pin assignment was
+correct, every net was connected at both ends, and every component value was
+right - and it was still wrong, because a multi-channel device pairs input N
+with output 17-N and the nets did not respect that pairing. The result was a
+three-way rotation: the heater pin would have opened the fill solenoid, the
+group valve pin would have fired the heater SSR, and the fill pin would have
+opened the group valve.
+
+John fixed it on the spot. Verified correct afterwards by tracing the saved
+file:
+
+| ULN channel | input pin | net in | output pin | net out | connector |
+|---|---|---|---|---|---|
+| 1 | 1 (I1) | `GROUP` | 16 (O1) | `GRP_RL` | `GRP_SOL1` group valve |
+| 2 | 2 (I2) | `FILL` | 15 (O2) | `FILL_RL` | `BLR_FILL1` fill solenoid |
+| 3 | 3 (I3) | `HEATER` | 14 (O3) | `HTR_RL` | `HEATER_RL1` heater SSR |
+
+Pulldowns confirmed on all three inputs: R15 on `GROUP`, R16 on `FILL`, R17 on
+`HEATER`, all to the GND rail. Channels 4-7 are marked no-connect at both ends.
+R18 no longer exists, which is correct now that the pump is PWM-only and only
+three channels are in use.
+
+**Why the earlier verification missed it.** The LA2016 test recorded further up
+this document probed **Teensy pins 2, 3, 5 and 9 directly**. It proved the
+firmware drove the pin it meant to, which was the question being asked, and it
+could not have caught this because it never looked at the far side of the ULN.
+The bench `ulntest` does exercise the output stage, but on hand-wired
+breadboard connections rather than the PCB's netlist.
+
+**The check to add to any future review:** for every multi-channel part, confirm
+the input and output of the SAME channel carry the same signal. Four things to
+check now, not three: pin assignment, net connectivity, component values
+against the connected part's datasheet, and **channel pairing through
+multi-channel devices.**
+
+## Reasoning kept for the record: R10, the flow sensor pull-up, was 47k
 
 The DM60's datasheet requires a pull-up of **1.2k to 4.7k** on its
 open-collector signal pin, depending on supply voltage. R10 on this board is
@@ -290,12 +346,26 @@ are simply the wrong value.
 
 | Pin | Signal | External | Value | Verdict |
 |-----|--------|----------|-------|---------|
+Values below are as re-read from the saved schematic on 2026-11-05. The two that
+were wrong have been corrected.
+
+| Pin | Signal | External | Value | Verdict |
+|-----|--------|----------|-------|---------|
 | 18/19 | SDA / SCL | R7, R8 | 4k7 | correct for I2C |
 | 25 | ENC_INT | R13 | 10k | fine - open-drain, short on-board trace |
 | 26 | WATER probe | R14 | 10k | reasonable |
+| 10 | FLOW | R10 | 4k7 | **FIXED** - was 47k, datasheet wants 1k2-4k7 |
+| 24 | BREW_SW | R9 | 10k | **FIXED** - was 47k, now 10k pull-DOWN + C5 on signal |
+| 9 | PUMP_PWM | R19 | 10k | pull-down, default-off bias for the pump |
+| 38/40 | HX711 DAT | none | - | **not needed**, see below |
+
+Superseded original table, kept so the "how this was missed" note below still
+has something to refer to:
+
+| Pin | Signal | External | Value | Verdict |
+|-----|--------|----------|-------|---------|
 | 10 | FLOW | R10 | **47k** | **WRONG** - datasheet wants 4k7, see above |
 | 24 | BREW_SW | R9 | **47k** | weak for a long panel lead; 10k + 100nF better |
-| 38/40 | HX711 DAT | none | - | **not needed**, see below |
 
 The HX711 is a genuine exception. Its DOUT is a push-pull CMOS output that
 actively drives both high and low, so a pull-up does nothing for it. The
@@ -310,7 +380,7 @@ digital.c), which is adequate for a short on-board open-drain line and nowhere
 near enough for a sensor whose datasheet specifies 4k7. An internal pull is a
 default, not a design decision.
 
-## Open hardware question: 5 V next to a 3.3 V-only pin
+## RESOLVED: 5 V next to a 3.3 V-only pin
 
 `PUMP_PWM1` is a 3-pin header: pin 1 the PWM signal, pin 2 **+5 V**, pin 3 GND.
 The signal pin goes straight to Teensy D9, which is not 5 V tolerant, and it sits
@@ -321,3 +391,8 @@ The DRV8871 needs no logic supply - it runs from VM alone - so if nothing on the
 driver board needs 5 V, the cleanest fix is to delete pin 2 and make this a
 2-pin header, which removes the hazard rather than mitigating it. If a driver
 board does need 5 V, use a polarised connector so it can only mate one way.
+
+**Done, and better than asked.** `PUMP_PWM1` is now a **2-pin JST XH**
+(`JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical`), confirmed in the saved file. The 5 V
+pin is gone, so the hazard no longer exists, and JST XH is polarised, so the
+remaining two pins cannot be mated backwards either. Both fixes rather than one.
