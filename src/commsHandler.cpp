@@ -88,6 +88,16 @@ namespace comms {
             // prose.
             if (shot::isRunning()) {
                 switch (shot::state()) {
+                    case shot::State::CoolingFlush:
+                        // Worth its own word rather than hiding inside
+                        // "brewing": the operator asked for coffee and the
+                        // machine is running water instead, so the screen has
+                        // to say why or it looks like a fault.
+                        return "coolflush";
+
+                    case shot::State::Recovery:
+                        return "recovery";
+
                     case shot::State::Preinfusion:
                         return "preinfuse";
 

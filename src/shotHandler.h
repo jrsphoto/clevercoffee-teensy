@@ -16,15 +16,17 @@
  *
  * THE SEQUENCE
  *
- *   Idle       valve closed, pump stopped
- *   PreInfuse  valve open, pump at a low speed - wets the puck gently
- *   Soak       valve open, pump stopped - lets the puck absorb and swell
- *   Brew       valve open, pump at brew speed - the extraction
- *   Finished   valve closed, pump stopped; drops back to Idle shortly after
+ *   Idle          valve closed, pump stopped
+ *   CoolingFlush  valve open, pump running - dumps the overheated slug
+ *   Recovery      valve closed, pump stopped - lets the exchanger settle
+ *   PreInfuse     valve open, pump at a low speed - wets the puck gently
+ *   Soak          valve open, pump stopped - lets the puck absorb and swell
+ *   Brew          valve open, pump at brew speed - the extraction
+ *   Finished      valve closed, pump stopped; drops back to Idle shortly after
  *
- * Pre-infusion and soak are each skipped if their duration is zero, so a plain
- * shot is the same code path with two stages of length nothing rather than a
- * separate branch.
+ * Every stage is skipped if its duration is zero, so a plain shot straight
+ * into extraction is the same code path with several stages of length nothing
+ * rather than a separate branch.
  *
  * HOW A SHOT STOPS, which is the part that matters
  *
@@ -80,6 +82,53 @@
  * firmware cannot know whether a press is about to become a hold without
  * waiting to find out. Upstream resolves that by waiting, and so does this.
  *
+ * THE COOLING FLUSH, which upstream does not have at all
+ *
+ * This machine is a heat exchanger, and that changes what "ready" means. While
+ * it idles, the water sitting in the exchanger and in the line to the group
+ * creeps up towards boiler temperature - around 123 C, well past anything you
+ * would brew with. The first water through the group is therefore far too hot,
+ * and the fix is to dump that slug before extracting. On most machines that is
+ * folklore: flush "a few seconds", or "until it stops spitting".
+ *
+ * Here there is a probe on the exchanger outlet line, so it can be computed
+ * instead. `documents/thermal-management.md` section 6 calls this the prize,
+ * and it matters more at home than in a cafe: the machine is always coming off
+ * hours of idle, so every shot is a first shot and the flush is always the
+ * worst case.
+ *
+ * WHY IT IS FEED-FORWARD AND NOT CLOSED-LOOP, which is the whole design
+ *
+ * The obvious implementation is to flush until the group probe reads cool.
+ * That would be wrong, and it is worth being explicit about why so nobody
+ * "improves" it into existence.
+ *
+ * The probe is a clamp-on surface sensor on the outlet line. Per the thermal
+ * document it "reads close on a stagnant line, lags during flow." So during a
+ * flush it is still reading hot pipe metal while cool water is already past it.
+ * Waiting for that reading to come down would flush long after the job was
+ * done, dumping boiler water and overcooling the group.
+ *
+ * So the reading is taken while the line is STAGNANT - which is exactly the
+ * condition before a shot, and exactly where the probe is accurate - and used
+ * to compute a duration up front. The loop is closed only as an EARLY STOP: if
+ * the probe does fall to target mid-flush, stop. That can only ever shorten a
+ * flush, never extend one, so a lagging sensor cannot cause harm through it.
+ *
+ * THE COEFFICIENTS ARE NOT CALIBRATED, and the feature is off by default
+ *
+ * Converting "the group is 118 C and I want 95 C" into a number of seconds
+ * needs a constant that depends on this machine's exchanger volume, line
+ * length and flow rate. That cannot be derived from a datasheet and there is
+ * no water in the machine to measure it with.
+ *
+ * It is therefore NOT invented. Same refusal as the millilitres-to-grams
+ * constant in TEENSY-PORT-BRIEF.md 9.1: a made-up constant presented as a
+ * measurement is worse than an obviously missing one, because it looks like it
+ * works. kDefaultFlushMsPerDegree is a placeholder, printStatus() says so, and
+ * the whole feature defaults OFF until somebody measures it on a machine with
+ * water in it.
+ *
  * DIVERGENCE FROM UPSTREAM: a flush is time-capped, upstream's is not.
  *
  * Upstream's manual flush runs for exactly as long as the switch is held, with
@@ -109,6 +158,16 @@ namespace shot {
      */
     enum class State : uint8_t {
         Idle,
+
+        /**
+         * Leading stages, net-new and not from upstream. They come before
+         * Preinfusion so the shot timer and the delivered-volume baselines can
+         * be taken AFTER them - flush water is not espresso and must not count
+         * towards either. See start() and beginExtraction().
+         */
+        CoolingFlush,
+        Recovery,
+
         Preinfusion,
         PreinfusionPause,
         Running,
@@ -236,6 +295,97 @@ namespace shot {
      */
     constexpr double kDefaultBackflushPercent = 100.0;
 
+    // --- Cooling flush ---------------------------------------------------
+
+    /**
+     * Group temperature at or below which no cooling flush is needed.
+     *
+     * Not a brew temperature. It is the temperature of the water standing in
+     * the exchanger outlet line, measured stagnant, above which the first
+     * water through the puck would be too hot.
+     */
+    constexpr double kDefaultFlushTargetC = 95.0;
+
+    /**
+     * Milliseconds of flush per degree the group is above target.
+     *
+     * A PLACEHOLDER. It depends on exchanger volume, line length and flow
+     * rate, none of which can be looked up, and there is no water in the
+     * machine to measure it with. See the header. printStatus() reports the
+     * feature as uncalibrated until this is set from a real measurement, and
+     * the feature is off by default.
+     *
+     * To calibrate, once the machine holds water: let it idle to temperature,
+     * note the stagnant group reading, flush in short bursts until the group
+     * settles at the target, and divide the total flush time by the original
+     * excess in degrees.
+     */
+    constexpr uint32_t kDefaultFlushMsPerDegree = 200;
+
+    /**
+     * Hard ceiling on a cooling flush, always enforced.
+     *
+     * Fifteen seconds at a sensible flow is a lot of water, and far more than
+     * any real cooling flush. As with every other cap here it is a backstop:
+     * if a flush ends on this, the coefficient above is wrong.
+     */
+    constexpr uint32_t kDefaultMaxCoolingFlushMs = 15000;
+
+    /**
+     * Pause after the cooling flush, before extraction starts.
+     *
+     * The exchanger has just been refilled with cold mains water. This gives
+     * it a moment to pick up heat and the pressure to settle, so extraction
+     * does not begin on a slug that is now too COLD. Also stops the pump
+     * running continuously from flush straight into pre-infusion.
+     */
+    constexpr uint32_t kDefaultRecoveryMs = 3000;
+
+    /** Pump speed during a cooling flush. Volume is the point, not pressure. */
+    constexpr double kDefaultCoolingFlushPercent = 100.0;
+
+    /**
+     * How long the group must have been undisturbed before the probe reading
+     * is trusted enough to plan a flush from.
+     *
+     * This is what `thermal-management.md` means by using idle time, and the
+     * role is narrower than it first looks. Idle time is NOT a second input to
+     * the duration - the temperature already measures the thing that matters.
+     * What idle time decides is whether the temperature can be BELIEVED.
+     *
+     * The probe is accurate on a stagnant line and lags during flow, so a
+     * reading taken shortly after water last moved is still settling. Below
+     * this threshold the flush is skipped rather than computed from a reading
+     * that is in transit.
+     *
+     * That also happens to be the physically correct behaviour: back-to-back
+     * shots need no cooling flush, because the exchanger has not had time to
+     * overheat. The case this feature exists for is the machine that has sat
+     * for hours, which at home is every single shot.
+     *
+     * Upstream tracks idle time already, in standby.h: standbyModeStartTimeMillis
+     * reset by resetStandbyTimer() on activity. Standby is not ported yet, so
+     * the same reset-on-activity shape is used locally here. When standby
+     * lands, these should become ONE clock rather than two that disagree.
+     *
+     * ALSO A PLACEHOLDER, and probably badly wrong. John pointed out
+     * (2026-11-06) that this machine's group head is solid copper and weighs
+     * about 8 lb. The settling time of the probe reading is therefore set by
+     * that copper mass, not by the small volume of water next to it, and two
+     * minutes is very likely an order of magnitude short.
+     *
+     * Measure it: with the machine at temperature, pull a shot, then watch the
+     * group reading until it stops climbing. That interval is this number.
+     * Until then it carries the same uncalibrated warning as
+     * kDefaultFlushMsPerDegree.
+     *
+     * The same copper mass has a second consequence worth checking at the same
+     * time: a group that cools slowly also REHEATS the fresh water left behind
+     * by a flush, so kDefaultRecoveryMs may need to be longer, and a flush may
+     * be less effective than a simple model suggests.
+     */
+    constexpr uint32_t kDefaultMinIdleForFlushMs = 120000; // 2 minutes, UNMEASURED
+
     /** How many shot profiles exist. Two is what the encoder can select. */
     constexpr uint8_t kProfileCount = 2;
 
@@ -344,6 +494,72 @@ namespace shot {
      * because it is the only thing that stops a flush if the switch is stuck.
      */
     bool setMaxFlushMs(uint32_t ms);
+
+    // --- Cooling flush ---------------------------------------------------
+
+    /**
+     * @brief Turn the automatic cooling flush on or off.
+     *
+     * Default OFF, and deliberately so: the duration coefficient is an
+     * uncalibrated placeholder, so switching this on before measuring it would
+     * run the pump for a length of time derived from a guess. Turn it on after
+     * calibrating, not before.
+     */
+    void setCoolingFlushEnabled(bool enabled);
+
+    /** @brief Is the automatic cooling flush enabled? */
+    bool coolingFlushEnabled();
+
+    /**
+     * @brief How long a cooling flush would run if a shot started now, in ms.
+     *
+     * Zero means none is needed or none is possible. Lets the console and the
+     * display show what the machine intends BEFORE it does it, which is the
+     * difference between a feature and a surprise.
+     */
+    uint32_t plannedCoolingFlushMs();
+
+    /** @brief Why the planned duration is what it is, for the console. */
+    const char* coolingFlushPlanReason();
+
+    /** @brief Group temperature at or below which no flush is needed. */
+    bool setFlushTargetC(double degreesC);
+
+    /** @brief Current flush target temperature. */
+    double flushTargetC();
+
+    /** @brief Milliseconds of flush per degree above target. */
+    bool setFlushMsPerDegree(uint32_t ms);
+
+    /** @brief Current duration coefficient. */
+    uint32_t flushMsPerDegree();
+
+    /** @brief True once the coefficient has been set from a real measurement. */
+    bool coolingFlushCalibrated();
+
+    /**
+     * @brief Mark the coefficient as measured rather than guessed.
+     *
+     * Exists so printStatus() can stop shouting UNCALIBRATED, and so the
+     * distinction between a measured constant and the shipped placeholder
+     * survives in one obvious place instead of in somebody's memory.
+     */
+    void setCoolingFlushCalibrated(bool calibrated);
+
+    /** @brief Hard cap on a cooling flush. Cannot be disabled. */
+    bool setMaxCoolingFlushMs(uint32_t ms);
+
+    /** @brief Minimum undisturbed time before the group reading is trusted. */
+    void setMinIdleForFlushMs(uint32_t ms);
+
+    /** @brief How long since water last moved through the group, in ms. */
+    uint32_t idleMs();
+
+    /** @brief Pause between the cooling flush and extraction. */
+    void setRecoveryMs(uint32_t ms);
+
+    /** @brief Pump speed during a cooling flush. */
+    void setCoolingFlushPercent(double percent);
 
     // --- Backflush -------------------------------------------------------
 

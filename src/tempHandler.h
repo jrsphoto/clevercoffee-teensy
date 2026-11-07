@@ -148,4 +148,32 @@ namespace temps {
     /** @brief Is boiler fault injection currently active? */
     bool boilerFaultInjected();
 
+    /**
+     * @brief Bench aid: override the group temperature with a fixed value.
+     *
+     * The cooling flush decides what to do from the group reading, and on a
+     * bench at room temperature it will always and correctly decide to do
+     * nothing. That leaves the whole path untested until there is a hot boiler,
+     * which is the wrong time to find out it is wrong.
+     *
+     * So the group reading can be forced. This is SAFE to expose in a way that
+     * forcing the boiler reading would not be: the group sensor drives the
+     * flush and readiness hints only, never latches a fault, and never gates
+     * the heater. Lying about it cannot energise anything that was not already
+     * permitted.
+     *
+     * Overriding also marks the sensor healthy, because a forced value with
+     * groupHealthy() false would be ignored by every caller and so test
+     * nothing.
+     *
+     * @param degreesC temperature to report
+     */
+    void overrideGroupC(double degreesC);
+
+    /** @brief Stop overriding the group temperature and read the probe again. */
+    void clearGroupOverride();
+
+    /** @brief Is the group temperature currently forced? */
+    bool groupOverridden();
+
 } // namespace temps

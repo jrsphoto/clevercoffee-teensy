@@ -76,6 +76,10 @@ namespace {
         Serial.println("  ulnduty [s]       measure the duty appearing at the ULN output");
         Serial.println("  shot              brew sequence state and settings");
         Serial.println("  shot start|stop   run or abort a shot");
+        Serial.println("  coolflush         automatic pre-shot cooling flush (HX machine)");
+        Serial.println("  coolflush on|off  enable it; off by default, coefficient uncalibrated");
+        Serial.println("  groupsim <C>      force the group reading, to test the cooling flush dry");
+        Serial.println("  groupreal         stop forcing the group reading");
         Serial.println("  backflush         backflush: armed state, cycle, timings");
         Serial.println("  backflush on|off  arm or disarm (armed: a brew-switch press backflushes)");
         Serial.println("  backflush start|stop   run or abort a cycle");
@@ -443,6 +447,74 @@ namespace {
             else {
                 Serial.println("usage: flush start|stop | flush pump <%> | flush maxms <ms>");
             }
+        }
+        else if (strcasecmp(command, "coolflush") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+
+            if (argument == nullptr) {
+                Serial.print("coolflush: ");
+                Serial.print(shot::coolingFlushEnabled() ? "ENABLED" : "disabled");
+                Serial.print(shot::coolingFlushCalibrated() ? ", calibrated" : ", UNCALIBRATED");
+                Serial.print(" - if a shot started now: ");
+                Serial.print(shot::plannedCoolingFlushMs() / 1000.0, 1);
+                Serial.print(" s (");
+                Serial.print(shot::coolingFlushPlanReason());
+                Serial.println(")");
+                Serial.println("usage: coolflush on|off        enable the automatic pre-shot flush");
+                Serial.println("       coolflush target <C>    group temp needing no flush (70-110)");
+                Serial.println("       coolflush perdeg <ms>   ms of flush per degree above target");
+                Serial.println("       coolflush calibrated <0|1>  mark the coefficient as measured");
+                Serial.println("       coolflush cap <ms>      hard cap, 1000-60000, cannot be disabled");
+                Serial.println("       coolflush recovery <ms> pause between flush and extraction");
+                Serial.println("       coolflush pump <%>      pump speed during the flush");
+                Serial.println("       coolflush minidle <ms>  undisturbed time before trusting the probe");
+                Serial.println("  to test dry: 'groupsim 118' then 'shot start', 'groupreal' after");
+            }
+            else if (strcasecmp(argument, "on") == 0) {
+                shot::setCoolingFlushEnabled(true);
+            }
+            else if (strcasecmp(argument, "off") == 0) {
+                shot::setCoolingFlushEnabled(false);
+            }
+            else if (strcasecmp(argument, "target") == 0 && a2 != nullptr) {
+                shot::setFlushTargetC(atof(a2));
+            }
+            else if (strcasecmp(argument, "perdeg") == 0 && a2 != nullptr) {
+                shot::setFlushMsPerDegree(static_cast<uint32_t>(atol(a2)));
+            }
+            else if (strcasecmp(argument, "calibrated") == 0 && a2 != nullptr) {
+                shot::setCoolingFlushCalibrated(atoi(a2) != 0);
+            }
+            else if (strcasecmp(argument, "cap") == 0 && a2 != nullptr) {
+                shot::setMaxCoolingFlushMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else if (strcasecmp(argument, "recovery") == 0 && a2 != nullptr) {
+                shot::setRecoveryMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else if (strcasecmp(argument, "pump") == 0 && a2 != nullptr) {
+                shot::setCoolingFlushPercent(atof(a2));
+                Serial.println("set");
+            }
+            else if (strcasecmp(argument, "minidle") == 0 && a2 != nullptr) {
+                shot::setMinIdleForFlushMs(static_cast<uint32_t>(atol(a2)));
+            }
+            else {
+                Serial.println("usage: coolflush on|off|target|perdeg|calibrated|cap|recovery|pump|minidle");
+            }
+        }
+        else if (strcasecmp(command, "groupsim") == 0) {
+            if (argument == nullptr) {
+                Serial.print("group temperature is ");
+                Serial.println(temps::groupOverridden() ? "FORCED (bench override)" : "read from the probe");
+                Serial.println("usage: groupsim <C>    force the group reading, to test the cooling flush");
+                Serial.println("       groupreal       stop forcing it");
+            }
+            else {
+                temps::overrideGroupC(atof(argument));
+            }
+        }
+        else if (strcasecmp(command, "groupreal") == 0) {
+            temps::clearGroupOverride();
         }
         else if (strcasecmp(command, "backflush") == 0) {
             char* a2 = strtok(nullptr, " \t");
