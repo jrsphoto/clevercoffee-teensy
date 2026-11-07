@@ -91,9 +91,21 @@ def main():
     if missing_files:
         print(f"Warning: The following files were not found: {missing_files}")
 
-if "buildfs" in sys.argv:
-    main()
+# DIVERGENCE FROM UPSTREAM, one line, with a reason.
+#
+# Upstream fires this only for "buildfs". But `pio run -t uploadfs` builds the
+# image too, and sets PROJECT_TASK=uploadfs while doing it - so on that path the
+# script never ran, data/ was never created, and the upload failed with the
+# unhelpful "warning: can't read source directory".
+#
+# Accepting either task means one command does the whole job. The alternative
+# was remembering to run buildfs before uploadfs every time, which is exactly
+# the kind of easily-forgotten second step the comment about this in BENCH.md
+# is already warning about.
+_FS_TASKS = ("buildfs", "uploadfs")
 
-if os.environ.get("PROJECT_TASK") == "buildfs":
+if any(task in sys.argv for task in _FS_TASKS):
+    main()
+elif os.environ.get("PROJECT_TASK") in _FS_TASKS:
     main()
 
