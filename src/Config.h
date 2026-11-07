@@ -272,7 +272,24 @@ class Config {
             _configDefs.emplace("brew.pid_delay", ConfigDef::forDouble(BREW_PID_DELAY, BREW_PID_DELAY_MIN, BREW_PID_DELAY_MAX));
             _configDefs.emplace("brew.mode", ConfigDef::forInt(0, 0, 2));
             _configDefs.emplace("brew.by_time.enabled", ConfigDef::forBool(false));
-            _configDefs.emplace("brew.by_time.target_time", ConfigDef::forDouble(TARGET_BREW_TIME, TARGET_BREW_TIME_MIN, TARGET_BREW_TIME_MAX));
+            // DIVERGES FROM UPSTREAM'S DEFAULT ON PURPOSE, and it matters.
+            //
+            // Upstream's TARGET_BREW_TIME (25 s) is a brew DURATION TARGET:
+            // the shot stops there when brew-by-time is enabled. In this fork
+            // that key drives shotHandler's hard limit instead, because the
+            // time stop and the safety backstop were deliberately merged -
+            // the backstop cannot be switched off, since it is the only stop
+            // condition with no sensor behind it (shotHandler.h).
+            //
+            // Keeping upstream's 25 s here would therefore have the head
+            // silently shorten the controller's 60 s safety ceiling to a
+            // normal shot length at every handshake, and abort a legitimate
+            // 35 s lungo. Found because John asked why the cap read 30 s.
+            //
+            // So: 60 s, matching kDefaultMaxBrewMs, and the range is
+            // setMaxBrewMs's clamp (5-180) rather than upstream's (1-120),
+            // so the UI cannot offer a value the controller will refuse.
+            _configDefs.emplace("brew.by_time.target_time", ConfigDef::forDouble(60.0, 5.0, 180.0));
             _configDefs.emplace("brew.by_weight.enabled", ConfigDef::forBool(false));
             _configDefs.emplace("brew.by_weight.target_weight", ConfigDef::forDouble(TARGET_BREW_WEIGHT, TARGET_BREW_WEIGHT_MIN, TARGET_BREW_WEIGHT_MAX));
             _configDefs.emplace("brew.by_weight.auto_tare", ConfigDef::forBool(false));

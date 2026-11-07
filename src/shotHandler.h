@@ -226,8 +226,17 @@ namespace shot {
 
     // --- Defaults. All adjustable; none of them are safety limits except
     //     kDefaultMaxBrewMs, which is.
-    constexpr uint32_t kDefaultPreInfuseMs = 3000;
-    constexpr uint32_t kDefaultPauseMs = 2000;
+    // These two match upstream's PRE_INFUSION_TIME and PRE_INFUSION_PAUSE_TIME
+    // rather than the 3000/2000 they started as, and the agreement is the
+    // point rather than the values.
+    //
+    // The head holds the master config and pushes it at every handshake, so
+    // where the two sides disagree the head wins - meaning the machine would
+    // brew one way with the display attached and another way without it. For
+    // a safety limit that would be serious; for these it is merely confusing,
+    // and confusing is still worth removing.
+    constexpr uint32_t kDefaultPreInfuseMs = 2000;
+    constexpr uint32_t kDefaultPauseMs = 5000;
     constexpr double kDefaultPreInfusePercent = 30.0;
     constexpr double kDefaultBrewPercent = 100.0;
     constexpr double kDefaultTargetGrams = 36.0;
