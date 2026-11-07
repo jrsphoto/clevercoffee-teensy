@@ -161,8 +161,23 @@ namespace {
         }
     }
 
+    /**
+     * Longest console line accepted.
+     *
+     * Was 32, which was ample for `rot 1` and `bl 128` and became wrong the
+     * moment config arrived: `cfg cooling_flush.target_temperature 88` is 39
+     * characters, and upstream has keys like
+     * `hardware.sensors.temperature.rtd_reference` that are 42 on their own.
+     *
+     * Sized against the link frame rather than guessed: a config body is
+     * `k=<key>,v=<value>` and must fit linkproto::kMaxFrame, so a console line
+     * that fits here cannot build a frame that does not fit there.
+     */
+    constexpr size_t kConsoleLineMax = 160;
+
     void serviceConsole() {
         static String line;
+        static bool overflowed = false;
 
         while (Serial.available() > 0) {
             const char c = static_cast<char>(Serial.read());
@@ -173,14 +188,31 @@ namespace {
 
             if (c == '\n') {
                 line.trim();
-                handleCommand(line);
+
+                // SAY SO rather than silently acting on a truncated line. The
+                // old code dropped the tail quietly, so an over-long command
+                // ran against a mangled argument and looked like it had simply
+                // been rejected - which cost a round of head-scratching when a
+                // long config key stopped working and nothing said why.
+                if (overflowed) {
+                    Serial.printf("line too long (max %u), ignored: %s...\n",
+                                  static_cast<unsigned>(kConsoleLineMax), line.c_str());
+                }
+                else {
+                    handleCommand(line);
+                }
+
                 line = "";
+                overflowed = false;
 
                 continue;
             }
 
-            if (line.length() < 32) {
+            if (line.length() < kConsoleLineMax) {
                 line += c;
+            }
+            else {
+                overflowed = true;
             }
         }
     }
