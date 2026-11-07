@@ -97,6 +97,24 @@ namespace machinelink {
     void sendCommand(const char* body);
 
     /**
+     * @brief Called when the Teensy acknowledges a config write.
+     *
+     * The controller is authoritative: it validates every value through its
+     * own setters and is free to say no. Without somewhere for that answer to
+     * go, this board would keep a setting the machine is not honouring and
+     * the web UI would display it as though it had taken effect - which is
+     * the UI telling the operator something untrue about the machine.
+     *
+     * @param key   the dotted path, with the "cfg:" prefix already stripped
+     * @param ok    did the controller accept it
+     * @param why   "ok", "refused", or "notmine"
+     */
+    using ConfigAckHandler = void (*)(const char* key, bool ok, const char* why);
+
+    /** @brief Register the handler above. One handler; last wins. */
+    void setConfigAckHandler(ConfigAckHandler handler);
+
+    /**
      * @brief Push one config value to the Teensy.
      *
      * This head holds the master copy of the configuration; the Teensy keeps a

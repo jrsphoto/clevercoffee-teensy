@@ -38,6 +38,8 @@
 
 #include <Arduino.h>
 #include <functional>
+#include <map>
+#include <string>
 
 #include "Config.h"
 #include "ParameterRegistry.h"
@@ -74,6 +76,24 @@ void ParameterRegistry::syncGlobalVariables() const {
 namespace {
 
     /**
+     * What a key held before it was changed, kept until the controller says
+     * whether it accepted the new value.
+     *
+     * The controller is authoritative and validates everything through its
+     * own setters, so it can refuse. If it does, this board must not keep the
+     * rejected value: the web UI would then display a setting the machine is
+     * not honouring, which is the interface lying about the machine. So the
+     * old value is held here and put back when a refusal arrives.
+     *
+     * Keyed by the dotted path. Small - only values changed since the last
+     * ack are in flight, which in practice is one web form submission.
+     */
+    std::map<std::string, double> pendingPrevious;
+
+    /** Refusals since boot, for the console. */
+    uint32_t refusedCount = 0;
+
+    /**
      * @brief Send one value to the controller.
      *
      * Formatted with %g so a whole number travels as "5" rather than
@@ -84,6 +104,45 @@ namespace {
         char text[24];
         snprintf(text, sizeof(text), "%g", value);
         machinelink::sendConfig(key, text);
+    }
+
+    /**
+     * @brief The controller's answer to a config write.
+     *
+     * Runs from the main loop, not from the web handler, because the ack
+     * arrives whenever the controller gets to it. That is why a POST cannot
+     * report the controller's verdict directly: it would have to block the
+     * async web task waiting for a serial round trip. Instead the value is
+     * corrected here, and the browser sees the correction on its next
+     * /parameters poll.
+     *
+     * "notmine" is NOT a refusal. It means the key is not a control setting -
+     * WiFi, MQTT, display brightness - and the controller rightly ignored it.
+     * Those keep their value here, which is where they belong.
+     */
+    void onConfigAck(const char* key, const bool ok, const char* why) {
+        const auto it = pendingPrevious.find(key);
+
+        if (it == pendingPrevious.end()) {
+            return;
+        }
+
+        const double previous = it->second;
+        pendingPrevious.erase(it);
+
+        if (ok || strcmp(why, "notmine") == 0) {
+            return;
+        }
+
+        refusedCount++;
+
+        // Put it back, WITHOUT pushing again - the controller already has the
+        // value it chose to keep, and re-sending the old one would be a
+        // second write it never asked for.
+        auto& store = headconfig::config();
+        store.set<double>(key, previous);
+
+        Serial.printf("config: controller REFUSED %s (%s) - reverted to %g\n", key, why, previous);
     }
 
 } // namespace
@@ -105,6 +164,9 @@ void ParameterRegistry::initialize(Config& config) {
         };
 
         const std::function<void(double)> setter = [this, path](const double v) {
+            // Remembered BEFORE the write, so a refusal can undo it.
+            pendingPrevious[path] = _config->get<double>(path);
+
             _config->set<double>(path, v);
             markChanged();
             pushToController(path, v);
@@ -131,6 +193,8 @@ void ParameterRegistry::initialize(Config& config) {
         };
 
         const std::function<void(bool)> setter = [this, path](const bool v) {
+            pendingPrevious[path] = _config->get<bool>(path) ? 1.0 : 0.0;
+
             _config->set<bool>(path, v);
             markChanged();
             pushToController(path, v ? 1.0 : 0.0);
@@ -244,6 +308,7 @@ namespace headconfig {
         }
 
         ParameterRegistry::getInstance().initialize(store);
+        machinelink::setConfigAckHandler(onConfigAck);
         started = true;
 
         Serial.printf("config: %d parameters registered\n", parameterCount());
@@ -270,6 +335,14 @@ namespace headconfig {
         return static_cast<int>(ParameterRegistry::getInstance().getParameters().size());
     }
 
+    uint32_t refusedByController() {
+        return refusedCount;
+    }
+
+    bool hasPendingAcks() {
+        return !pendingPrevious.empty();
+    }
+
     void pushAllToController() {
         if (!started) {
             return;
@@ -289,6 +362,11 @@ namespace headconfig {
                 continue;
             }
 
+            // Deliberately NOT recorded in pendingPrevious. These are this
+            // board's own stored values, so there is nothing to revert to -
+            // a refusal here means the two sides disagree about a DEFAULT,
+            // which onConfigAck reports and leaves alone rather than
+            // papering over.
             char text[24];
             snprintf(text, sizeof(text), "%g", param->getValue());
             machinelink::sendConfig(param->getId(), text);

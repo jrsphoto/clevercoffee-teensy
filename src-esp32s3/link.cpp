@@ -16,11 +16,48 @@ namespace machinelink {
 
     namespace {
         uint32_t hellos = 0;
+
+        ConfigAckHandler configAckHandler = nullptr;
+
     }
 
     namespace {
 
         linkproto::Parser parser;
+
+        /**
+         * @brief Route a config acknowledgement to whoever registered for it.
+         *
+         * Acks for ordinary commands - ping, tare, setpoint - are only ever
+         * printed, because the next telemetry frame says what actually
+         * happened to the machine. Config is different: nothing in telemetry
+         * reports the controller's stored settings, so a refusal here is the
+         * ONLY signal that this board and the machine now disagree.
+         */
+        void handleAck() {
+            Serial.printf("link ack: %s\n", parser.body());
+
+            char cmd[80];
+
+            if (!parser.get("cmd", cmd, sizeof(cmd))) {
+                return;
+            }
+
+            // Only config acks carry a key. Everything else is informational.
+            constexpr char kPrefix[] = "cfg:";
+            constexpr size_t kPrefixLen = sizeof(kPrefix) - 1;
+
+            if (strncmp(cmd, kPrefix, kPrefixLen) != 0 || configAckHandler == nullptr) {
+                return;
+            }
+
+            char okText[8] = "";
+            char why[32] = "";
+            parser.get("ok", okText, sizeof(okText));
+            parser.get("why", why, sizeof(why));
+
+            configAckHandler(cmd + kPrefixLen, atoi(okText) != 0, why);
+        }
         State current;
 
         uint32_t lastFrameMs = 0;
@@ -112,7 +149,7 @@ namespace machinelink {
                     break;
 
                 case linkproto::FrameType::Ack:
-                    Serial.printf("link ack: %s\n", parser.body());
+                    handleAck();
                     break;
 
                 case linkproto::FrameType::Hello:
@@ -150,6 +187,10 @@ namespace machinelink {
 
     uint32_t badChecksums() {
         return parser.badChecksums();
+    }
+
+    void setConfigAckHandler(const ConfigAckHandler handler) {
+        configAckHandler = handler;
     }
 
     void sendCommand(const char* body) {

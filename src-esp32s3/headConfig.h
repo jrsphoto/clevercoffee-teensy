@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 class Config;
 
 namespace headconfig {
@@ -56,5 +58,11 @@ namespace headconfig {
 
     /** @brief How many parameters are registered. */
     int parameterCount();
+
+    /** @brief Settings the controller has refused since boot. */
+    uint32_t refusedByController();
+
+    /** @brief Are any config writes still waiting for the controller's answer? */
+    bool hasPendingAcks();
 
 } // namespace headconfig
