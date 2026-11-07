@@ -254,6 +254,18 @@ namespace net {
 
         WiFi.mode(WIFI_STA);
 
+        // Modem sleep OFF.
+        //
+        // It is on by default, and the evidence it was active here was a LAN
+        // ping round trip of 40 to 120 ms to a device three metres away. On
+        // ESP32 it is a known cause of flaky inbound TCP, which matters a lot
+        // for a board whose entire network job is answering requests nobody
+        // warned it about.
+        //
+        // The cost is power, and this board is mains powered inside an
+        // espresso machine, so there is nothing to save.
+        WiFi.setSleep(false);
+
         // Upstream's settings, same values and same reasons (wiFiSetup()).
         wm.setCleanConnect(true);
         wm.setConnectTimeout(kConnectTimeoutSec);
