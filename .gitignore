@@ -16,3 +16,12 @@ platformio_extra.ini
 
 # ignore flash package
 CleverCoffee_Flash_Package
+
+# Claude's working notes. Kept locally, deliberately not published:
+# CLAUDE.md is session orientation and BENCH.md is written as directions
+# rather than as documentation for anyone reading this repository.
+CLAUDE.md
+BENCH.md
+
+# Claude's worktrees, settings and scratch state
+.claude/
