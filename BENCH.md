@@ -57,8 +57,16 @@ A Kingst LA2016 lives on a **different PC**, reachable over SSH as `bench`
 ssh bench 'sigrok-cli --scan'
 ```
 
-**SCAN for the connection string, do not trust a stored one.** It has already
-changed once: notes said `conn=1.9`, reality was `conn=1.16`.
+**SCAN for the connection string, do not trust a stored one.** It has now
+changed twice: notes said `conn=1.9`, then reality was `conn=1.16`, and on
+2026-11-06 it was `conn=1.18`. Any value written down here is already stale.
+
+**Probe mapping is also not to be trusted.** Name pins to John by net and
+connector plus the number PRINTED on the board, never a bare "D9" - the KiCad
+symbol's pin 11 is the pad printed `9`, so "pin 11" means two different things.
+If the analyser disagrees with the firmware, suspect the probes first: command
+the pump to a duty nothing else could produce (`flush pump 35`) and see which
+channel shows 35% at 20 kHz. That identifies the mapping in one capture.
 
 Capture and analyse on the bench machine, bring back only the summary - a CSV of
 a few hundred thousand samples is large:

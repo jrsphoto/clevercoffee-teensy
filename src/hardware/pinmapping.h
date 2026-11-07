@@ -34,7 +34,9 @@
  */
 
 // --- Inputs -------------------------------------------------------------
-#define PIN_BREWSWITCH      24 // BPSW_SW1; pull set by R9 + JP2
+#define PIN_BREWSWITCH      24 // BPSW_SW1; external 10k pull-DOWN (R9) + 100nF (C5)
+                               // on the signal, so the finished board is ACTIVE HIGH.
+                               // JP2 is gone - see teensy-pinout-review.md.
 #define PIN_WATERTANKSENSOR 26 // single boiler-level probe (AC-excited, opto-isolated),
                                // NOT an external reservoir float switch.
                                // See documents/boiler-level-probe-sensing.md
@@ -43,17 +45,21 @@
 #define PIN_ENC_INT         25 // Duppa encoder INT, open-drain, R13 pull-up on board
 
 // --- Outputs ------------------------------------------------------------
-// All four relay/SSR channels are low-side driven through the ULN2003 (U2).
-// Each ULN input has a 10k pulldown (R15-R18) so outputs stay off at reset.
-#define PIN_HEATER 2 // -> ULN I1 -> heater SSR
-#define PIN_FILL   3 // -> ULN I4 -> inlet fill solenoid
-#define PIN_VALVE  5 // -> ULN I3 -> 3-way group solenoid
+// Three relay/SSR channels, low-side driven through the ULN2003 (U2). Each has
+// a 10k pulldown on its ULN input so outputs stay off at reset. The ULN channel
+// numbers are NOT in pin order - verified against the schematic 2026-11-05,
+// after a signal swap on the ULN inputs was found and fixed. outputs.h carries
+// the full chain including which pulldown belongs to which net.
+#define PIN_HEATER 2 // -> HEATER -> ULN I3/O3 -> HTR_RL  -> heater SSR     (R17)
+#define PIN_FILL   3 // -> FILL   -> ULN I2/O2 -> FILL_RL -> fill solenoid  (R16)
+#define PIN_VALVE  5 // -> GROUP  -> ULN I1/O1 -> GRP_RL  -> group solenoid (R15)
 
 // Pump speed. FlexPWM2_2_B, and it owns that submodule outright (the only other
 // pin on it, D6, was freed when the OLED came off this board), so the pump's PWM
 // frequency is independent of everything else.
-// The Pmode jumper routes this either to the PWM header (John's brushed-motor
-// driver, variable speed) or to ULN I2 (plain on/off pump relay).
+// Goes only to PUMP_PWM1, now a 2-pin JST XH header - the Pmode jumper and the
+// on/off ULN path are gone, and so is the 5 V pin that used to sit next to this
+// not-5V-tolerant signal. R19 pulls the net low at reset.
 #define PIN_PUMP 9
 
 // --- Shared SPI: both MAX31865 RTD boards -------------------------------

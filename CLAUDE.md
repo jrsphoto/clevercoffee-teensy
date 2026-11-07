@@ -83,8 +83,19 @@ sequence with encoder profiles.
 Blocked on parts: brew pressure sensor, water-level probe circuit, load cell
 bracket, silicone tubing for the duty-to-flow sweep.
 
-Not written yet: hot water, steam, backflush, manual flush, the web UI and
-config sync on the head, and FlasherX for updates over the link.
+Also verified on hardware (2026-11-06): manual flush and backflush, and the
+brew switch read as a gesture so a shot starts on release. Measured with the
+LA2016 on `GROUP`, `PUMP_PWM` and `BREW_SW` at once, firmware log and analyser
+agreeing independently. Detail in `TEENSY-PORT-BRIEF.md` 9.3.
+
+Not being ported at all: **hot water and steam.** Both are manual valves on
+this machine and the board has no output or switch for either. Upstream's
+steam mode is a second PID setpoint, which a heat-exchanger boiler held at
+steam temperature does not have. Full reasoning in `TEENSY-PORT-BRIEF.md` 9.2
+- read it before "finishing the port" by adding them back.
+
+Not written yet: the web UI and config sync on the head, and FlasherX for
+updates over the link.
 
 **The heater has never been connected to mains.** Every interlock was proven
 with no element attached. The only unproven one is the water probe, because its

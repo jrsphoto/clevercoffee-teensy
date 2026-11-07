@@ -14,18 +14,32 @@
  * it reads.
  *
  * HOW THE BOARD WIRES IT, read from the schematic rather than assumed
- * (relays.kicad_sch, connector BPSW_SW1):
+ * (relays.kicad_sch, connector BPSW_SW1; revised 2026-11-02):
  *
- *   BPSW_SW1 is a 3-pin header - pin 1 signal, pin 2 +3.3 V, pin 3 GND.
- *   R9 (47 k) pulls the signal line, and JP2 - a 3-pad solder jumper - selects
- *   whether it pulls UP to +3.3 V or DOWN to GND. C5 (100 nF) decouples the
- *   3.3 V going out to the switch; there is no filter capacitor on the signal
- *   itself.
+ *   BPSW_SW1 is a 3-pin header - pin 1 signal, pin 2 +3.3 V, pin 3 GND, with
+ *   the panel switch wired between pins 1 and 2 so the cable's current loop
+ *   stays tight. R9 (10 k) pulls the signal DOWN to GND and C5 (100 nF) sits
+ *   on the signal itself, giving a 1 ms time constant - inside the 20 ms
+ *   firmware debounce, so it filters induced spikes without feeling slow.
  *
- * THAT BOARD DOES NOT EXIST YET. The PCB is unfabricated, so R9, JP2 and C5 are
+ *   So the finished board is pull-down, ACTIVE HIGH. It is that way round on
+ *   purpose: the line idles low and the switch pulls it high, so a lead chafed
+ *   against grounded chassis metal reads as NOT PRESSED. Wired the other way,
+ *   that same chafe starts a shot.
+ *
+ *   The earlier 47 k + JP2 solder-jumper version is gone. JP2 shipped with no
+ *   pads bridged, so a missed build step left pin 24 with no pull at all - a
+ *   floating input on the signal that starts a brew.
+ *
+ * THAT BOARD DOES NOT EXIST YET. The PCB is unfabricated, so R9 and C5 are
  * schematic-only: on the breadboard pin 24 has NO pull of any kind, and an
  * unconnected input there reads an arbitrary level that means nothing. Do not
  * read anything into what a floating pin happens to show.
+ *
+ * WHEN THE BOARD IS BUILT, change the defaults below to Pull::External and
+ * setActiveHigh(true), or set them at runtime with `brewpull x` then
+ * `brewsense`. The breadboard defaults are the opposite of what the PCB wants,
+ * which is correct for now and wrong the day the PCB arrives.
  *
  * So the pull is selectable, and the default is the one that needs no parts:
  *
@@ -67,15 +81,16 @@
  *     upstream's brewSwitchWasOff idea, enforced at the source instead of in
  *     the brew logic.
  *
- * A NOTE ON THE HARDWARE, for John
+ * WHAT THIS SWITCH NOW CONTROLS
  *
- * R9 is 47 k where most of the other switch inputs on this board use 10 k, and
- * there is no capacitor on the signal line. A panel switch runs on a long-ish
- * lead inside a cabinet containing a pump and a 1500 W heater, and a 47 k pull
- * is weak enough to pick up noise from that. Debouncing in firmware hides short
- * glitches but cannot distinguish a noise burst that outlasts the debounce
- * window from a real press. Worth considering 10 k for R9 plus 100 nF from the
- * signal to GND; see the review notes for the exact KiCad steps.
+ * As of the manual flush work, the brew switch is read as a GESTURE rather than
+ * a level, by shotHandler's port of upstream's BrewSwitchState machine. A short
+ * press starts a shot; holding past longPressDuration (500 ms in IOSwitch)
+ * starts a manual grouphead flush that runs until released. That is why
+ * longPressed() matters now - it used to be bring-up information only.
+ *
+ * Note that upstream hardwires longPressDetected() to false for TOGGLE
+ * switches, so a toggle switch has no flush gesture at all. See shotHandler.h.
  */
 
 #pragma once
