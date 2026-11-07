@@ -249,4 +249,18 @@ This closes the question left open in section 4. **Agreed with John 2026-11-06.*
 
 **The invariant that must survive this.** No config value may weaken a safety limit. `setMaxBrewMs`, `setMaxFlushMs` and `setMaxCoolingFlushMs` already refuse out-of-range values and cannot be disabled, and `heater::setSetpointC` already refuses anything near the over-temperature cutoff. The link path therefore goes through those setters and must never write the underlying variables directly. A wrong or malicious UI must be unable to do anything a person at the panel could not.
 
+**Verified over the real link 2026-11-06**, with the head's USB attached so its console could push frames:
+
+| sent from the head | ack returned |
+|---|---|
+| `brew.pre_infusion.time 3.7` | `ok=1,why=ok` - became 3700 ms on the Teensy, so the seconds-to-ms scale factor is right across the wire |
+| `brew.by_time.target_time 900` | `ok=0,why=refused` - the 180 s clamp held through the link path |
+| `cooling_flush.target_temperature 88` | `ok=1,why=ok` |
+| `mqtt.topic coffee/machine` | `ok=0,why=notmine` - correctly ignored, not an error |
+| `hardware.sensors.temperature.rtd_reference 430` | `ok=0,why=notmine` - see the gap noted below |
+
+**A bug this found, in the head rather than the config path.** The head's serial console silently discarded characters past 32, so `cfg cooling_flush.target_temperature 88` was truncated mid-key and lost its separating space. The limit was ample for `rot 1` and became wrong the moment config keys arrived - upstream has keys like `hardware.sensors.temperature.rtd_reference` that are 42 characters on their own. Raised to 160, sized against the link frame rather than guessed, and an over-long line now says so instead of being acted on in mangled form. Silent truncation was the actual fault: the command looked like it had been rejected.
+
+**Known gap, not a bug.** `hardware.sensors.temperature.rtd_reference` and the other `hardware.sensors.temperature.*` keys come back as `notmine` because the MAX31865's reference resistor and wire count are compiled in rather than settable. They are reboot-required settings, so adding them means deciding how a reboot-required change travels over the link. Left for when the web UI needs them.
+
 **Front end delivery: a LittleFS image, upstream's way.** Keeps upstream's `frontend/` directory portable unchanged and lets HTML be iterated without a firmware rebuild. The cost is a second upload command, which is precisely the trap the startup-sound comment in `platformio.ini` warns about, so the command belongs in `BENCH.md` rather than in anybody's memory.
