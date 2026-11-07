@@ -105,6 +105,21 @@ namespace net {
     uint32_t requestCount();
 
     /**
+     * @brief Open the setup portal on the NEXT boot, keeping credentials.
+     *
+     * "Set up WiFi" must never destroy a working connection. It used to call
+     * forgetNetworkAndRestart(), so somebody tapping it to see what it did
+     * lost their network - which is exactly what happened the first time the
+     * button existed.
+     *
+     * So this records a request in NVS and restarts. The boot path sees the
+     * flag, skips autoConnect and raises the portal directly, with the stored
+     * credentials still in place. Cancel or let it time out and the machine
+     * reconnects to the network it was already on.
+     */
+    void requestPortalOnNextBoot();
+
+    /**
      * @brief Forget the stored network and restart into the portal.
      *
      * Upstream exposes this as a /wifireset endpoint. Deliberately a

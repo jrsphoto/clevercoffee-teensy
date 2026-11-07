@@ -226,9 +226,11 @@ namespace display {
      * until they are standing at the machine.
      */
     enum class Page : uint8_t {
-        Main,      // the readout you watch while pulling a shot
-        Setup,     // adjustable settings, reached by the gear
-        SetupWifi, // network status, and starting the setup portal
+        Main,         // the readout you watch while pulling a shot
+        Setup,        // a MENU of sub-pages, not a wall of controls
+        SetupBrew,    // temperature, heater, tare, zero, clear
+        SetupDisplay, // brightness and volume
+        SetupWifi,    // network status, and starting the setup portal
     };
 
     /** @brief Current page. */

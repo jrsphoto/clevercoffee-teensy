@@ -22,6 +22,7 @@
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 #include <WiFi.h>
 
 #include "display.h"
@@ -51,6 +52,12 @@ namespace net {
 
         /** How long the portal stays up before giving up and running offline. */
         constexpr uint16_t kPortalTimeoutSec = 180;
+
+        /** NVS flag: open the portal on the next boot. See the header. */
+        constexpr char kPrefNamespace[] = "ccnet";
+        constexpr char kPrefPortalKey[] = "portal";
+
+        Preferences prefs;
 
         AsyncWebServer server(80);
         WiFiManager wm;
@@ -279,7 +286,29 @@ namespace net {
         wm.setEnableConfigPortal(false);
         wm.setDisableConfigPortal(true);
 
-        bool connected = wm.autoConnect(kHostname, kApPassword);
+        // Was the portal asked for? Read and CLEAR in one go, so a crash
+        // inside the portal cannot turn into a machine that boots into setup
+        // for ever.
+        bool portalRequested = false;
+
+        if (prefs.begin(kPrefNamespace, false)) {
+            portalRequested = prefs.getBool(kPrefPortalKey, false);
+
+            if (portalRequested) {
+                prefs.remove(kPrefPortalKey);
+            }
+
+            prefs.end();
+        }
+
+        bool connected = false;
+
+        if (!portalRequested) {
+            connected = wm.autoConnect(kHostname, kApPassword);
+        }
+        else {
+            Serial.println("wifi: setup portal requested - saved network kept, cancel to return to it");
+        }
 
         if (!connected) {
             Serial.println("wifi: no saved network joined - raising the setup portal");
@@ -379,6 +408,19 @@ namespace net {
 
     uint32_t requestCount() {
         return requests;
+    }
+
+    void requestPortalOnNextBoot() {
+        if (prefs.begin(kPrefNamespace, false)) {
+            prefs.putBool(kPrefPortalKey, true);
+            prefs.end();
+        }
+
+        Serial.println("wifi: will open the setup portal on the next boot; credentials kept");
+        Serial.flush();
+
+        delay(200);
+        ESP.restart();
     }
 
     void forgetNetworkAndRestart() {
