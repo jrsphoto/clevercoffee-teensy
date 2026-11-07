@@ -195,3 +195,37 @@ Three things are worth keeping from this:
 - **It compiled, it read correctly, and the status output looked right.** Only running it showed it. Worth remembering next time a sequence seems too simple to need the bench.
 
 The fix also kept the switch's authority: because it triggers on a transition, a console-started shot can still be stopped at the panel, since pressing and releasing produces a real return to Idle.
+
+### 9.5 The automated cooling flush (2026-11-06)
+
+**Decision:** add a cooling flush as two leading stages of the shot sequence, computed **feed-forward** from the group probe, defaulting OFF with its coefficients declared uncalibrated.
+
+**This one is genuinely net-new, and that was checked rather than assumed.** `git grep` across `upstream/master` and `upstream/develop` finds no cooling flush, no pre-brew flush and no idle-time flush anywhere. The only flush concepts upstream has are `manualFlush` and `backflush`, both of which were ported rather than written. `documents/thermal-management.md` section 6 calls this one the prize.
+
+**Why it exists.** On a heat exchanger machine the water standing in the exchanger and the line to the group creeps towards boiler temperature while the machine idles, around 123 C. The first water through the puck is therefore far too hot. On most machines the fix is folklore: flush "a few seconds". With a probe on the exchanger outlet line it can be computed. At home it matters more, not less, because the machine is always coming off hours of idle, so every shot is a first shot.
+
+**Why feed-forward and not closed-loop, which is the whole design.** The obvious implementation is to flush until the probe reads cool. That is wrong. The probe is a clamp-on surface sensor and per the thermal document it "reads close on a stagnant line, lags during flow" - during a flush it is still reading hot pipe metal while cool water is already past it. Waiting on that reading would flush long after the job was done, dumping boiler water and overcooling the group. So the reading is taken while the line is stagnant, which is exactly when it is accurate and exactly the condition before a shot, and used to compute a duration up front. The loop is closed only as an **early stop**, which can shorten a flush but never extend one, so the lag cannot cause harm through it.
+
+**Idle time is a gate, not a coefficient.** The thermal document says to use idle time as well as temperature. Its real job turned out to be deciding whether the temperature can be *believed*: a reading taken shortly after water last moved is still in transit. Below a minimum undisturbed period the flush is skipped rather than computed from a settling reading - which is also physically correct, since back-to-back shots need no cooling flush. Upstream already tracks idle time in `standby.h` (`standbyModeStartTimeMillis`, reset by `resetStandbyTimer()`), so the same reset-on-activity shape is used here. **When standby is ported these must become one clock, not two that disagree.**
+
+**Two numbers are placeholders and the feature is off by default.** Converting "the group is 118 C and I want 95 C" into seconds needs a constant depending on exchanger volume, line length and flow rate. None of that is in a datasheet and there is no water in the machine. It is therefore not invented - the same refusal as the millilitres-to-grams constant in 9.1, for the same reason: a made-up constant presented as a measurement is worse than an obviously missing one, because it looks like it works.
+
+The second placeholder is the idle threshold, and John pointed out it is likely badly wrong: this machine's group head is solid copper at about 8 lb, so the settling time is set by that mass rather than by the small water volume next to it, and the shipped 2 minutes is probably an order of magnitude short. The same copper mass has a second consequence to check at the same time - a group that cools slowly also reheats the water a flush leaves behind, so the recovery pause may need to be longer and a flush may be less effective than a simple model suggests.
+
+Both are called out by `coolflush on` and by `printStatus()` until `coolflush calibrated 1` is set from real measurements.
+
+**Flush water is not espresso.** The shot clock and the weight and volume baselines are taken in `beginExtraction()`, after the flush and recovery, not when the shot was requested. Baselining earlier would count flush water as delivered volume - triggering the volume target immediately - and would spend part of the hard 60 s shot limit on flushing.
+
+**Verified dry on hardware 2026-11-06**, using a new `groupsim <C>` bench override so the path is testable without a hot boiler. Overriding the group reading is safe in a way overriding the boiler would not be: the group sensor never latches a fault and never gates the heater.
+
+| Test | Result |
+|---|---|
+| group 90 C (below target) | no flush, "group already at or below target" |
+| group 118 C | 4.6 s planned, exactly (118-95) x 200 ms |
+| group 200 C | clamped to the 15 s cap, reported as "CLAMPED - coefficient may be wrong" |
+| used recently | no flush, "used too recently - group reading still settling" |
+| override cleared | returns to the real probe, no flush at room temperature |
+| full sequence, group 130 C | cooling flush **7.002 s** against 7.0 s planned, then recovery **3.001 s** against 3.0 s with valve shut AND pump stopped, then pre-infusion, soak and extraction in order |
+| shot clock | the shot reported 45.0 s having had 10 s of flush and recovery before it, confirming the baselines are taken at extraction |
+
+`HEATER` and `FILL` stayed flat low throughout every test. `BREW_SW` stayed released, and the console-started shot was not killed by it, which is the 9.4 fix holding.

@@ -14,6 +14,7 @@
 #include "pumpHandler.h"
 #include "safetyHandler.h"
 #include "switchHandler.h"
+#include "tempHandler.h"
 #include "weightHandler.h"
 
 namespace shot {
@@ -75,6 +76,97 @@ namespace shot {
         uint32_t maxFlushMs = kDefaultMaxFlushMs;
         const char* flushStopReason = "never run";
 
+
+        // --- Cooling flush -----------------------------------------------
+        bool coolingEnabled = false;
+        bool coolingCalibrated = false;
+
+        double flushTarget = kDefaultFlushTargetC;
+        uint32_t flushMsPerDeg = kDefaultFlushMsPerDegree;
+        uint32_t maxCoolingMs = kDefaultMaxCoolingFlushMs;
+        uint32_t recoveryMs = kDefaultRecoveryMs;
+        double coolingPercent = kDefaultCoolingFlushPercent;
+
+        uint32_t minIdleMs = kDefaultMinIdleForFlushMs;
+
+        /** Duration decided at the start of the current shot, 0 if none. */
+        uint32_t coolingPlannedMs = 0;
+        const char* coolingReason = "never run";
+
+        /**
+         * When water last moved through the group.
+         *
+         * Upstream's idea, from standby.h: a timestamp reset on activity, with
+         * idle time derived by subtraction. Reset at the END of anything that
+         * moved water, because what matters to the exchanger is time since
+         * flow stopped, not time since it started.
+         *
+         * Initialised to zero rather than millis() on purpose: at boot the
+         * machine has by definition been sitting, so it should read as fully
+         * idle rather than as just-used.
+         */
+        uint32_t lastFlowEndedMs = 0;
+
+        void noteFlowEnded() {
+            lastFlowEndedMs = millis();
+        }
+
+        /**
+         * @brief How long to flush, from the stagnant group reading.
+         *
+         * Called once, when a shot is requested and before anything moves, so
+         * the probe is reading a still line. See the header for why this is
+         * not a loop.
+         *
+         * Returns 0 - meaning do not flush - whenever the answer is not known
+         * rather than guessing. A skipped flush makes a hot shot, which is bad
+         * coffee; a flush computed from a bad reading runs the pump for a time
+         * nobody chose.
+         */
+        uint32_t planCoolingFlush(const char** why) {
+            if (!coolingEnabled) {
+                *why = "disabled";
+
+                return 0;
+            }
+
+            if (!temps::groupHealthy()) {
+                // No probe, no plan. This is the bring-up state and will also
+                // be the state if the probe ever falls off.
+                *why = "no group reading";
+
+                return 0;
+            }
+
+            // The reading is only trustworthy on a line that has been still
+            // for a while. See kDefaultMinIdleForFlushMs - this gate is what
+            // idle time is actually for.
+            if ((millis() - lastFlowEndedMs) < minIdleMs) {
+                *why = "used too recently - group reading still settling";
+
+                return 0;
+            }
+
+            const double excess = temps::groupC() - flushTarget;
+
+            if (excess <= 0.0) {
+                *why = "group already at or below target";
+
+                return 0;
+            }
+
+            const uint32_t wanted = static_cast<uint32_t>(excess * flushMsPerDeg);
+
+            if (wanted > maxCoolingMs) {
+                *why = "CLAMPED to the cap - coefficient may be wrong";
+
+                return maxCoolingMs;
+            }
+
+            *why = "computed from the group reading";
+
+            return wanted;
+        }
 
         // --- Backflush ---------------------------------------------------
         BackflushState backflush = BackflushState::Idle;
@@ -223,6 +315,24 @@ namespace shot {
         }
 
         /**
+         * @brief Start the extraction proper, taking the baselines here.
+         *
+         * Separated out because extraction can begin either immediately or
+         * after a cooling flush and recovery, and in the second case the
+         * baselines MUST be taken at this point rather than when the shot was
+         * requested. Flush water is not espresso: baselining earlier would
+         * count it as delivered volume and would spend part of the hard shot
+         * time limit on flushing.
+         */
+        void beginExtraction() {
+            weightAtStart = weight::healthy() ? weight::grams() : 0.0;
+            volumeAtStart = flow::totalMl();
+            shotStartedMs = millis();
+
+            enter(P().preInfuseMs > 0 ? State::Preinfusion : State::Running);
+        }
+
+        /**
          * @brief Has the shot met a stop condition?
          *
          * Checked only while extracting. The time limit is last so the more
@@ -317,15 +427,38 @@ namespace shot {
             return false;
         }
 
-        // Baselines, so the shot measures what IT delivered rather than
-        // whatever the totals happened to be beforehand.
-        weightAtStart = weight::healthy() ? weight::grams() : 0.0;
-        volumeAtStart = flow::totalMl();
-
-        shotStartedMs = millis();
         stopReason = "running";
 
-        enter(P().preInfuseMs > 0 ? State::Preinfusion : State::Running);
+        // Decide the cooling flush BEFORE anything moves, while the line is
+        // still stagnant and the group probe is therefore believable.
+        coolingPlannedMs = planCoolingFlush(&coolingReason);
+
+        if (coolingPlannedMs > 0) {
+            // Baselines and the shot clock are deliberately NOT set here. They
+            // are taken in beginExtraction(), after the flush and recovery,
+            // because flush water is not espresso: counting it would make the
+            // volume target trigger instantly and would spend part of the
+            // 60 s shot limit on flushing.
+            enter(State::CoolingFlush);
+
+            Serial.print("shot: COOLING FLUSH first - group ");
+            Serial.print(temps::groupC(), 1);
+            Serial.print(" C, target ");
+            Serial.print(flushTarget, 1);
+            Serial.print(" C, flushing ");
+            Serial.print(coolingPlannedMs / 1000.0, 1);
+            Serial.print(" s (");
+            Serial.print(coolingReason);
+            Serial.println(")");
+
+            if (!coolingCalibrated) {
+                Serial.println("      NOTE: the duration coefficient is an UNCALIBRATED placeholder");
+            }
+
+            return true;
+        }
+
+        beginExtraction();
 
         Serial.println("shot: START");
 
@@ -342,10 +475,25 @@ namespace shot {
         }
 
         allOff();
+        noteFlowEnded();
+
+        // Captured before enter() moves the state on, so the message can say
+        // whether this was a real shot or a flush that never got that far.
+        const bool beforeExtraction = (current == State::CoolingFlush || current == State::Recovery);
 
         stopReason = reason;
         finishedAtMs = millis();
         enter(State::Finished);
+
+        if (beforeExtraction) {
+            // No shot clock and no baselines yet, so there is nothing
+            // meaningful to report about volume or time - and printing
+            // millis() minus an unset start would claim an absurd shot time.
+            Serial.print("shot: STOPPED before extraction - ");
+            Serial.println(reason);
+
+            return;
+        }
 
         Serial.print("shot: STOPPED after ");
         Serial.print((millis() - shotStartedMs) / 1000.0, 1);
@@ -592,6 +740,59 @@ namespace shot {
             case State::Idle:
                 return;
 
+            case State::CoolingFlush: {
+                outputs::set(outputs::Channel::Valve, true);
+                pump::setSpeed(coolingPercent);
+
+                const uint32_t elapsed = now - stageStartedMs;
+
+                // EARLY STOP, the only place the loop is closed. It can only
+                // shorten a flush, never extend one, so the probe's lag during
+                // flow cannot cause harm through it - a lagging probe simply
+                // never triggers this and the planned duration stands.
+                if (temps::groupHealthy() && temps::groupC() <= flushTarget) {
+                    Serial.print("shot: cooling flush reached target early at ");
+                    Serial.print(elapsed / 1000.0, 1);
+                    Serial.println(" s");
+
+                    allOff();
+                    enter(State::Recovery);
+
+                    return;
+                }
+
+                if (elapsed >= coolingPlannedMs) {
+                    allOff();
+                    enter(State::Recovery);
+
+                    Serial.print("shot: cooling flush done, ");
+                    Serial.print(elapsed / 1000.0, 1);
+                    Serial.print(" s - recovering for ");
+                    Serial.print(recoveryMs / 1000.0, 1);
+                    Serial.println(" s");
+                }
+
+                return;
+            }
+
+            case State::Recovery:
+                // Valve shut, pump stopped. Letting the exchanger pick the
+                // heat back up before extraction, so the shot does not start
+                // on water that is now too cold.
+                allOff();
+
+                if ((now - stageStartedMs) >= recoveryMs) {
+                    beginExtraction();
+
+                    Serial.println("shot: START (after cooling flush)");
+
+                    if (!weight::healthy()) {
+                        Serial.println("      note: no usable scale - this shot will stop on time or volume");
+                    }
+                }
+
+                return;
+
             case State::Preinfusion:
                 // Re-asserted every pass on purpose - see the header. If this
                 // handler hangs, the pump's command expires and it stops.
@@ -685,6 +886,7 @@ namespace shot {
         }
 
         allOff();
+        noteFlowEnded();
 
         flush = FlushState::Idle;
         flushStopReason = why;
@@ -736,6 +938,137 @@ namespace shot {
         Serial.println(" s");
 
         return true;
+    }
+
+    // --- Cooling flush --------------------------------------------------
+
+    void setCoolingFlushEnabled(const bool enabled) {
+        coolingEnabled = enabled;
+
+        Serial.print("coolflush: ");
+        Serial.println(enabled ? "ENABLED" : "disabled");
+
+        if (enabled && !coolingCalibrated) {
+            Serial.println("  WARNING: TWO numbers here are still shipped placeholders, so both the");
+            Serial.println("  flush duration and the decision to flush at all come from guesses:");
+            Serial.println("    perdeg  ms of flush per degree - depends on exchanger volume and flow");
+            Serial.println("    minidle how long before the probe is trusted - set by the group's");
+            Serial.println("            8 lb copper mass, so 2 min is probably far too short");
+            Serial.println("  Measure both on a machine with water in it, then 'coolflush calibrated 1'.");
+        }
+    }
+
+    bool coolingFlushEnabled() {
+        return coolingEnabled;
+    }
+
+    uint32_t plannedCoolingFlushMs() {
+        const char* why = "";
+
+        return planCoolingFlush(&why);
+    }
+
+    const char* coolingFlushPlanReason() {
+        const char* why = "";
+        planCoolingFlush(&why);
+
+        return why;
+    }
+
+    bool setFlushTargetC(const double degreesC) {
+        // Bounded to temperatures that make sense for water about to meet
+        // coffee. Outside this the setting is a typo, not an intention.
+        if (degreesC < 70.0 || degreesC > 110.0) {
+            Serial.println("coolflush: REFUSED - target must be 70 to 110 C");
+
+            return false;
+        }
+
+        flushTarget = degreesC;
+        Serial.print("coolflush: target now ");
+        Serial.print(flushTarget, 1);
+        Serial.println(" C");
+
+        return true;
+    }
+
+    double flushTargetC() {
+        return flushTarget;
+    }
+
+    bool setFlushMsPerDegree(const uint32_t ms) {
+        if (ms < 10 || ms > 5000) {
+            Serial.println("coolflush: REFUSED - coefficient must be 10 to 5000 ms per degree");
+
+            return false;
+        }
+
+        flushMsPerDeg = ms;
+        Serial.print("coolflush: ");
+        Serial.print(flushMsPerDeg);
+        Serial.println(" ms per degree above target");
+        Serial.println("           still marked uncalibrated - 'coolflush calibrated 1' if measured");
+
+        return true;
+    }
+
+    uint32_t flushMsPerDegree() {
+        return flushMsPerDeg;
+    }
+
+    bool coolingFlushCalibrated() {
+        return coolingCalibrated;
+    }
+
+    void setCoolingFlushCalibrated(const bool calibrated) {
+        coolingCalibrated = calibrated;
+
+        Serial.print("coolflush: coefficient marked ");
+        Serial.println(calibrated ? "CALIBRATED" : "uncalibrated");
+    }
+
+    bool setMaxCoolingFlushMs(const uint32_t ms) {
+        // Same rule as every other cap here: cannot be disabled, cannot be
+        // stretched until it stops being a backstop.
+        if (ms < 1000 || ms > 60000) {
+            Serial.println("coolflush: REFUSED - the cap must be 1 to 60 s. It cannot be disabled.");
+
+            return false;
+        }
+
+        maxCoolingMs = ms;
+        Serial.print("coolflush: cap now ");
+        Serial.print(maxCoolingMs / 1000.0, 1);
+        Serial.println(" s");
+
+        return true;
+    }
+
+    void setMinIdleForFlushMs(const uint32_t ms) {
+        minIdleMs = ms;
+
+        Serial.print("coolflush: group must be undisturbed for ");
+        Serial.print(minIdleMs / 1000.0, 0);
+        Serial.println(" s before its reading is trusted");
+    }
+
+    uint32_t idleMs() {
+        return millis() - lastFlowEndedMs;
+    }
+
+    void setRecoveryMs(const uint32_t ms) {
+        // Clamped only so a slip cannot leave a shot sitting in Recovery for
+        // minutes. Everything is off during it, so this is about the shot not
+        // appearing to hang rather than about safety.
+        recoveryMs = (ms > 30000) ? 30000 : ms;
+
+        Serial.print("coolflush: recovery pause now ");
+        Serial.print(recoveryMs / 1000.0, 1);
+        Serial.println(" s");
+    }
+
+    void setCoolingFlushPercent(const double percent) {
+        coolingPercent = (percent < 0.0) ? 0.0 : ((percent > 100.0) ? 100.0 : percent);
     }
 
     // --- Backflush ------------------------------------------------------
@@ -822,6 +1155,7 @@ namespace shot {
         }
 
         allOff();
+        noteFlowEnded();
 
         const uint8_t completed = backflushCycleNow;
 
@@ -1032,6 +1366,10 @@ namespace shot {
         switch (current) {
             case State::Idle:
                 return "idle";
+            case State::CoolingFlush:
+                return "cooling flush";
+            case State::Recovery:
+                return "recovery";
             case State::Preinfusion:
                 return "preinfusion";
             case State::PreinfusionPause:
@@ -1046,11 +1384,14 @@ namespace shot {
     }
 
     bool isRunning() {
-        return current == State::Preinfusion || current == State::PreinfusionPause || current == State::Running;
+        return current == State::CoolingFlush || current == State::Recovery || current == State::Preinfusion || current == State::PreinfusionPause || current == State::Running;
     }
 
     uint32_t elapsedMs() {
-        if (current == State::Idle) {
+        // Zero until extraction actually begins. During the cooling flush and
+        // recovery shotStartedMs has not been set yet, and subtracting from it
+        // would report a shot time of however long the Teensy has been awake.
+        if (current == State::Idle || current == State::CoolingFlush || current == State::Recovery || shotStartedMs == 0) {
             return 0;
         }
 
@@ -1148,6 +1489,62 @@ namespace shot {
         Serial.print("max ");
         Serial.print(maxBrewMs / 1000);
         Serial.println(" s (always enforced)");
+
+        Serial.print("      cooling flush ");
+        Serial.print(coolingEnabled ? "ON" : "off");
+
+        if (!coolingCalibrated) {
+            Serial.print(" - COEFFICIENT UNCALIBRATED (placeholder)");
+        }
+
+        Serial.println();
+
+        Serial.print("        target ");
+        Serial.print(flushTarget, 1);
+        Serial.print(" C, ");
+        Serial.print(flushMsPerDeg);
+        Serial.print(" ms/degree, cap ");
+        Serial.print(maxCoolingMs / 1000.0, 1);
+        Serial.print(" s, recovery ");
+        Serial.print(recoveryMs / 1000.0, 1);
+        Serial.print(" s, pump ");
+        Serial.print(coolingPercent, 0);
+        Serial.println("%");
+
+        Serial.print("        group now ");
+
+        if (temps::groupHealthy()) {
+            Serial.print(temps::groupC(), 1);
+            Serial.print(" C");
+        }
+        else {
+            Serial.print("--");
+        }
+
+        Serial.print(", undisturbed ");
+        Serial.print(idleMs() / 1000.0, 0);
+        Serial.print(" s of ");
+        Serial.print(minIdleMs / 1000.0, 0);
+        Serial.println(" s needed");
+
+        {
+            const char* why = "";
+            const uint32_t planned = planCoolingFlush(&why);
+
+            Serial.print("        if a shot started now: ");
+
+            if (planned == 0) {
+                Serial.print("no flush (");
+                Serial.print(why);
+                Serial.println(")");
+            }
+            else {
+                Serial.print(planned / 1000.0, 1);
+                Serial.print(" s (");
+                Serial.print(why);
+                Serial.println(")");
+            }
+        }
 
         Serial.print("      flush ");
 

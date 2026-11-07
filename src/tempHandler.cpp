@@ -51,6 +51,10 @@ namespace temps {
         double boilerTempC = 0.0;
         double groupTempC = 0.0;
 
+        // Bench override of the group reading. See overrideGroupC().
+        bool groupForced = false;
+        double groupForcedC = 0.0;
+
         bool boilerOk = false;
         bool groupOk = false;
 
@@ -160,9 +164,16 @@ namespace temps {
         safety::boilerSensorHealthy = boilerOk;
 
         // --- Group: monitoring only, never latches a fault ---------------
-        const double groupReading = groupSensor->getCurrentTemperature();
-
-        if (groupSensor->hasError() || !plausible(groupReading)) {
+        //
+        // A bench override wins outright and skips the probe entirely. See
+        // overrideGroupC() in the header for why this is safe here and would
+        // not be on the boiler.
+        if (groupForced) {
+            groupTempC = groupForcedC;
+            groupOk = true;
+        }
+        else if (const double groupReading = groupSensor->getCurrentTemperature();
+                 groupSensor->hasError() || !plausible(groupReading)) {
             // Not an error worth stopping for. The group probe feeds flush and
             // readiness hints, cannot cause harm by being wrong, and may simply
             // not be fitted during bring-up.
@@ -211,7 +222,13 @@ namespace temps {
         Serial.print(PIN_RTD_CS_GROUP);
         Serial.print(") : ");
 
-        if (groupOk) {
+        if (groupForced) {
+            // Said loudly. A forced reading that looked like a real one would
+            // be the most misleading line on this console.
+            Serial.print(groupTempC, 2);
+            Serial.println(" C   *** FORCED, bench override - not the probe ***");
+        }
+        else if (groupOk) {
             Serial.print(groupTempC, 2);
             Serial.println(" C");
         }
@@ -224,6 +241,33 @@ namespace temps {
         if (boilerSensor != nullptr) {
             boilerSensor->setFaultInjection(on);
         }
+    }
+
+    void overrideGroupC(const double degreesC) {
+        groupForced = true;
+        groupForcedC = degreesC;
+
+        Serial.print("group temperature FORCED to ");
+        Serial.print(degreesC, 1);
+        Serial.println(" C - bench override, 'groupreal' to stop");
+    }
+
+    void clearGroupOverride() {
+        if (!groupForced) {
+            return;
+        }
+
+        groupForced = false;
+
+        // Drop healthy until the next real read lands, so nothing acts on the
+        // forced value one pass longer than it should.
+        groupOk = false;
+
+        Serial.println("group temperature override cleared - reading the probe again");
+    }
+
+    bool groupOverridden() {
+        return groupForced;
     }
 
     bool boilerFaultInjected() {

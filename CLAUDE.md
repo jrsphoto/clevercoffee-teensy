@@ -83,10 +83,18 @@ sequence with encoder profiles.
 Blocked on parts: brew pressure sensor, water-level probe circuit, load cell
 bracket, silicone tubing for the duty-to-flow sweep.
 
-Also verified on hardware (2026-11-06): manual flush and backflush, and the
-brew switch read as a gesture so a shot starts on release. Measured with the
-LA2016 on `GROUP`, `PUMP_PWM` and `BREW_SW` at once, firmware log and analyser
-agreeing independently. Detail in `TEENSY-PORT-BRIEF.md` 9.3.
+Also verified on hardware (2026-11-06): manual flush and backflush, the brew
+switch read as a gesture so a shot starts on release, and the automated
+cooling flush. Measured with the LA2016 on `GROUP`, `PUMP_PWM` and `BREW_SW` at
+once, firmware log and analyser agreeing independently. Detail in
+`TEENSY-PORT-BRIEF.md` 9.3 to 9.5.
+
+**The cooling flush is OFF by default and must stay that way until calibrated.**
+Two of its numbers are placeholders that cannot be derived without water in the
+machine: `perdeg` (ms of flush per degree) and `minidle` (how long before the
+group probe is trusted, which the group's 8 lb copper mass sets and which is
+probably far longer than the shipped 2 minutes). Measure both, then
+`coolflush calibrated 1`. Do not "fix" it by turning it on.
 
 Not being ported at all: **hot water and steam.** Both are manual valves on
 this machine and the board has no output or switch for either. Upstream's
