@@ -1,244 +1,135 @@
 # CleverCoffee, ported to Teensy 4.1 + ESP32-S3
 
-A fork of [CleverCoffee](https://github.com/rancilio-pid/clevercoffee) that splits
-the firmware across two processors, built for a C.M.A. Laurentis "Astoria Argenta
-SME" 1N Junior: a 120 V, single group, heat exchanger machine with a rotary pump.
+A fork of [CleverCoffee](https://github.com/rancilio-pid/clevercoffee) that splits the firmware across two processors to drive a C.M.A. Laurentis "Astoria Argenta SME" 1N Junior: a 120 V, single-group heat exchanger machine with a rotary pump.
 
-Upstream CleverCoffee runs on a single ESP32 and is the right answer for most
-builds. This fork exists because this particular machine asks for more, and the
-reasons are worth stating plainly since "two microcontrollers" looks like
-overkill at first glance.
+Upstream CleverCoffee runs on a single ESP32, which is the correct architecture for standard retrofits. This fork moves to a dual-MCU setup to isolate real-time control loops and safety interlocks from the high-overhead Wi-Fi stack and web server.
 
-## Why a Teensy, and why two processors
+## Architecture: Why a Teensy + ESP32 Split
 
-The short version is that this machine is being asked to do more than a standard
-CleverCoffee build, and the thing controlling a 1500 W element should not also be
-serving web pages.
+Running a 1500 W heating element, variable-speed pump, and safety watchdog on the same core servicing HTTP requests and MQTT introduces unnecessary scheduling risk.
 
-On a normal single-ESP32 build, the same chip runs WiFi, the web UI, MQTT, the
-display, the PID and all the safety logic. That works, and thousands of machines
-prove it. But everything shares one loop, so a browser hitting the web interface
-or the WiFi stack doing its own housekeeping competes with the control timing.
-Here the Teensy 4.1 does nothing but real time control: PID, pump, valves,
-sensors, and every interlock. The ESP32-S3 display board does WiFi, the web
-interface and the screen, and talks to the Teensy over a single serial link. The
-Teensy is in charge; the display is a terminal. The display can be unplugged mid
-shot and the machine carries on and finishes the shot normally, which has been
-tested rather than assumed.
+In this implementation, responsibilities are strictly divided:
 
-The Teensy specifically because of how much real time I/O runs at once: two PT100
-temperature probes on SPI, an I2C encoder, two load cells for brew by weight, a
-flow sensor counting pulses, hardware PWM driving a variable speed gear pump, and
-the serial link. It is a 600 MHz chip with hardware floating point and a hardware
-watchdog that cannot be switched off once started, which matters because this
-build has no external fail safe relay chain. The firmware is the only active line
-of defence, so that firmware should be boring, predictable, and not sharing a
-processor with a radio.
+* **Teensy 4.1**: Operates as the deterministic core handling the heater PID, pump control, solenoid valves, sensor acquisition, and hardware watchdog.
+* **ESP32-S3 Display Module**: Manages Wi-Fi, the web UI, MQTT telemetry, and the local GUI. It communicates with the Teensy over a framed serial link.
 
-Is it overkill for a straightforward PID retrofit? Honestly, yes. If you want brew
-temperature control and a web UI, a single ESP32 is the right answer. It stops
-being overkill once you add variable speed pump control closing the loop on
-pressure and flow, brew by weight, and boiler autofill, and once you decide the
-microcontroller is the only safety there is. The cost is real: CleverCoffee is
-ESP32 native, so it does not drop in. It has to be split into two firmwares with
-a protocol between them, which is a lot more work than flashing an ESP32.
+The control boundary is one-directional regarding safety. The Teensy functions entirely autonomously; if the display module is disconnected or crashes mid-shot, the machine completes the extraction without interruption.
 
-The precedent is [OnStep](https://github.com/hjd1964/OnStep), which pairs a Teensy
-doing telescope motion control with a separate ESP32 web head over serial.
+### Hardware I/O Load on the Teensy
 
-## How the work is split
+The Teensy 4.1 handles the dense real-time polling requirements:
 
-**Teensy 4.1** owns all real time control and all physical I/O: heater PID, brew,
-autofill, pump PWM, valves, both RTDs, brew pressure, flow, the HX711 scales, the
-encoder and buttons, and every safety interlock.
+* Dual PT100 RTDs (MAX31865, 4-wire) sharing one hardware SPI bus with separate chip selects
+* I2C rotary encoder input
+* Dual HX711 load cell channels for gravimetric dosing (brew-by-weight)
+* Flow meter pulse counting
+* Hardware PWM output driving a DRV8871 motor driver for pump control
+* UART telemetry link to the display head
 
-**ESP32-S3 display module** (LCDwiki 4.0 inch, ST7796S with capacitive touch) owns
-WiFi, the web server, MQTT and the colour screen. It holds no actuators and no
-safety. A touch on its screen is a request sent to the Teensy, which decides.
+## Firmware Division of Labor
 
-**The link** is one UART at 115200 with a framed, checksummed ASCII protocol. It
-is deliberately non critical: if it drops, the Teensy runs the machine on its own.
-Nothing in the control path asks whether the display is present.
+* **`src/` (Teensy 4.1)**: Contains the deterministic control loop, safety state machine, sensor filtering, and actuator drivers.
+* **`src-esp32s3/` (ESP32-S3)**: Houses the LCDwiki 4.0-inch (ST7796S capacitive touch) interface code, drawn directly with LovyanGFX, plus the web server and network services.
+* **Serial Protocol**: A lightweight, checksum-verified ASCII protocol running over UART at 115200 baud. The link is non-blocking; missing heartbeat frames trigger UI stale-state warnings but never impact PID timing.
 
-## The two resets stay separate
+## Reset Behavior and Power Isolation
 
-Each board has its own reset, and they are deliberately not tied together.
+The two microcontrollers maintain completely independent power-on reset circuits.
 
-**The display must never be able to reset the controller.** This is not a
-preference, it is the whole point of the split. The ESP32 runs WiFi, a web
-server and MQTT, which are the parts most likely to crash, hang, or need
-rebooting. If its reset were wired to the Teensy then a wedged WiFi stack, an
-over the air update, or somebody pressing the reset button on the back of the
-display would abandon a shot mid pull and drop the heater. Worse, a display
-stuck in a crash loop would become a machine stuck in a reboot loop. Every
-reason for separating the processors argues against that wire.
+The display module cannot reset the Teensy. Because the ESP32 handles network tasks prone to occasional memory fragmentation or watchdog reboots during heavy OTA operations, a hard reset line tied to the controller would risk cutting power to the brew valve or heater mid-shot.
 
-**The reverse is not needed either.** The display holds no state worth
-preserving; everything it shows comes from telemetry. It already handles the
-controller disappearing and returning, which is tested regularly because every
-Teensy reflash does exactly that.
+Boot synchronization is handled via a unidirectional advisory message: when the Teensy completes its self-test and boots, it transmits an initialization frame. The display head listens for this frame to sync variables and clear stale telemetry, keeping the authority model strictly centered on the controller.
 
-What exists instead is a one way, advisory software notification. The Teensy
-sends a Hello frame when it boots. The head treats that as "the controller
-restarted", repaints the screen, and does not carry stale numbers across the
-gap. It costs nothing, cannot wedge anything, and matches the authority model:
-the controller informs the display, never the reverse.
+## Configuration Across Two Processors
 
-Two things worth knowing:
+The display head holds the persistent master configuration, stored as JSON on its filesystem, and serves upstream's `/parameters` API to the browser. The Teensy keeps a validated EEPROM cache of the control values it needs, so it boots and runs correctly with the display unplugged.
 
-* If both boards share a power rail, a brownout resets both regardless of what
-  is wired. That is physics rather than design, so the firmware has to handle a
-  simultaneous restart gracefully, and does.
-* The display module used here is an all in one board whose EN pin is not
-  brought out, so a hardware reset line from the Teensy is not an option anyway.
-  If a way to reboot a wedged display is ever wanted, it should be a command
-  sent over the link that makes the head restart itself. That keeps the
-  direction right and needs no extra wire.
+Every value crossing the link is applied through the controller's own validating setters. A setting the Teensy considers out of range is refused regardless of what the web UI asked for, so a wrong or malfunctioning front end cannot do anything an operator at the panel could not.
 
-If you are reading this because you are about to add a single reset button that
-resets both boards: that is the thing this section exists to argue against.
+## Safety Implementation
 
-## Safety stance
+Because this build lacks an external secondary relay chain, the firmware layer enforces strict functional safety constraints:
 
-There are no external fail safe relays. The Teensy is the only active line of
-defence, so the safety logic is first class rather than an afterthought:
+* **Watchdog Enforcement**: The Teensy's hardware watchdog runs continuously; a software hang forces an immediate fail-safe state (relays open, pump disabled).
+* **Permit Expiration**: Control loops cannot rely on stale static boolean flags. The heater ISR refuses to energize on an execution stamp older than 500 ms, so a stalled main loop drops the heater automatically. Pump speed commands expire the same way.
+* **Stale Readings Are Not Readings**: A sensor value that has stopped updating is treated as absent rather than as the last good value, and staleness is measured from the last successful read so a dead sensor cannot refresh its own freshness.
+* **Dry-Fire Interlock**: Heater power is inhibited unless the boiler water level probe confirms water. That probe circuit is not built yet, so the firmware currently refuses to heat at all. This is correct behavior, not a defect.
+* **Output Stage Verification**: A monitor pin on the heater channel samples the ULN2003 output, so the duty actually reaching the driver can be measured against what the PID requested. This checks the whole path from PID through the ISR and the Teensy pin to the ULN output.
+* **Load Shedding**: A software interlock prevents the heater and pump from running simultaneously, keeping the machine within a 120 V / 15 A branch circuit.
 
-* Fail to a safe state on sensor fault, implausible reading, watchdog timeout,
-  boot self check failure, over temperature or loss of the water level signal.
-* Hardware watchdog that resets into the safe state.
-* Dry fire interlock: no heater power unless the water probe confirms water.
-  With no probe fitted the firmware refuses to heat, which is the correct
-  behaviour and not a bug.
-* Load shed so the heater and pump never run together on a 15 A circuit.
-* Outputs default off; everything stays off at boot until self checks pass.
+An inline thermal fuse serves as the final non-resettable physical backstop inside the chassis. The firmware neither knows about it nor relies on it.
 
-Two mechanisms are worth calling out because they are not obvious:
+### Not Implemented: Hot Water and Steam
 
-**Permits expire.** The heater ISR cannot evaluate the safety gates, but it does
-not blindly trust a flag either, because a flag set by a loop that has since hung
-is a lie. The main loop stamps the permit and the ISR refuses to energise on a
-stamp older than 500 ms. Verified by deliberately hanging the loop: the heater
-dropped at exactly 500 ms. The pump uses the same idea, with speed commands that
-expire if not re-asserted.
+Upstream supports switched hot water and a second steam PID setpoint. Neither is ported here. Both are manual valves on this machine and the controller board has no output or switch for either. Upstream's steam mode raises a single boiler from brew temperature to steam temperature, which a heat exchanger already held at steam temperature does not have.
 
-**The output stage is checked every tick.** The ULN2003 output is monitored by a
-Teensy pin, and each timer tick verifies the output followed what was commanded.
-A dead driver channel shows up as a mismatch count rather than as a boiler that
-quietly stops heating.
+## Current Validation Status
 
-A passive one shot thermal cutoff stays inline in the heater line as the only non
-firmware backstop. The firmware neither knows nor relies on it.
+| Subsystem | Status |
+| :--- | :--- |
+| Core safety state machine & watchdog | Verified |
+| Dual MAX31865 4-wire PT100 RTD interfaces | Verified |
+| Digmesa DM60 flow sensor pulse counting | Verified |
+| DuPPa I2C encoder polling | Verified |
+| ESP32-S3 display link & touch input | Verified |
+| Debounced group head switch w/ long-press | Verified |
+| Dual HX711 load cell amplifier chain | Verified (bracket machining pending) |
+| DRV8871 PWM pump speed control | Verified on logic analyzer, 0.4% of commanded |
+| Boiler PID & ULN2003 driver logic | Verified (bench tested, unheated) |
+| Brew sequence with encoder-selected profiles | Verified |
+| Manual flush and automatic backflush | Verified |
+| Pre-shot cooling flush | Logic verified; coefficients uncalibrated |
+| Wi-Fi, web server, and settings over the link | Verified |
 
-## Status
+*Note: The heating element has not been energized on mains voltage during initial bench verification phases; all interlocks and PID ramp responses were validated via isolated logic testing. Nothing is plumbed, so hydraulic behavior is unverified.*
 
-Working and verified on real hardware:
+The cooling flush computes its duration from the group probe, but the two coefficients that conversion needs depend on exchanger volume and the group's thermal mass. Neither can be derived from a datasheet and both require a machine with water in it. The feature therefore ships disabled, with its placeholder values flagged as uncalibrated in both the serial console and the web UI.
 
-| Area | State |
-|------|-------|
-| Safety layer, watchdog, fault latching, bench console | verified |
-| Two PT100 RTDs (MAX31865, 4 wire) | verified |
-| Digmesa DM60 flow sensor | verified |
-| DuPPa I2C encoder | verified |
-| ESP32-S3 display, touch, and the serial link | verified |
-| Brew switch, debounced, with long press | verified |
-| Dual HX711 load cells | verified, calibration pending a better bracket |
-| Pump PWM into a DRV8871 | verified on the wire to 0.4% |
-| Boiler PID and the ULN2003 heater drive | verified, output still gated |
+## Build Configuration
 
-Not done yet: brew state machine, the web UI and config sync on the display head,
-and firmware update over the link. Waiting on parts: brew pressure sensor, the
-water level probe circuit, and a thermal cutoff.
+Managed via PlatformIO with three defined environments:
 
-The heater has never been connected to mains. Every interlock above was proven
-with no element attached, which is the only sensible order.
-
-## Building
-
-PlatformIO, three environments:
-
-```
-pio run -e teensy41     # the control firmware, src/
-pio run -e esp32s3      # the display head, src-esp32s3/
-pio run -e esp32_usb    # upstream's ESP32 firmware, kept as a porting reference
+```ini
+pio run -e teensy41     # Control firmware (Teensy 4.1)
+pio run -e esp32s3      # Display head firmware (ESP32-S3)
+pio run -e esp32_usb    # Upstream reference target
 ```
 
-`build_src_filter` in `platformio.ini` is the running ledger of the port. Each
-phase adds the files it brings over, so the Teensy build cannot silently pick up
-ESP32 era code that happens to still be sitting in `src/`.
+The `build_src_filter` rules in `platformio.ini` separate target source paths to prevent cross-contamination between the Teensy real-time codebase and upstream ESP32 components.
 
-The Teensy firmware has an extensive serial bring up console. `help` lists it.
+The display head's web interface is a separate filesystem image and therefore a second upload:
 
-## Relationship to upstream
+```ini
+pio run -e esp32s3 -t uploadfs
+```
 
-This fork tracks [rancilio-pid/clevercoffee](https://github.com/rancilio-pid/clevercoffee)
-and tries to stay readable against it: same modular shape, same handler names,
-same config system, so upstream changes remain cross referenceable. Where this
-fork diverges it is for a stated reason, usually recorded in the file header.
+## Relationship to Upstream
 
-Please direct support questions about CleverCoffee itself to the upstream project
-rather than here. Their Discord supports their PCBs, and this is neither.
+This repository is structured to maintain file-level readability alongside [rancilio-pid/clevercoffee](https://github.com/rancilio-pid/clevercoffee), preserving modular naming conventions where applicable to simplify tracking upstream patches.
+
+Please direct support questions about CleverCoffee itself to the upstream project rather than here. Their Discord supports their PCBs, and this is neither.
 
 ---
 
-# About upstream CleverCoffee
+# About Upstream CleverCoffee
 
-The text below describes the upstream project this fork is based on.
+*The following section details the base upstream project.*
 
-CleverCoffee (formerly Rancilio PID) implements a PID controller for stable and
-accurate temperature control, originally for the Rancilio Silvia but also
-supporting Gaggia and Quickmill machines. Other machines can easily be added or
-may already be compatible.
+CleverCoffee implements an open-source PID controller designed for thermal stability on single-boiler espresso machines, originally built for the Rancilio Silvia and expanded to Gaggia and Quickmill platforms.
 
-Additional features include:
+Core features provided upstream include:
 
-* Shot timer
-* Configurable pre-infusion
-* Brew by weight
-* Brew by time
-* Pressure monitoring / profiling (still a work in progress)
+* Accurate PID temperature regulation
+* Configurable pre-infusion profiles
+* Gravimetric brew-by-weight and time-based dosing
+* Automated backflush cycles
+* MQTT integration and web-based configuration dashboards
 
-The hardware has a small footprint and can easily fit into most compact espresso
-machines. The original wiring of the machine (mostly) remains intact and is only
-extended. The machine can be easily reverted back to its original state.
+Project Resources:
 
-The project has been in active development and supported for over 5 years with
-continuous improvements. Hundreds of machines have been successfully modded
-already.
+* **Website:** [Clever Coffee](https://clevercoffee.de)
+* **Hardware:** [Clever Coffee Shop](https://shop.clevercoffee.de/)
+* **Documentation:** [Handbook (German)](https://rancilio-pid.github.io/ranciliopid-handbook/)
+* **Community:** [Discord Support](https://discord.gg/Kq5RFznuU4)
 
-Project website: [Clever Coffee Website](https://clevercoffee.de).
-PCB and parts: [Clever Coffee Shop](https://shop.clevercoffee.de/).
-Manual (German): [handbook](https://rancilio-pid.github.io/ranciliopid-handbook/).
-Chat and support: [Discord](https://discord.gg/Kq5RFznuU4).
-
-Upstream requires no development environment: from version 4.0.0 you can flash
-directly from any Chromium based browser using their
-[Web Flasher](https://rancilio-pid.github.io/clevercoffee-flasher/). That applies
-to the ESP32 firmware only, not to the Teensy build in this fork.
-
-## Upstream feature overview
-
-* Control of the brew temperature with an accuracy of up to +/- 0.1 degrees
-* Reaches the target temperature within 5 to 10 minutes after switching on
-* Set PID parameters and monitor current temperature and heater output on a web
-  page hosted on the ESP controller
-* Separate PID for steam mode with its own parameters and target temperature
-* Automatically brew by set time including pre-infusion timing
-* Automatically brew by weight using integrated weight cells or Bluetooth Low
-  Energy scales
-* Automatic backflush program
-* Programmable standby timer
-* Supports toggle or momentary switches for brew, steam, hot water delivery and
-  power/standby
-* Brew switch detection via an optocoupler module for a minimally invasive
-  installation
-* MQTT support to monitor and manipulate all important parameters
-* Multiple display templates including vertical, with support for custom designs
-* Over the air updates of the firmware via WiFi
-
-Version 4.0.0 also brought a JSON based configuration system replacing EEPROM,
-full Bluetooth Low Energy scale support including Acaia models, feature complete
-support for the official CleverCoffee PCB, and improved Home Assistant MQTT
-discovery.
-
-Thanks to every single supporter of the upstream project. This fork would not
-exist without five years of their work.
+*Standard upstream builds support browser-based flashing via the [Web Flasher](https://rancilio-pid.github.io/clevercoffee-flasher/) for single-chip ESP32 deployments. This flashing workflow does not apply to the custom dual-MCU Teensy target described in this fork.*
