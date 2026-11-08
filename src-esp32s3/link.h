@@ -64,6 +64,17 @@ namespace machinelink {
         float heaterDuty = 0.0f;
         bool heaterEnabled = false;
 
+        /**
+         * Is backflush ARMED? Reported, not assumed.
+         *
+         * The panel's tile shows this rather than remembering what it last
+         * asked for: the controller disarms on its own after a run and on a
+         * reboot, and a tile claiming ARMED when the machine is not would be
+         * the UI lying about a control that drives the pump against a blind
+         * basket.
+         */
+        bool backflushArmed = false;
+
         long encoder = 0;
         char status[16] = "?";
         char fault[24] = "?";

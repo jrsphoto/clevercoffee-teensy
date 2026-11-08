@@ -189,16 +189,6 @@ namespace display {
         Page currentPage = Page::Home;
         bool chromeDrawn = false;
 
-        /**
-         * Is the MANUAL tile's pump run going?
-         *
-         * Tracked here only so the tile knows whether the next tap means
-         * start or stop. It is NOT a belief about the machine: the Teensy
-         * stops the run on its own cap regardless, and the readout's status
-         * strip is what actually says whether the pump is on.
-         */
-        bool manualRunning = false;
-
         // Last-drawn values, so a field is only repainted when it changes.
         char lastBoiler[12] = "";
         char lastGroup[12] = "";
@@ -213,6 +203,9 @@ namespace display {
 
         /** Is the STOP button currently painted? -1 = not yet decided. */
         int lastStopShown = -1;
+
+        /** Backflush armed, as last drawn on its tile. -1 = not yet drawn. */
+        int lastBackflushArmed = -1;
 
         // WiFi sub-page. Up here with the rest rather than next to the code
         // that draws them, so forgetValues() below can reach them.
@@ -233,6 +226,7 @@ namespace display {
             lastHeatBar = -1;
             lastLink = -1;
             lastStopShown = -1;
+            lastBackflushArmed = -1;
             lastHeaterOn = -1;
 
             // The WiFi page's fields too. Missing these meant entering the
@@ -476,9 +470,9 @@ namespace display {
             {"RISTRETTO", "by weight", TileIcon::Cup},
             {"ESPRESSO", "by weight", TileIcon::Cup},
             {"LUNGO", "by volume", TileIcon::Cup},
-            {"MANUAL", "tap to stop", TileIcon::Hand},
+            {"MANUAL", "STOP to end", TileIcon::Hand},
             {"FLUSH", "purge", TileIcon::Drop},
-            {"BACKFLUSH", "clean cycle", TileIcon::Cycle},
+            {"BACKFLUSH", "tap to arm", TileIcon::Cycle},
             {"SCALE", "tare", TileIcon::Scales},
             {"STATUS", "live readout", TileIcon::Info},
             {"SETTINGS", "", TileIcon::Gear},
@@ -697,9 +691,11 @@ namespace display {
          * so they sit side by side. The icon column is 46 px, leaving ~100 for
          * text, which kFontButton fits comfortably.
          */
-        void drawHomeTile(const HomeAction a, const uint16_t edge, const bool enabled) {
+        void drawHomeTile(const HomeAction a, const uint16_t edge, const bool enabled,
+                          const char* subOverride = nullptr) {
             const Hit h = homeHit(a);
             const HomeTile& t = kHomeTiles[static_cast<int>(a)];
+            const char* sub = subOverride != nullptr ? subOverride : t.sub;
             const uint16_t textCol = enabled ? kValue : kDim;
             const uint16_t iconCol = enabled ? edge : kDim;
 
@@ -738,14 +734,14 @@ namespace display {
             // 6, sub 9 px, so the pair starts about 32 from the top. A single
             // line centres on its own.
             lcd.setTextColor(textCol, kPanel);
-            lcd.setCursor(textX, h.y + (t.sub[0] != '\0' ? 32 : 40));
+            lcd.setCursor(textX, h.y + (sub[0] != '\0' ? 32 : 40));
             lcd.print(t.label);
 
-            if (t.sub[0] != '\0') {
+            if (sub[0] != '\0') {
                 lcd.setFont(kFontTileSub);
                 lcd.setTextColor(enabled ? kLabel : kDim, kPanel);
                 lcd.setCursor(textX, h.y + 52);
-                lcd.print(t.sub);
+                lcd.print(sub);
             }
         }
 
@@ -781,6 +777,19 @@ namespace display {
         void drawHomeValues() {
             const auto& st = machinelink::state();
             const bool live = machinelink::isConnected();
+
+            // BACKFLUSH says whether it is armed, because it REFUSES to run
+            // otherwise and a tile that silently does nothing is the worst
+            // kind of broken. The flag comes from telemetry, not from what
+            // this board last asked for: the controller disarms itself after
+            // a run and on reboot.
+            const int armed = (live && st.backflushArmed) ? 1 : 0;
+
+            if (armed != lastBackflushArmed) {
+                lastBackflushArmed = armed;
+                drawHomeTile(HomeAction::Backflush, armed ? kAlarm : kValue, true,
+                             armed ? "ARMED - tap to run" : "tap to arm");
+            }
 
             char buf[40];
             uint16_t col = kDim;
@@ -1162,6 +1171,8 @@ namespace display {
 
     bool handleTouch(const int x, const int y) {
         if (currentPage == Page::Home) {
+            const auto& st = machinelink::state();
+
             // NO GEAR TEST HERE. This page has no header, so the old gear box
             // in the top-right corner now sits squarely on the LUNGO tile -
             // testing it first would mean a tap meant for a lungo opened the
@@ -1196,11 +1207,18 @@ namespace display {
                     }
 
                     case HomeAction::Manual:
-                        // A toggle: the pump runs until tapped again. Its cap
-                        // (flush.max_time) cannot be disabled, so a panel that
-                        // dies mid-run does not leave the pump going.
-                        machinelink::sendCommand(manualRunning ? "flush=0" : "flush=1");
-                        manualRunning = !manualRunning;
+                        // NOT a toggle, despite how it was first written.
+                        // Tapping this switches to the readout, so the tile is
+                        // not on screen for a second tap - the label said "tap
+                        // to stop" and there was nothing to tap. STOP on the
+                        // readout is the way out, and it appears automatically
+                        // because the machine is running.
+                        //
+                        // The cap (flush.max_time) cannot be disabled either,
+                        // so a panel that dies mid-run does not leave the pump
+                        // going. Verified: stopped at 9.87 s by STOP, with the
+                        // controller logging "panel stop".
+                        machinelink::sendCommand("flush=1");
                         setPage(Page::Main);
 
                         break;
@@ -1212,8 +1230,23 @@ namespace display {
                         break;
 
                     case HomeAction::Backflush:
-                        machinelink::sendCommand("backflush=1");
-                        setPage(Page::Main);
+                        // FIRST TAP ARMS, second runs - the same two steps the
+                        // console requires, and for the same reason: this
+                        // drives the pump against a blind basket and the MG304
+                        // has no internal relief. One tap to start it is not a
+                        // convenience worth having.
+                        //
+                        // Before this, the tile sent backflush=1 straight out,
+                        // the controller refused it for not being armed, and
+                        // nothing on screen said so. Measured on the bench: a
+                        // tap did nothing at all.
+                        if (st.backflushArmed) {
+                            machinelink::sendCommand("backflush=1");
+                            setPage(Page::Main);
+                        }
+                        else {
+                            machinelink::sendCommand("backflusharm=1");
+                        }
 
                         break;
 
@@ -1257,7 +1290,6 @@ namespace display {
                 // flush and backflush could pick the wrong one exactly as a
                 // sequence changes phase.
                 machinelink::sendCommand("stop=1");
-                manualRunning = false;
 
                 return true;
             }

@@ -175,7 +175,7 @@ namespace comms {
             // master copy it would push back - which it did once, overwriting
             // a measured calibration with the 1.0 "uncalibrated" default.
             snprintf(body, sizeof(body),
-                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,sp=%.1f,hd=%.0f,hen=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,c1=%.1f,c2=%.1f,st=%s,flt=%s",
+                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,sp=%.1f,hd=%.0f,hen=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,c1=%.0f,c2=%.0f,bfa=%d,st=%s,flt=%s",
                      temps::boilerC(),
                      temps::groupC(),
                      temps::boilerHealthy() ? 1 : 0,
@@ -192,6 +192,7 @@ namespace comms {
                      static_cast<long>(encoder::counter()),
                      weight::calFactor(),
                      weight::calFactor2(),
+                     shot::backflushArmed() ? 1 : 0,
                      stateWord(),
                      safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "none");
 
@@ -438,6 +439,19 @@ namespace comms {
 
                 const bool started = shot::startFlush("panel");
                 ack("flush", started, started ? "ok" : "refused");
+
+                return;
+            }
+
+            if (parser.get("backflusharm", value, sizeof(value))) {
+                // ARMING IS SEPARATE FROM RUNNING, deliberately, and the
+                // panel must go through the same two steps as the console.
+                // Backflush drives the pump against a blind basket and the
+                // MG304 has no internal relief, so "one tap and it runs" is
+                // not a convenience worth having.
+                const bool want = atoi(value) != 0;
+                shot::setBackflushArmed(want);
+                ack("backflusharm", true, want ? "armed" : "disarmed");
 
                 return;
             }

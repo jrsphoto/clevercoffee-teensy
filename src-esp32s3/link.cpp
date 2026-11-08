@@ -128,6 +128,10 @@ namespace machinelink {
                 current.weightCalibrated = (atoi(buf) != 0);
             }
 
+            if (parser.get("bfa", buf, sizeof(buf))) {
+                current.backflushArmed = (atoi(buf) != 0);
+            }
+
             if (parser.get("enc", buf, sizeof(buf))) {
                 current.encoder = atol(buf);
             }

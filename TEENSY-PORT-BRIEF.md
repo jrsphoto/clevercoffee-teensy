@@ -457,12 +457,33 @@ on one run and aborted on another, both times AFTER writing usable data, and a
 third warned "expecting 556331 samples, got 499885". Check the row count and
 analyse what landed rather than trusting the exit status.
 
-**Still to fix: BACKFLUSH must be armed and the tile cannot arm it.**
-`startBackflush()` refuses unless `backflushIsArmed`, which is correct - it
-drives the pump against a blind basket - but the tile has no way to set it and
-gives no feedback when refused, so a cold tap silently does nothing. It was
-armed from the console for this test. The tile should either show the armed
-state or arm on the first tap and run on the second.
+**BACKFLUSH arming, fixed and on the tile (2026-11-08).** `startBackflush()`
+refuses unless armed, which is correct - it drives the pump against a blind
+basket with no relief valve fitted - but the tile used to send `backflush=1`
+cold, get refused, and say nothing. Measured: a tap did nothing at all.
+
+The tile now arms on the first tap (`backflusharm=1`) and runs on the second,
+and its sub-label says which state it is in. **The armed flag comes from
+telemetry (`bfa`), not from what the head last asked for**, because the
+controller disarms itself after a run and on reboot - a tile claiming ARMED
+when the machine is not would be lying about exactly the wrong control.
+
+The frame was near `kMaxFrame`, so `c1`/`c2` dropped from `%.1f` to `%.0f` to
+pay for `bfa`. Calibration factors are counts per gram in the high hundreds or
+thousands; the fraction was noise.
+
+**MANUAL verified (2026-11-08).** `GROUP` high from the trigger, pump up at
+0.27 s, both off at 9.87 s, ended by the panel's STOP (`last stop: panel
+stop`). `HEATER` and `FILL` flat low. The pump appearing a quarter second
+after the valve is the 400%/s slew seen from the other direction - at 5 kHz
+sampling it does not read solidly high until the duty is near full, which the
+ramp reaches at 0.25 s. Second independent sighting of that slew.
+
+**MANUAL is not a toggle, and the label said it was.** It was written to send
+`flush=0` on a second tap, but tapping it switches to the readout, so the tile
+is not on screen to tap again - "tap to stop" pointed at nothing. It now says
+"STOP to end" and sends only `flush=1`; STOP appears on the readout by itself
+because the machine is running.
 
 **Brew switch, settled.** `pin 24 raw=HIGH, internal pull-up (switch to GND),
 active LOW -> released`. The analyser reading HIGH and the firmware saying
