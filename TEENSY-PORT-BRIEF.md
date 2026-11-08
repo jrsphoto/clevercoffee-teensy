@@ -607,3 +607,47 @@ about 0.35 W/K and the uninsulated bosses, fittings and the group head carry
 the rest. Both model constants are estimates and both are directly measurable
 on the finished machine - heat-up rate gives the heat capacity, holding power
 over temperature difference gives the loss.
+
+### 9.13 PID gains, measured and banked (2026-11-08)
+
+**Kp 62, Tn 52, Tv 11.5, integrator max 200.** The first three are upstream's;
+only the clamp changed, and why is in 9.12.
+
+Measured against the thermal model, insulated (1.2 W/K, 7400 J/K, 1000 W).
+
+**Cold start, 24 C to setpoint:**
+
+| | |
+|---|---|
+| reached 95.0 | 700 s (11.7 min) |
+| peak | 95.8 at 789 s, +0.8 |
+| then | 95.5, 95.0, duty bottoming at 4% and rising |
+
+**Settling from 90 C, which is the approach a machine makes after a shot:**
+
+| | |
+|---|---|
+| peak | 95.80, +0.80 |
+| ring | one dip to 94.80, back to 94.90 - damped 0.8 then 0.2 |
+| last three samples | 94.90, 94.80, 94.90 - holding within 0.1 C |
+| final duty | 8.7-9.2% against 8.6% theoretical holding |
+
+Duty landing on the holding figure is the tell that it has genuinely settled
+rather than still drifting, with the integrator slowly closing the last 0.1 C.
+
+**Good enough, and deliberately not refined further.** Holding to a tenth of a
+degree is better than this machine needs - the shot is pulled from a settled
+boiler, and a tenth is well inside what the water does crossing the group. The
+remaining 0.8 C overshoot on approach could be cut with
+proportional-on-measurement (`pid.use_ponm`, registered and off) or more Tv,
+both of which trade settling time, on a machine that takes twelve minutes to
+warm up anyway.
+
+**What the first real heat-up should do.** Not a search - the response shape is
+known. Measure the two model constants directly and correct them, then expect
+a small adjustment rather than a retune:
+
+* heat capacity, from the heat-up rate at 100% duty: `C = P / (dT/dt)`
+* loss, from the holding power at setpoint: `k = P_hold / (T - T_room)`
+
+If those come out near 7400 J/K and 1.2 W/K these gains stand as they are.
