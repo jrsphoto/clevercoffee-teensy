@@ -36,6 +36,10 @@
 #include "shotHandler.h"
 #include "switchHandler.h"
 #include "tempHandler.h"
+
+#ifdef DESK_SIM
+    #include "boilerSim.h"
+#endif
 #include "updateMode.h"
 #include "weightHandler.h"
 
@@ -232,6 +236,17 @@ void setup() {
     // comms::init() so the machine is already running the operator's settings
     // when the first telemetry frame goes out, rather than reporting defaults
     // for a moment and then changing its mind.
+#ifdef DESK_SIM
+    boilersim::init();
+
+    // The dry-fire interlock would otherwise block the heater forever and the
+    // model would never warm up. Reuse the EXISTING documented bypass rather
+    // than adding a second way through the interlock - one path through that
+    // gate is enough, and this one already announces itself loudly. It is
+    // honest here: there is no element, and no SSR is even connected.
+    heater::setBenchOverride(true);
+#endif
+
     configStore::begin();
 
     comms::init();
@@ -277,6 +292,12 @@ void loop() {
     // loopFlow();           // DM60 pulse counter -> volume
     // loopEncoder();        // Duppa gestures + RGB machine status
     // loopComms();          // telemetry out, commands in, non-blocking
+
+#ifdef DESK_SIM
+    // BEFORE temps::loop(), so the rise this pass adds is current rather than
+    // one pass stale. Driven by the real heater output pin - see boilerSim.h.
+    boilersim::loop();
+#endif
 
     // Both RTDs. Latches the machine safe on a boiler sensor fault, an
     // implausible boiler reading, an over-temperature, or a boiler reading that

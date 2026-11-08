@@ -6,6 +6,10 @@
 
 #include "tempHandler.h"
 
+#ifdef DESK_SIM
+    #include "boilerSim.h"
+#endif
+
 #include <Arduino.h>
 #include <SPI.h>
 
@@ -120,7 +124,13 @@ namespace temps {
         }
 
         // --- Boiler: the safety-critical sensor --------------------------
+#ifdef DESK_SIM
+        // Not const in the simulation build: the modelled rise is added below,
+        // before any of the checks, so they all act on the simulated boiler.
+        double boilerReading = boilerSensor->getCurrentTemperature();
+#else
         const double boilerReading = boilerSensor->getCurrentTemperature();
+#endif
 
         // Staleness FIRST, and taken from the sensor's own record of its last
         // successful read.
@@ -132,6 +142,14 @@ namespace temps {
         // the very timestamp meant to detect the problem. Pulling a probe lead
         // from a running sensor left the heater permitted for seconds while the
         // chip reported an open circuit four times a second.
+#ifdef DESK_SIM
+        // The modelled rise goes on BEFORE the checks below, not after, so a
+        // simulated boiler that runs away latches a real OverTemperature
+        // fault and an implausible one is caught. The whole point is that the
+        // firmware cannot tell this from a hot boiler - see boilerSim.h.
+        boilerReading += boilersim::deltaC();
+#endif
+
         const uint32_t sinceGood = boilerSensor->millisSinceLastGoodReading();
 
         if (sinceGood > kStaleAfterMs) {

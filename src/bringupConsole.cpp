@@ -6,6 +6,10 @@
 
 #include "bringupConsole.h"
 
+#ifdef DESK_SIM
+    #include "boilerSim.h"
+#endif
+
 #include <Arduino.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +84,11 @@ namespace {
         Serial.println("  config            settings pushed by the head, and their EEPROM cache");
         Serial.println("  coolflush         automatic pre-shot cooling flush (HX machine)");
         Serial.println("  coolflush on|off  enable it; off by default, coefficient uncalibrated");
+#ifdef DESK_SIM
+        Serial.println("  boilersim         thermal model state (DESK SIM BUILD)");
+        Serial.println("  boilersim <C>     jump the model so the boiler reads this");
+        Serial.println("  boilersim off     back to ambient");
+#endif
         Serial.println("  groupsim <C>      force the group reading, to test the cooling flush dry");
         Serial.println("  groupreal         stop forcing the group reading");
         Serial.println("  backflush         backflush: armed state, cycle, timings");
@@ -544,6 +553,24 @@ namespace {
                 Serial.println("usage: coolflush on|off|target|perdeg|calibrated|cap|recovery|pump|minidle");
             }
         }
+#ifdef DESK_SIM
+        else if (strcasecmp(command, "boilersim") == 0) {
+            if (argument == nullptr) {
+                boilersim::printStatus();
+            }
+            else if (strcasecmp(argument, "off") == 0) {
+                boilersim::reset();
+            }
+            else {
+                // Measured from the REAL probe, so the jump lands on the
+                // reading the firmware is actually seeing rather than on an
+                // assumed room temperature. boilerC() already includes the
+                // current modelled rise, so take it back off first.
+                const double ambient = temps::boilerC() - boilersim::deltaC();
+                boilersim::jumpTo(atof(argument), ambient);
+            }
+        }
+#endif
         else if (strcasecmp(command, "groupsim") == 0) {
             if (argument == nullptr) {
                 Serial.print("group temperature is ");

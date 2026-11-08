@@ -491,3 +491,74 @@ active LOW -> released`. The analyser reading HIGH and the firmware saying
 schematic has R9 pulling BREW_SW down with the switch going to +3.3 V, so the
 fabricated board wants `brewpull x` and active HIGH. No PCB exists yet, so the
 current setting is right for today.
+
+### 9.11 A thermal model of the boiler, so the PID can be tuned at a desk (2026-11-08)
+
+**Why.** Development happens at John's desk, with the Teensy, the display and
+two PT100 probes reading room temperature. The boiler is in the garage with no
+seals and no plumbing. That made the PID the largest untested thing in this
+firmware with no route to testing it: a control loop cannot be exercised when
+its input never answers its output.
+
+An earlier suggestion of a fixed temperature OFFSET was the wrong idea for
+exactly that reason - a number that does not respond to the heater gives you a
+plausible screen and no loop. The model responds.
+
+**Shape.** `src/boilerSim.cpp`. 1000 W element into 7400 J/K (about 1.5 kg of
+water plus a brass shell), losing 2 W/K to the room - nine minutes from cold
+to 95 C, which is what the real machine takes. Deliberately NOT accelerated:
+scaling time changes what Tn and Tv mean, so gains tuned against a sped-up
+plant would not transfer. `boilersim <C>` jumps the model instead, to skip the
+boring part without distorting the dynamics.
+
+**The rise is ADDED to the real probe reading, not substituted**, and that is
+the part worth keeping. A synthetic value would throw away the MAX31865's
+fault detection, the staleness check and the plausibility window - the paths
+that most need to keep working. Adding a delta keeps all of them: idle, the
+firmware reads the truth and pulling a probe lead still faults.
+
+It is added BEFORE those checks, so a simulated runaway is indistinguishable
+from a real one. **Verified:** `boilersim 145` latched a real `over
+temperature` fault and dropped the heater.
+
+**Driven by `heater::onTickCount()`**, the time-proportioning ISR's own record
+of how many 10 ms ticks it actually energised for. Differencing it each pass
+gives the delivered energy exactly, with no aliasing against the loop rate,
+and it measures what the ISR DID rather than what the PID asked for - so a
+gate that silently blocks heating shows up as a boiler that will not warm.
+
+The first attempt read `outputs::isOn(Channel::Heater)` and always saw "off":
+**the heater does not go through the outputs module**, it is driven straight
+at the pin by the ISR. The gates said PERMITTED with 9321 of 10181 ticks
+energised while the model sat at ambient.
+
+**Separate build, not a runtime switch.** `[env:teensy41_sim]`, `-D DESK_SIM`.
+The machine firmware does not contain this code at all - there is no mode to
+leave on by accident, which is the only serious objection to simulating an
+input the safety layer depends on. **Verified:** `strings` on
+`.pio/build/teensy41/firmware.elf` finds none of it; the sim build has it.
+
+It reuses the existing `heater::setBenchOverride(true)` for the dry-fire
+interlock rather than adding a second path through that gate - one way through
+is enough, and that one already announces itself.
+
+```bash
+pio run -e teensy41_sim -t upload    # desk simulation
+pio run -e teensy41 -t upload        # the real firmware
+```
+
+**Measured on first run:** 65.6 s of heating gave +8.79 C against 8.78 C
+predicted. PID held 100% while far from setpoint.
+
+**Not simulated, and why.** Weight - the load cells are real and a printed
+platform was being made the same afternoon, so simulating it would be wasted.
+Flow and pressure are the two that cannot be connected at the desk (the flow
+sensor is blocked on hose fittings, the I2C pressure sensor is not wired) and
+are the obvious next additions: both derive from pump duty and valve state,
+and together they would make the whole shot sequence exercisable end to end.
+
+**Wanted, not built: a boiler temperature GRAPH above the readout on the
+status page.** John asked for it 2026-11-08, explicitly not urgent. See 9.7
+for the measured redraw cost and why a chart needs a sprite. The model makes
+this worth having - a graph of a room-temperature probe shows nothing, a graph
+of a PID settling shows everything.
