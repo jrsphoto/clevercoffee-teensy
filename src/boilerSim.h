@@ -71,11 +71,27 @@ namespace boilersim {
     /**
      * Loss to the room, watts per kelvin above ambient.
      *
-     * A machine idling at 95 C in a 20 C room draws roughly 150 W to hold
-     * temperature, so 150/75 = 2 W/K. This is what makes the PID have
-     * something to work against rather than integrating forever.
+     * THE BOILER IS TO BE INSULATED with 10 mm melamine foam, so this is not
+     * the bare figure.
+     *
+     * Melamine foam conducts about 0.035 W/m/K, so 10 mm gives 3.5 W/m2/K;
+     * in series with the outside air film (~10) that is about 2.6, and on
+     * roughly 0.13 m2 of shell about 0.35 W/K. The shell is then NOT the
+     * dominant path - what stays uncovered carries the heat: the element and
+     * probe bosses, the fittings, and above all the group head, eight pounds
+     * of copper bolted to the boiler and hanging in free air. Those bridges
+     * plausibly add 0.6 to 1.0 W/K.
+     *
+     * So 1.2 W/K insulated, against about 2.0 bare - roughly a third less
+     * idle power, which is the usual result of insulating an espresso boiler
+     * and far less than the foam alone suggests.
+     *
+     * ESTIMATED, AND MEASURABLE LATER. Holding power at setpoint divided by
+     * the temperature difference IS this number, in one measurement on the
+     * finished machine. Correct it from that rather than from the arithmetic
+     * above.
      */
-    constexpr double kLossWattsPerK = 2.0;
+    constexpr double kLossWattsPerK = 1.2;
 
     /** @brief Prepare the model. Call once at boot. */
     void init();

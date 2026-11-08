@@ -562,3 +562,48 @@ status page.** John asked for it 2026-11-08, explicitly not urgent. See 9.7
 for the measured redraw cost and why a chart needs a sprite. The model makes
 this worth having - a graph of a room-temperature probe shows nothing, a graph
 of a PID settling shows everything.
+
+### 9.12 The integrator clamp could not hold setpoint (2026-11-08)
+
+Found by the first logged heat-up against the thermal model, which is what it
+was built for.
+
+**Symptom.** From cold, the boiler climbed smoothly, never overshot, and
+stopped at 93.4 C against a 95.0 setpoint. Duty settled at 14% and the machine
+sat there. No fault, no overshoot, nothing in the log - just permanently 1.6 C
+low.
+
+**Cause.** `SetIntegratorLimits(0, 55)`, from upstream's `AGGIMAX`. The PID's
+output range is 0-1000 (per mille of the 1000 ms window), so the integral term
+could contribute at most 5.5% duty.
+
+At setpoint the error is zero, so the proportional term contributes NOTHING
+and the integrator alone must supply the entire holding power. This boiler
+needs about 144 per mille bare, or 86 insulated, to sit at 95 C in a 20 C
+room. Clamped at 55 it cannot, so the loop settles wherever P makes up the
+difference.
+
+Predicted from `Kp*err + 55 == 2*(T - ambient)`: **93.61 C**. Measured:
+**93.4 to 93.5**. That is the confirmation, not a hunch.
+
+**Fix.** `kDefaultIntegratorMax` and `AGGIMAX` to **200**. Raised rather than
+removed - the clamp still stops the integrator saturating during the
+eight-minute climb from cold, which would overshoot badly. 200 covers the
+holding duty with margin for a cold room.
+
+**Result, same test:** reached 95.0 at 700 s, peaked 95.8 (+0.8), then unwound
+through 95.5 to 95.0 with duty bottoming at 4% and rising again. Droop gone,
+overshoot small and self-correcting.
+
+**This would have shipped.** On the real machine it is a boiler that sits a
+degree and a half low for ever, with nothing to point at: no fault, no
+overshoot, no log entry. The probe, the offset, the element and the insulation
+would all have been suspected first.
+
+**Boiler insulation folded into the model at the same time.** 10 mm melamine
+foam, so the loss coefficient went 2.0 -> 1.2 W/K. Derivation is in
+`boilerSim.h`; the short version is that the foam itself only accounts for
+about 0.35 W/K and the uninsulated bosses, fittings and the group head carry
+the rest. Both model constants are estimates and both are directly measurable
+on the finished machine - heat-up rate gives the heat capacity, holding power
+over temperature difference gives the loss.

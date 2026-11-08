@@ -24,7 +24,7 @@
 #define AGGKP                    62.0              // PID Kp (regular phase)
 #define AGGTN                    52.0              // PID Tn (regular phase)
 #define AGGTV                    11.5              // PID Tv (regular phase)
-#define AGGIMAX                  55.0              // PID Integrator Max (regular phase)
+#define AGGIMAX                  200.0             // PID Integrator Max (regular phase). 55 could not supply the holding duty - see heaterHandler.h
 #define STEAMKP                  150.0             // PID kp (steam phase)
 #define AGGBKP                   50.0              // PID Kp (brew detection phase)
 #define AGGBTN                   0.0               // PID Tn (brew detection phase)

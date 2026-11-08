@@ -91,7 +91,28 @@ namespace heater {
     constexpr double kDefaultKp = 62.0;
     constexpr double kDefaultTn = 52.0;
     constexpr double kDefaultTv = 11.5;
-    constexpr double kDefaultIntegratorMax = 55.0;
+    /**
+     * Anti-windup clamp on the integral term, in the PID's 0-1000 output
+     * units (per mille of the 1000 ms window).
+     *
+     * 200, NOT upstream's 55, and the difference is a bug rather than taste.
+     *
+     * At setpoint the error is zero, so the proportional term contributes
+     * nothing and the INTEGRATOR ALONE must supply the whole holding power.
+     * This boiler needs about 86 per mille insulated, or 144 bare, to sit at
+     * 95 C in a 20 C room. Clamped at 55 it cannot, so the loop settles
+     * wherever P makes up the shortfall - a permanent droop with no overshoot
+     * to hint at the cause.
+     *
+     * Measured on the thermal model with 55: settled at 93.4 C and stopped,
+     * against 93.61 predicted from Kp*err + 55 == loss. See brief 9.12.
+     *
+     * The clamp still earns its keep - it stops the integrator saturating
+     * during the eight-minute climb from cold, which would overshoot badly -
+     * so this is raised to cover the holding duty with margin for a cold
+     * room, not removed.
+     */
+    constexpr double kDefaultIntegratorMax = 200.0;
     constexpr double kDefaultEmaFactor = 0.6;
 
     /**

@@ -32,10 +32,17 @@ namespace display {
 
     } // namespace
 
+    namespace {
+        /** Defined further down, with the rest of the UI. */
+        void graphInit();
+    }
+
     bool init() {
         if (!lcd.init()) {
             return false;
         }
+
+        graphInit();
 
         lcd.setRotation(currentRotation);
         lcd.setBrightness(200);
@@ -255,6 +262,204 @@ namespace display {
         // the hierarchy visible.
         const lgfx::IFont* const kFontTile = &fonts::DejaVu12;
         const lgfx::IFont* const kFontTileSub = &fonts::DejaVu9;
+
+        // --- Boiler temperature graph -------------------------------------
+        //
+        // A strip chart above the readout, which is only worth having now the
+        // thermal model exists: a graph of a room-temperature probe shows
+        // nothing, a graph of a PID settling shows everything.
+        //
+        // IN A SPRITE, for the reason measured in brief 9.7: a full repaint of
+        // this panel costs 139 ms, so a chart that triggered one would run at
+        // 7 fps and visibly crawl. The sprite is 464x84 RGB565 = 78 KB, which
+        // goes in PSRAM - the board has 8 MB and only ~320 KB of internal
+        // DRAM. One pushSprite is a single bus transaction instead of
+        // hundreds of primitives.
+        //
+        // One sample per second, one pixel column each, so the window is 464
+        // seconds - about seven and a half minutes, which covers a heat-up
+        // from cold with room to spare.
+
+        // SAME WIDTH AS THE BOILER READING BENEATH IT - x20 w230, matching
+        // drawField(20, 140, 230, ...). Full width looked like a banner
+        // unrelated to the number under it, and it pushed TARGET and GROUP
+        // down into a cramped column for no gain. This way the chart belongs
+        // to the boiler reading and the right-hand column stays where it was.
+        constexpr int kGraphX = 20;
+        constexpr int kGraphY = 34;
+        constexpr int kGraphW = 230;
+        constexpr int kGraphH = 84;
+
+        LGFX_Sprite graphSprite(&lcd);
+        bool graphReady = false;
+
+        float graphSamples[kGraphW];
+        int graphCount = 0;     ///< how many of the buffer are filled
+        int graphHead = 0;      ///< next write position, wrapping
+        uint32_t graphLastMs = 0;
+
+        // Two seconds per pixel: 230 columns is then 7.7 minutes, which
+        // covers a heat-up from cold. At one second it would be 3.8 and the
+        // start of the curve would already have scrolled away.
+        constexpr uint32_t kGraphIntervalMs = 2000;
+
+        /** NaN marks a sample taken while the reading was not trustworthy. */
+        bool graphValid(const float v) {
+            return !isnan(v);
+        }
+
+        /** Oldest-first index into the ring. */
+        float graphAt(const int i) {
+            const int start = (graphCount < kGraphW) ? 0 : graphHead;
+
+            return graphSamples[(start + i) % kGraphW];
+        }
+
+        void graphInit() {
+            for (int i = 0; i < kGraphW; i++) {
+                graphSamples[i] = NAN;
+            }
+
+            graphCount = 0;
+            graphHead = 0;
+
+            // PSRAM, deliberately - see the note above. If it cannot be had,
+            // the chart is simply not drawn rather than the page failing.
+            graphSprite.setPsram(true);
+            graphSprite.setColorDepth(16);
+            graphReady = graphSprite.createSprite(kGraphW, kGraphH) != nullptr;
+
+            if (!graphReady) {
+                Serial.println("display: no memory for the chart sprite - graph disabled");
+            }
+        }
+
+        /**
+         * @brief Repaint the chart into the sprite and push it.
+         *
+         * Full redraw of the sprite rather than a scroll-and-append, because
+         * the Y axis auto-scales: a new extreme rescales every earlier point,
+         * and a scrolled chart would show old samples at the old scale.
+         */
+        void graphRedraw(const float setpoint) {
+            if (!graphReady) {
+                return;
+            }
+
+            graphSprite.fillSprite(kBg);
+            graphSprite.drawRect(0, 0, kGraphW, kGraphH, kRule);
+
+            // Scale to the data, but always keep the setpoint in view - the
+            // distance to it is the thing being read.
+            float lo = setpoint;
+            float hi = setpoint;
+            bool any = false;
+
+            for (int i = 0; i < graphCount; i++) {
+                const float v = graphAt(i);
+
+                if (!graphValid(v)) {
+                    continue;
+                }
+
+                if (!any) {
+                    any = true;
+
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+                else {
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+            }
+
+            // A floor on the span, so a steady trace is a flat line rather
+            // than a magnified picture of sensor noise.
+            if ((hi - lo) < 10.0f) {
+                const float mid = (hi + lo) / 2.0f;
+                lo = mid - 5.0f;
+                hi = mid + 5.0f;
+            }
+
+            const float pad = (hi - lo) * 0.1f;
+            lo -= pad;
+            hi += pad;
+
+            const auto yFor = [&](const float v) {
+                const float t = (v - lo) / (hi - lo);
+
+                return static_cast<int>((kGraphH - 1) - t * (kGraphH - 1));
+            };
+
+            // Setpoint line, dashed so it never reads as data.
+            const int spY = yFor(setpoint);
+
+            for (int x = 2; x < kGraphW - 2; x += 6) {
+                graphSprite.drawFastHLine(x, spY, 3, kDim);
+            }
+
+            // The trace. Drawn as segments so a gap - a sample taken while
+            // the sensor was unhealthy - shows as a gap rather than a
+            // straight line through it, which would be an invented reading.
+            const int first = kGraphW - graphCount;
+            int prevX = -1;
+            int prevY = 0;
+
+            for (int i = 0; i < graphCount; i++) {
+                const float v = graphAt(i);
+                const int x = first + i;
+
+                if (!graphValid(v)) {
+                    prevX = -1;
+
+                    continue;
+                }
+
+                const int y = yFor(v);
+
+                if (prevX >= 0) {
+                    graphSprite.drawLine(prevX, prevY, x, y, kAccent);
+                }
+                else {
+                    graphSprite.drawPixel(x, y, kAccent);
+                }
+
+                prevX = x;
+                prevY = y;
+            }
+
+            // Range labels, so the trace has a scale without an axis eating
+            // width. Top-left and bottom-left, inside the frame.
+            graphSprite.setFont(kFontTileSub);
+            graphSprite.setTextColor(kLabel, kBg);
+            graphSprite.setCursor(4, 3);
+            graphSprite.printf("%.0f", hi);
+            graphSprite.setCursor(4, kGraphH - 13);
+            graphSprite.printf("%.0f", lo);
+
+            graphSprite.pushSprite(kGraphX, kGraphY);
+        }
+
+        /** @brief Take a sample if a second has passed. Returns true if it did. */
+        bool graphSample(const float boilerC, const bool ok) {
+            const uint32_t now = millis();
+
+            if ((now - graphLastMs) < kGraphIntervalMs) {
+                return false;
+            }
+
+            graphLastMs = now;
+
+            graphSamples[graphHead] = ok ? boilerC : NAN;
+            graphHead = (graphHead + 1) % kGraphW;
+
+            if (graphCount < kGraphW) {
+                graphCount++;
+            }
+
+            return true;
+        }
 
         void drawCaption(const int x, const int y, const char* text) {
             lcd.setFont(kFontCaption);
@@ -522,6 +727,36 @@ namespace display {
             }
         }
 
+        /**
+         * The live readout, re-laid-out to carry the chart (2026-11-08).
+         *
+         * EVERY OCCUPIED RANGE IS LISTED, because this page has been got
+         * wrong four times by computing against the wrong element. Nothing
+         * may be added without extending this list.
+         *
+         *   0..30     header
+         *   34..118   chart sprite, x 20..250 - the boiler column only
+         *   40..54                            TARGET caption x270
+         *   60..86                            TARGET value x270 w100
+         *   96..110                           GROUP caption x270
+         *   116..142                          GROUP value x270 w100
+         *   56..148   STOP button x380 w94 (drawn only while running)
+         *   122..136  BOILER caption x20
+         *   140..188  boiler value x20 w230
+         *   162       the "C" unit, inside the boiler digits at x152
+         *   192..206  HEATER caption x20, duty % at x160
+         *   208..214  heater duty bar, x20 w230
+         *   220       rule
+         *   224..238  WEIGHT / FLOW / PUMP captions, x24 / x184 / x344
+         *   242..268  their values
+         *   272..288  their sub-captions
+         *   222..292  column rules at x160 and x320
+         *   294       rule, then the footer strip to 320
+         *
+         * WHAT WENT TO MAKE ROOM: the full-width heater bar that ran
+         * 150..190. It is now a 6 px bar under the boiler reading. The chart
+         * needed 84 px and the page only had 26 going spare.
+         */
         void drawMainChrome() {
             lcd.fillScreen(kBg);
             drawHeader("ARGENTA SME");
@@ -529,26 +764,27 @@ namespace display {
             // Captions sit roughly 20 px above their value. The caption font
             // is about 14 px tall, so anything less than that and the two
             // collide - which is exactly what 38/52 did.
-            drawCaption(20, 40, "BOILER");
+            drawCaption(20, 122, "BOILER");
             drawCaption(270, 40, "TARGET");
             drawCaption(270, 96, "GROUP");
 
-            // Heat bar below the right-hand column rather than underneath it.
-            // An earlier version put the bar at y=132 with the group value at
-            // y=118, so the value was drawn on top of the bar.
-            lcd.drawRect(20, 150, 440, 16, kRule);
-            drawCaption(20, 172, "HEATER");
+            drawCaption(20, 192, "HEATER");
+            lcd.drawRect(20, 208, 230, 6, kRule);
 
-            lcd.drawFastHLine(0, 192, kW, kRule);
+            lcd.drawFastHLine(0, 220, kW, kRule);
 
-            drawCaption(24, 200, "WEIGHT");
-            drawCaption(184, 200, "FLOW");
-            drawCaption(344, 200, "PUMP");
+            drawCaption(24, 224, "WEIGHT");
+            drawCaption(184, 224, "FLOW");
+            drawCaption(344, 224, "PUMP");
 
-            lcd.drawFastVLine(160, 196, 70, kRule);
-            lcd.drawFastVLine(320, 196, 70, kRule);
+            lcd.drawFastVLine(160, 222, 70, kRule);
+            lcd.drawFastVLine(320, 222, 70, kRule);
 
             lcd.drawFastHLine(0, kH - kFooterH, kW, kRule);
+
+            // The chart repaints itself on the next sample; draw its frame now
+            // so the space does not sit black until then.
+            lcd.drawRect(kGraphX, kGraphY, kGraphW, kGraphH, kRule);
         }
 
         const char* statusText(const machinelink::State& st, const bool live, uint16_t* colour) {
@@ -974,7 +1210,7 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--.-");
             }
 
-            drawField(20, 60, 230, kFontBig, (live && st.boilerOk) ? kAccent : kAlarm, buf, lastBoiler, sizeof(lastBoiler));
+            drawField(20, 140, 230, kFontBig, (live && st.boilerOk) ? kAccent : kAlarm, buf, lastBoiler, sizeof(lastBoiler));
 
             // Unit immediately after the digits. It was at a fixed x=236,
             // which left it marooned a hundred pixels clear of a four-glyph
@@ -982,7 +1218,7 @@ namespace display {
             lcd.setFont(kFontValue);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.setCursor(152, 82);
+            lcd.setCursor(152, 162);
             lcd.print("C");
 
             // 100 wide, not 170. These used to clear all the way to x=470,
@@ -1004,22 +1240,22 @@ namespace display {
             // Heater bar. Width is the duty, colour says whether it is allowed
             // to be doing anything.
             const int duty = live ? static_cast<int>(st.heaterDuty) : 0;
-            const int barW = (duty * 436) / 100;
+            const int barW = (duty * 226) / 100;
 
             if (barW != lastHeatBar) {
                 lastHeatBar = barW;
 
-                lcd.fillRect(22, 152, 436, 12, kBg);
+                lcd.fillRect(22, 210, 226, 2, kBg);
 
                 if (barW > 0) {
-                    lcd.fillRect(22, 152, barW, 12, st.heaterEnabled ? kHeat : kDim);
+                    lcd.fillRect(22, 210, barW, 2, st.heaterEnabled ? kHeat : kDim);
                 }
 
-                lcd.fillRect(100, 170, 90, 18, kBg);
+                lcd.fillRect(160, 192, 86, 16, kBg);
                 lcd.setFont(kFontCaption);
                 lcd.setTextSize(1);
                 lcd.setTextColor(st.heaterEnabled ? kHeat : kDim, kBg);
-                lcd.setCursor(100, 170);
+                lcd.setCursor(160, 192);
                 lcd.printf("%d%%", duty);
             }
 
@@ -1031,27 +1267,34 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--");
             }
 
-            drawField(24, 220, 134, kFontValue, (live && st.weightOk) ? (st.weightCalibrated ? kValue : kHeat) : kDim,
+            drawField(24, 242, 134, kFontValue, (live && st.weightOk) ? (st.weightCalibrated ? kValue : kHeat) : kDim,
                       buf, lastWeight, sizeof(lastWeight));
 
             lcd.setFont(kFontCaption);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.fillRect(24, 252, 130, 16, kBg);
-            lcd.setCursor(24, 252);
+            lcd.fillRect(24, 272, 130, 16, kBg);
+            lcd.setCursor(24, 272);
             lcd.print(st.weightCalibrated ? "grams" : "raw counts");
 
             snprintf(buf, sizeof(buf), "%.1f", live ? st.flowMlPerSec : 0.0f);
-            drawField(184, 220, 134, kFontValue, live ? kValue : kDim, buf, lastFlow, sizeof(lastFlow));
+            drawField(184, 242, 134, kFontValue, live ? kValue : kDim, buf, lastFlow, sizeof(lastFlow));
             lcd.setFont(kFontCaption);
             lcd.setTextSize(1);
             lcd.setTextColor(kLabel, kBg);
-            lcd.fillRect(184, 252, 130, 16, kBg);
-            lcd.setCursor(184, 252);
+            lcd.fillRect(184, 272, 130, 16, kBg);
+            lcd.setCursor(184, 272);
             lcd.printf("ml/s   %.0f ml", live ? st.volumeMl : 0.0f);
 
             snprintf(buf, sizeof(buf), "%.0f%%", live ? st.pumpPercent : 0.0f);
-            drawField(344, 220, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
+            drawField(344, 242, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
+
+            // Chart: one sample a second, repainted only when there is a new
+            // one. At the redraw rate this would be 78 KB of sprite pushed
+            // several times a second for nothing.
+            if (graphSample(st.boilerC, live && st.boilerOk)) {
+                graphRedraw(live ? st.setpointC : 95.0f);
+            }
 
             // STOP, shown only while something is actually running.
             //
