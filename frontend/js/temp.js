@@ -407,7 +407,14 @@ if (!!window.EventSource) {
             addPlotData(myObj)
 
             // update current temp value on index page
-            document.getElementById("varTEMP").innerText = myObj["currentTemp"].toFixed(1)
+            //
+            // null means the controller has no reading - a dead or stale RTD,
+            // or the link to it being down. Shown as "--" rather than a
+            // number, because a plausible wrong temperature is worse than an
+            // obvious gap. Guarding here also keeps this handler alive: a bare
+            // .toFixed() on null throws and kills every later update.
+            const t = myObj["currentTemp"]
+            document.getElementById("varTEMP").innerText = (t === null || t === undefined) ? "--" : t.toFixed(1)
         },
         false
     )

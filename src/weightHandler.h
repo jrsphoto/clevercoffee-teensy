@@ -137,6 +137,35 @@ namespace weight {
     bool dualCell();
 
     /**
+     * @brief Is a scale fitted at all? Applies immediately.
+     *
+     * Off tears the hardware down and stops reporting a failure, because a
+     * machine with no scale is a supported configuration: brewing by time and
+     * by volume still work. Brew-by-weight is what stops being available.
+     */
+    void setEnabled(bool on);
+    bool enabled();
+
+    /**
+     * @brief Cell 2's calibration factor, independently of cell 1's.
+     *
+     * setCalFactor() writes BOTH, which is right for a single cell and wrong
+     * for this machine's mirrored pair - they differ in sign and slightly in
+     * magnitude, so each needs its own number.
+     */
+    void setCalFactor2(float factor);
+    float calFactor2();
+
+    /**
+     * @brief Mass of the calibration reference, in grams.
+     *
+     * Stored rather than passed in, so the web UI's calibration flow and the
+     * console agree on what is sitting on the plate.
+     */
+    void setKnownWeight(float grams);
+    float knownWeight();
+
+    /**
      * @brief Create the scale and begin stabilising. Returns immediately.
      *
      * @return true if the hardware object was created. Whether an HX711 is

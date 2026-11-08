@@ -316,3 +316,157 @@ change, not a redesign.
 packet. The protocol is deliberately ASCII so it can be read in a terminal and
 typed by hand (`linkProtocol.h`, design rule 2). At these rates the bytes are
 free and debuggability is not.
+
+### 9.8 Pressure, flow and pump profiling: WANTED, NOT WRITTEN (2026-11-08)
+
+Recorded here at John's request so it does not get lost. None of this exists
+yet, and the panel UI must not imply that it does - tiles are labelled by what
+a shot STOPS on, never by a bar figure there is no sensor behind.
+
+**What exists today.** The pump runs at a fixed speed per stage: one percentage
+for pre-infusion, another for extraction, set per profile. Flow is measured
+(DM60) and volume is a stop condition. Weight is measured (dual HX711) and is a
+stop condition. Time is a stop condition and is the backstop that cannot be
+disabled. All of that is open loop on the pump: nothing adjusts speed during
+the shot in response to a measurement.
+
+**1. Brew pressure sensing.** The sensor is in hand, not installed. Needs an
+analogue input, a scaling and plausibility check in the same shape as the RTDs
+(stale reading = no reading), a field in telemetry, a readout on the panel's
+bottom bar and in `/api/status`, and an over-pressure fault - `FaultCode::
+OverPressure` is already declared in `safetyHandler.h` with nothing raising it.
+This one is a prerequisite for the two below.
+
+**2. Pressure profiling.** Holding a target pressure, and ramp or decline
+curves through the shot, by modulating pump speed. Needs 1 first. The classic
+"9 bar then decline" belongs here.
+
+**3. Flow profiling.** Holding a target flow rate rather than a fixed pump
+percentage. The DM60 already measures it, so this is the control loop, not the
+sensing. Note the pump has NO speed encoder and does not need one: the loop
+closes on measured flow and pressure, not on RPM.
+
+**4. Variable-speed pump control generally.** John wants this. The MG304 on its
+brushed KAG motor is driven by PWM into his own driver board, so the hardware
+supports it; what is missing is any profile structure richer than "one
+percentage per stage". A profile would need a sequence of stages with a target
+(pressure, flow, or plain percentage) and a duration or transition condition.
+
+**Sequencing.** 1 before 2. 3 can be done before 1 since flow is already
+measured, but doing 4 first - the staged-profile structure - would mean 2 and 3
+become targets a stage can ask for rather than two separate special cases.
+Worth designing 4's data structure before writing either loop.
+
+### 9.9 The panel home screen is a 3x3 tile grid (2026-11-08)
+
+Adapted from the DK Espresso machine shown at MICE 2026, which John brought as
+a reference. That is a three-group machine and most of its grid repeats the
+same volumetric triggers per group; on a single-group machine those tiles are
+free for distinct recipes and utilities instead.
+
+**Two of the reference's nine tiles cannot exist here.** Hot water and steam
+are manual valves on this machine - the board has three outputs in total
+(heater, group valve, boiler fill) and no switch input for either. Upstream's
+steam mode is also a second PID setpoint, which a heat-exchanger boiler held at
+one temperature does not have. See 9.2. A tile that cannot do anything is worse
+than a missing tile, so they are not on the grid.
+
+The grid, every tile backed by something that works:
+
+| | | |
+|---|---|---|
+| RISTRETTO (stop by weight) | DOUBLE (stop by weight) | LUNGO (stop by volume) |
+| MANUAL (pump until tapped, capped) | FLUSH (purge) | BACKFLUSH (arm, then run) |
+| SCALE (tare) | STATUS (temps, link, faults, clear) | SETTINGS (the existing menu) |
+
+**BACKFLUSH** gets a tile because it is a real routine that wants a deliberate
+trigger rather than a console command.
+
+**STATUS OPENS THE EXISTING READOUT**, John's suggestion and a better idea than
+what was being built. The live page - boiler, target, group, heat bar, weight,
+flow, pump, status strip - was the top page before the grid existed, and it
+already IS the status panel. A separate Status page would have shown the same
+numbers twice. So the readout is kept exactly as it was and simply moved down
+the tree: `Page::Home` is now the root, the readout is reached from the tile,
+and a shot started from a drink tile switches to it automatically because that
+is what you want to be looking at for the next thirty seconds.
+
+(An earlier note here claimed a latched fault needed a serial cable to clear.
+That was wrong - CLEAR FAULT has been on Settings > Brew all along.)
+
+**Navigation.** The grid is the root. The readout returns to it on a tap
+anywhere except the gear; it has no BACK button because every pixel of that
+page is already spoken for - see `drawMainChrome()`. Navigating away does not
+affect a running shot: the Teensy owns the shot, and the grid's footer strip
+keeps showing boiler temperature and machine state.
+
+**Every tile is a REQUEST.** The head cannot drive an output. A tap sends a
+command the Teensy runs through the same gates as the brew switch and the
+console - `shot=<n>`, `shotstop`, `flush=0|1`, `backflush=0|1`, `tare=1` - and
+it is free to refuse. This is "a touch is a request; the Teensy decides"
+working as written, not a new privilege for the display.
+
+**Icons.** The three drink tiles use `assets/coffee-drink.png` reduced to
+38x38 and compiled in as `src-esp32s3/iconCup.h` (2888 bytes). RGB565 has no
+alpha, so transparency is a magenta colour key the artwork contains none of.
+The other six are drawn with primitives - simple shapes, no flash cost, and
+they stay crisp if the tile size changes. The reference machine mixes a
+pictorial cup with line symbols the same way. Regenerate the cup with:
+
+```bash
+python3 -c "
+from PIL import Image
+im = Image.open('assets/coffee-drink.png').convert('RGBA')
+im = im.crop(im.split()[3].getbbox())
+print(im.size)"
+```
+
+and the full script in this session's history; it trims the transparent
+margin, squares the image, resizes to 38x38 and emits the RGB565 array.
+
+**Three profiles now**, one per drink tile, and the encoder selects the same
+list by press count - two ways in, one set of recipes. Adding a fourth means
+adding a tile too, or the knob can reach a profile the screen cannot show.
+
+### 9.10 The home grid's actions, verified on hardware (2026-11-08)
+
+LA2016 at `conn=1.18` (scan it, the string has now changed four times) on
+`HEATER` CH0, `FILL` CH1, `GROUP` CH2, `PUMP_PWM` CH3, `BREW_SW` CH4, each
+capture triggered on `CH2=r` so the timing does not depend on catching a tap.
+Nothing plumbed; electrical sequences only.
+
+| Tile / control | Measured |
+|---|---|
+| FLUSH | `GROUP` high and stays high; `PUMP_PWM` 20.000 kHz ramping 20% at 0-100 ms, 47% at 100-250 ms, 98% in the last 100 ms |
+| STOP (readout page) | stopped a running flush; controller logged `last stop: panel stop` |
+| flush time cap | left to run, ended itself: `last stop: MAXIMUM TIME` |
+| BACKFLUSH | ran all five cycles, `last stop: completed`. Captured fills measured 5.0 s on, 10.0 s off, 5.0 s on against a configured 5 x (5 s @ 100% + 10 s) |
+| HEATER, FILL | flat low, zero edges, in every capture |
+
+So `shot=`, `flush=`, `backflush=` and `stop=` are all proven over the link,
+and the panel's STOP works.
+
+**The pump's 400%/s slew is visible and is not a fault.** A short flush
+averages well under its commanded percentage because a quarter of a second of
+it is the ramp - the first capture read 59.5% against a commanded 100% purely
+because the run was stopped mid-ramp. Measure duty at the END of a window, not
+across it.
+
+**sigrok-cli is unstable at these sample counts on this bench.** It segfaulted
+on one run and aborted on another, both times AFTER writing usable data, and a
+third warned "expecting 556331 samples, got 499885". Check the row count and
+analyse what landed rather than trusting the exit status.
+
+**Still to fix: BACKFLUSH must be armed and the tile cannot arm it.**
+`startBackflush()` refuses unless `backflushIsArmed`, which is correct - it
+drives the pump against a blind basket - but the tile has no way to set it and
+gives no feedback when refused, so a cold tap silently does nothing. It was
+armed from the console for this test. The tile should either show the armed
+state or arm on the first tap and run on the second.
+
+**Brew switch, settled.** `pin 24 raw=HIGH, internal pull-up (switch to GND),
+active LOW -> released`. The analyser reading HIGH and the firmware saying
+"released" were never in conflict. That is the BREADBOARD configuration; the
+schematic has R9 pulling BREW_SW down with the switch going to +3.3 V, so the
+fabricated board wants `brewpull x` and active HIGH. No PCB exists yet, so the
+current setting is right for today.

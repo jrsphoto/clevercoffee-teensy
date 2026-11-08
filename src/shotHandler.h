@@ -395,8 +395,16 @@ namespace shot {
      */
     constexpr uint32_t kDefaultMinIdleForFlushMs = 120000; // 2 minutes, UNMEASURED
 
-    /** How many shot profiles exist. Two is what the encoder can select. */
-    constexpr uint8_t kProfileCount = 2;
+    /**
+     * How many shot profiles exist.
+     *
+     * THREE since 2026-11-08, one per drink tile on the panel's home grid.
+     * The encoder still selects between them by press count, so the knob and
+     * the touchscreen drive THE SAME LIST - two ways in, one set of recipes.
+     * Adding a fourth means adding a tile as well, or the knob can reach a
+     * profile the screen cannot show.
+     */
+    constexpr uint8_t kProfileCount = 3;
 
     /**
      * @brief A named set of shot settings.

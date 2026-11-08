@@ -197,3 +197,32 @@ html[data-theme="dark"] .table {
 #theme-toggle:hover {
     border-color: rgba(255, 255, 255, 0.6);
 }
+
+/* ---------------------------------------------------------------------------
+ * Hide the page until Vue has mounted it.
+ *
+ * Everything inside #content is a Vue template. Vue is loaded from a CDN (or
+ * from flash as a fallback) by load-libs.js, in sequence, and app.js arrives
+ * last - measured at about 935 ms after navigation on this board, with the
+ * markup paintable from about 470 ms. For that half second the browser was
+ * showing the RAW template: every tab's content at once, v-if and v-show not
+ * yet applied, {{ }} placeholders visible. Clicking Settings, Hardware, System
+ * or About therefore looked like it went to some other page first.
+ *
+ * visibility rather than display, deliberately: the charts on the home page
+ * size themselves from their container's offsetWidth, and a display:none
+ * parent measures zero. Hidden-but-laid-out keeps that correct.
+ * ------------------------------------------------------------------------- */
+[v-cloak] {
+    visibility: hidden;
+}
+
+/* Shown in the cloaked gap, removed when the app mounts. */
+#cc-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 3rem 1rem;
+    color: #6c757d;
+}

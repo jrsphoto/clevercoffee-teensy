@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <math.h>
 #include <stdint.h>
 
 namespace machinelink {
@@ -41,6 +42,22 @@ namespace machinelink {
         bool weightCalibrated = false;
         /** Pump speed actually applied, 0-100%. */
         float pumpPercent = 0.0f;
+
+        /**
+         * The scale's calibration factors, as the CONTROLLER holds them.
+         *
+         * Reported rather than configured, because they are measured against a
+         * real mass on that side. The head displays these and may send a new
+         * one when a person types it, but it keeps NO master copy and never
+         * pushes a default - doing that once overwrote a measured calibration
+         * with the 1.0 "uncalibrated" value. See headConfig's
+         * controller-owned list.
+         *
+         * NaN until the first telemetry frame, so "no reading" is
+         * distinguishable from a real 0.
+         */
+        float calFactor1 = NAN;
+        float calFactor2 = NAN;
 
         /** Boiler setpoint in Celsius, and the duty the PID is asking for. */
         float setpointC = 0.0f;
@@ -93,6 +110,15 @@ namespace machinelink {
      */
     uint32_t helloCount();
 
+    /**
+     * @brief Firmware string the controller announced in its Hello.
+     *
+     * "-" if none has been seen - which happens when the Teensy booted before
+     * this board started listening, not only when the link is broken. Reported
+     * as unknown rather than guessed; see the About page.
+     */
+    const char* controllerFirmware();
+
     /** @brief Ask the Teensy to do something. It may refuse. */
     void sendCommand(const char* body);
 
@@ -113,6 +139,25 @@ namespace machinelink {
 
     /** @brief Register the handler above. One handler; last wins. */
     void setConfigAckHandler(ConfigAckHandler handler);
+
+    /**
+     * @brief Called when the Teensy acknowledges an ordinary command.
+     *
+     * Most command acks need no handler: the next telemetry frame says what
+     * actually happened to the machine, which is a better answer than the
+     * controller's own say-so. This exists for the ones that ASK A QUESTION
+     * rather than change something - the I2C scan, whose whole result is
+     * carried in the ack's reason text, because the Teensy owns that bus and
+     * this board cannot look at it.
+     *
+     * @param cmd  which command is being answered
+     * @param ok   did the controller accept it
+     * @param why  reason text, or the answer in the case of a query
+     */
+    using CommandAckHandler = void (*)(const char* cmd, bool ok, const char* why);
+
+    /** @brief Register the handler above. One handler; last wins. */
+    void setCommandAckHandler(CommandAckHandler handler);
 
     /**
      * @brief Push one config value to the Teensy.

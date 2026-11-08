@@ -236,7 +236,14 @@ namespace display {
      * until they are standing at the machine.
      */
     enum class Page : uint8_t {
-        Main,         // the readout you watch while pulling a shot
+        Home,         // the 3x3 tile grid you start from
+        // The live readout. It was the top page before the grid existed, and
+        // it is kept EXACTLY as it was rather than being replaced: it is
+        // already the status panel the STATUS tile wanted, so building a
+        // second page showing the same boiler, group, weight, flow and pump
+        // would have been duplication. Reached from the STATUS tile, and
+        // shown automatically while a shot runs.
+        Main,
         Setup,        // a MENU of sub-pages, not a wall of controls
         SetupBrew,    // temperature, heater, tare, zero, clear
         SetupDisplay, // brightness and volume

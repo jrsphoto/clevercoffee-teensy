@@ -24,6 +24,31 @@ class Config {
          *
          * @return true if successful, false otherwise
          */
+        /**
+         * @brief Per-board default overrides. Register BEFORE begin().
+         *
+         * The table in initializeConfigDefs() is shared by both firmwares in
+         * this repository, and a few defaults are genuinely board-specific
+         * rather than wrong in one place. The encoder's I2C address is the
+         * example that forced this: the ESP32 board's unit is at 0x66, the
+         * Teensy's is at its factory 0x04, and both numbers are correct for
+         * their own hardware.
+         *
+         * It matters because THE HEAD WINS EVERY DISAGREEMENT - it holds the
+         * master config and pushes it at each handshake - so a head carrying
+         * the other board's default does not merely disagree with the
+         * controller, it silently overwrites it, and the encoder stops
+         * answering with nothing on screen to say why.
+         *
+         * Registering nothing, which is what the ESP32 build does, leaves
+         * behaviour exactly as it was.
+         */
+        static std::map<std::string, ConfigDef>& defaultOverrides() {
+            static std::map<std::string, ConfigDef> overrides;
+
+            return overrides;
+        }
+
         bool begin() {
             if (!LittleFS.begin(true)) {
                 LOG(ERROR, "Failed to initialize LittleFS");
@@ -453,9 +478,18 @@ class Config {
             _configDefs.emplace("cooling_flush.max_time", ConfigDef::forDouble(15.0, 1.0, 60.0));
             _configDefs.emplace("cooling_flush.pump_percent", ConfigDef::forDouble(100.0, 0.0, 100.0));
 
-            // Load shed. Upstream has no 15 A problem to solve. Defaults ON
-            // until the MG304's draw is measured.
-            _configDefs.emplace("pump.load_shed", ConfigDef::forBool(true));
+            // Load shed. Upstream has no 15 A problem to solve, and as of
+            // 2026-11-08 neither does this machine: a 1000 W heater (8.3 A)
+            // plus a DC pump stays well inside a 120 V outlet, so there is
+            // nothing for the interlock to protect. Default OFF; the mechanism
+            // is kept and tested in case the element specification changes.
+            _configDefs.emplace("pump.load_shed", ConfigDef::forBool(false));
+
+            // Board-specific overrides, applied LAST so they win. See
+            // defaultOverrides() for why this exists.
+            for (const auto& [path, def] : defaultOverrides()) {
+                _configDefs[path] = def;
+            }
         }
 
         /**

@@ -3,12 +3,23 @@
 
 <script type="module">
     (window.appCreated ? Promise.resolve() : new Promise(resolve => window.addEventListener('appCreated', resolve)))
-        .then(() => vueApp.mount('#content'));
+        .then(() => {
+            vueApp.mount('#content');
+
+            // The placeholder stood in for the cloaked template. Mounting
+            // removes v-cloak, so this has done its job - see dark-mode.css.
+            const loading = document.getElementById('cc-loading');
+            if (loading) loading.remove();
+        });
 </script>
 
 <div class="content-wrapper">
     <div class="container my-5">
-        <div id="content">
+        <div id="cc-loading">
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            Loading...
+        </div>
+        <div id="content" v-cloak>
             <!-- Reboot Required Banner -->
             <div v-if="showRebootBanner" class="alert alert-info alert-dismissible mb-4 shadow-sm" role="alert">
                 <div class="d-flex align-items-center">
@@ -303,8 +314,25 @@
             <div v-show="activeTopTab === 'about'">
                 <div class="card mb-5">
                     <div class="card-body">
-                        <h5 class="card-title mb-3">Version</h5>
-                        <p class="card-text text-muted">%VAR_SHOW_VERSION%</p>
+                        <h5 class="card-title mb-1">%VAR_SHOW_PRODUCT%</h5>
+                        <p class="card-subtitle text-muted mb-3">%VAR_SHOW_BOARDS%</p>
+
+                        <!-- Two boards, two firmwares, two version numbers. The head
+                             knows its own at compile time; the controller's is whatever
+                             it announced over the link, which is the only way this page
+                             can know what is actually running over there. -->
+                        <table class="table table-sm table-borderless mb-0">
+                            <tbody>
+                                <tr>
+                                    <td class="text-muted" style="width: 16rem;">Display head (ESP32-S3)</td>
+                                    <td><code>%VAR_SHOW_VERSION%</code></td>
+                                </tr>
+                                <tr>
+                                    <td class="text-muted">Controller (Teensy 4.1)</td>
+                                    <td><code>%VAR_SHOW_CONTROLLER_VERSION%</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
@@ -312,21 +340,27 @@
                     <div class="card-body">
                         <h5 class="card-title mb-3">Community & Resources</h5>
                         <div class="row">
-                            <div class="col-md-4 mb-2">
+                            <div class="col-md-6 mb-2">
+                                <a href="%VAR_SHOW_REPOSITORY%" class="btn btn-outline-dark w-100" target="_blank">
+                                    <span class="fa-brands fa-github me-2"></span>
+                                    This Firmware on GitHub
+                                </a>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <a href="https://github.com/rancilio-pid/clevercoffee" class="btn btn-outline-secondary w-100" target="_blank">
+                                    <span class="fa-brands fa-github me-2"></span>
+                                    Upstream CleverCoffee
+                                </a>
+                            </div>
+                            <div class="col-md-6 mb-2">
                                 <a href="https://clevercoffee.de/" class="btn btn-outline-primary w-100" target="_blank">
                                     <span class="fa-solid fa-globe me-2"></span>
                                     Project Website
                                 </a>
                             </div>
-                            <div class="col-md-4 mb-2">
-                                <a href="https://github.com/rancilio-pid/clevercoffee" class="btn btn-outline-dark w-100" target="_blank">
-                                    <span class="fa-solid fa-globe me-2"></span>
-                                    GitHub Repository
-                                </a>
-                            </div>
-                            <div class="col-md-4 mb-2">
+                            <div class="col-md-6 mb-2">
                                 <a href="https://discord.gg/Kq5RFznuU4" class="btn btn-outline-info w-100" target="_blank">
-                                    <span class="fa-solid fa-globe me-2"></span>
+                                    <span class="fa-brands fa-discord me-2"></span>
                                     Discord Community
                                 </a>
                             </div>

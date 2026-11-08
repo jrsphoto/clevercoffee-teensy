@@ -10,6 +10,7 @@
 #include <EEPROM.h>
 #include <string.h>
 
+#include "encoderHandler.h"
 #include "heaterHandler.h"
 #include "pumpHandler.h"
 #include "shotHandler.h"
@@ -255,6 +256,122 @@ namespace configStore {
             return true;
         }
 
+        bool applyScaleEnabled(const double v) {
+            weight::setEnabled(v != 0.0);
+
+            return true;
+        }
+
+        /**
+         * Upstream's scale types: 0 = HX711 with two load cell controllers,
+         * 1 = HX711 with one, 2 = Bluetooth.
+         *
+         * BLUETOOTH IS REFUSED, not silently ignored. NimBLE is ESP32-only, so
+         * a BT scale would have to live on the head and its weight cross the
+         * link - designed (brief 9.1) but not built. Accepting the setting
+         * would leave the machine with no scale at all while the UI claimed it
+         * had one, and brew-by-weight would stop working for a reason nothing
+         * on screen explained.
+         */
+        bool applyScaleType(const double v) {
+            const int type = static_cast<int>(v);
+
+            if (type == 0) {
+                weight::setDualCell(true);
+
+                return true;
+            }
+
+            if (type == 1) {
+                weight::setDualCell(false);
+
+                return true;
+            }
+
+            return false;
+        }
+
+        bool applyScaleCalibration(const double v) {
+            weight::setCalFactor(static_cast<float>(v));
+
+            return true;
+        }
+
+        bool applyScaleCalibration2(const double v) {
+            weight::setCalFactor2(static_cast<float>(v));
+
+            return true;
+        }
+
+        bool applyScaleKnownWeight(const double v) {
+            weight::setKnownWeight(static_cast<float>(v));
+
+            return true;
+        }
+
+        // --- Encoder -------------------------------------------------------
+        //
+        // Fitted, address and the RGB variant only take effect at the next
+        // boot: the driver is constructed in encoder::init() around a fixed
+        // address. The head marks those three as needing a restart. The status
+        // colours apply immediately.
+
+        bool applyEncoderEnabled(const double v) {
+            encoder::setFitted(v != 0.0);
+
+            return true;
+        }
+
+        bool applyEncoderAddress(const double v) {
+            const int address = static_cast<int>(v);
+
+            // 1 to 127 is the 7-bit range upstream allows. Refuse anything
+            // else rather than clamp: a clamped address is a wrong address
+            // that looks accepted, and the result is an encoder that stops
+            // answering with nothing on screen to say why.
+            if (address < 1 || address > 127) {
+                return false;
+            }
+
+            encoder::setAddress(static_cast<uint8_t>(address));
+
+            return true;
+        }
+
+        bool applyEncoderRgbLed(const double v) {
+            encoder::setHasRgbLed(v != 0.0);
+
+            return true;
+        }
+
+        bool applyEncoderColorEffects(const double v) {
+            encoder::setStatusColorsEnabled(v != 0.0);
+
+            return true;
+        }
+
+        // The five status colours. Stored as a plain 0x000000-0xFFFFFF int, as
+        // the head's kColor parameter type sends it.
+        bool applyEncoderColorIdle(const double v) {
+            return encoder::setStatusColor(0, static_cast<uint32_t>(v));
+        }
+
+        bool applyEncoderColorHeating(const double v) {
+            return encoder::setStatusColor(1, static_cast<uint32_t>(v));
+        }
+
+        bool applyEncoderColorReady(const double v) {
+            return encoder::setStatusColor(2, static_cast<uint32_t>(v));
+        }
+
+        bool applyEncoderColorActive(const double v) {
+            return encoder::setStatusColor(3, static_cast<uint32_t>(v));
+        }
+
+        bool applyEncoderColorError(const double v) {
+            return encoder::setStatusColor(4, static_cast<uint32_t>(v));
+        }
+
         /**
          * THE TABLE.
          *
@@ -306,7 +423,26 @@ namespace configStore {
 
             // Hardware. Upstream key names.
             {"hardware.switches.brew.type", 1.0, applyBrewSwitchType},
+
+            // The scale. Upstream key names and upstream's type numbering.
+            {"hardware.sensors.scale.enabled", 1.0, applyScaleEnabled},
+            {"hardware.sensors.scale.type", 1.0, applyScaleType},
             {"hardware.sensors.scale.samples", 1.0, applyScaleSamples},
+            {"hardware.sensors.scale.calibration", 1.0, applyScaleCalibration},
+            {"hardware.sensors.scale.calibration2", 1.0, applyScaleCalibration2},
+            {"hardware.sensors.scale.known_weight", 1.0, applyScaleKnownWeight},
+
+            // The DuPPa encoder. Upstream key names; this is the section the
+            // ESP32 build grew and the port had left as compiled constants.
+            {"hardware.encoder.enabled", 1.0, applyEncoderEnabled},
+            {"hardware.encoder.i2c_address", 1.0, applyEncoderAddress},
+            {"hardware.encoder.rgb_led", 1.0, applyEncoderRgbLed},
+            {"hardware.encoder.color_effects.enabled", 1.0, applyEncoderColorEffects},
+            {"hardware.encoder.color.idle", 1.0, applyEncoderColorIdle},
+            {"hardware.encoder.color.heating", 1.0, applyEncoderColorHeating},
+            {"hardware.encoder.color.ready", 1.0, applyEncoderColorReady},
+            {"hardware.encoder.color.active", 1.0, applyEncoderColorActive},
+            {"hardware.encoder.color.error", 1.0, applyEncoderColorError},
 
             // Load shed has no upstream equivalent - upstream has no 15 A
             // problem to solve.

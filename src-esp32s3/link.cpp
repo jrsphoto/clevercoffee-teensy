@@ -17,7 +17,18 @@ namespace machinelink {
     namespace {
         uint32_t hellos = 0;
 
+        /**
+         * Firmware string from the controller's Hello frame.
+         *
+         * "-" until one arrives, and it stays "-" if the Teensy booted before
+         * this board was listening. That is honest: this board genuinely does
+         * not know, and a guessed version number on an About page is the kind
+         * of small lie that wastes an afternoon later.
+         */
+        char controllerFw[32] = "-";
+
         ConfigAckHandler configAckHandler = nullptr;
+        CommandAckHandler commandAckHandler = nullptr;
 
     }
 
@@ -43,20 +54,29 @@ namespace machinelink {
                 return;
             }
 
-            // Only config acks carry a key. Everything else is informational.
-            constexpr char kPrefix[] = "cfg:";
-            constexpr size_t kPrefixLen = sizeof(kPrefix) - 1;
-
-            if (strncmp(cmd, kPrefix, kPrefixLen) != 0 || configAckHandler == nullptr) {
-                return;
-            }
-
             char okText[8] = "";
-            char why[32] = "";
+            char why[96] = "";
             parser.get("ok", okText, sizeof(okText));
             parser.get("why", why, sizeof(why));
 
-            configAckHandler(cmd + kPrefixLen, atoi(okText) != 0, why);
+            const bool ok = atoi(okText) != 0;
+
+            // Only config acks carry a key under the "cfg:" prefix. Everything
+            // else is a command ack.
+            constexpr char kPrefix[] = "cfg:";
+            constexpr size_t kPrefixLen = sizeof(kPrefix) - 1;
+
+            if (strncmp(cmd, kPrefix, kPrefixLen) == 0) {
+                if (configAckHandler != nullptr) {
+                    configAckHandler(cmd + kPrefixLen, ok, why);
+                }
+
+                return;
+            }
+
+            if (commandAckHandler != nullptr) {
+                commandAckHandler(cmd, ok, why);
+            }
         }
         State current;
 
@@ -83,6 +103,8 @@ namespace machinelink {
             current.pumpPercent = floatField("pmp", current.pumpPercent);
             current.setpointC = floatField("sp", current.setpointC);
             current.heaterDuty = floatField("hd", current.heaterDuty);
+            current.calFactor1 = floatField("c1", current.calFactor1);
+            current.calFactor2 = floatField("c2", current.calFactor2);
 
             char buf[24];
 
@@ -118,6 +140,21 @@ namespace machinelink {
 
     void init() {
         Serial1.begin(linkproto::kBaud, SERIAL_8N1, display::kPinLinkRx, display::kPinLinkTx);
+
+        // Announce ourselves ONCE, so the controller answers with its own
+        // Hello and we learn its firmware version.
+        //
+        // Needed because the Teensy announces itself only when IT boots, and
+        // it boots far less often than this board does - every head reflash
+        // left the About page unable to say what the controller was running.
+        // One frame per head boot, no periodic cost. The controller does not
+        // greet a Heartbeat, deliberately: that fires every few seconds.
+        char frame[linkproto::kMaxFrame];
+        const size_t n = linkproto::buildFrame(frame, sizeof(frame), linkproto::FrameType::Hello, "who=head");
+
+        if (n > 0) {
+            Serial1.write(reinterpret_cast<const uint8_t*>(frame), n);
+        }
     }
 
     void loop() {
@@ -156,6 +193,13 @@ namespace machinelink {
                     // The controller booted. Everything shown until now came
                     // from the previous instance of it.
                     ++hellos;
+
+                    // Keep the firmware string it announced. The About page
+                    // shows it, and "what is actually running on the other
+                    // board" is the one version number a web page on this
+                    // board cannot work out for itself.
+                    parser.get("fw", controllerFw, sizeof(controllerFw));
+
                     Serial.printf("link hello (controller restarted): %s\n", parser.body());
                     break;
 
@@ -167,6 +211,10 @@ namespace machinelink {
 
     uint32_t helloCount() {
         return hellos;
+    }
+
+    const char* controllerFirmware() {
+        return controllerFw;
     }
 
     const State& state() {
@@ -191,6 +239,10 @@ namespace machinelink {
 
     void setConfigAckHandler(const ConfigAckHandler handler) {
         configAckHandler = handler;
+    }
+
+    void setCommandAckHandler(const CommandAckHandler handler) {
+        commandAckHandler = handler;
     }
 
     void sendCommand(const char* body) {

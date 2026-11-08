@@ -11,6 +11,7 @@
 
 #include "encoderHandler.h"
 #include "flowHandler.h"
+#include "i2cHandler.h"
 #include "heaterHandler.h"
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
@@ -26,6 +27,22 @@
 namespace comms {
 
     namespace {
+
+        /**
+         * This firmware's version, announced to the head in the Hello frame.
+         *
+         * AUTO_VERSION comes from auto_firmware_version.py (platformio.ini).
+         * The fallback deliberately does not look like a version number: a
+         * build that lost the script should say so rather than report
+         * something plausible and wrong.
+         */
+#ifdef AUTO_VERSION
+    #define CC_STR_HELPER(x) #x
+    #define CC_STR(x) CC_STR_HELPER(x)
+        constexpr char kFirmwareVersion[] = CC_STR(AUTO_VERSION);
+#else
+        constexpr char kFirmwareVersion[] = "unversioned-build";
+#endif
 
         linkproto::Parser parser;
 
@@ -131,6 +148,19 @@ namespace comms {
         long lastSentEncoder = 0;
         bool lastSentBrew = false;
 
+        /**
+         * @brief Say who we are and what version we are running.
+         *
+         * Sent at our boot, and again whenever the head says hello - it boots
+         * much more often than this board does, and its About page has no
+         * other way to learn what is running here.
+         */
+        void sendHello() {
+            char body[96];
+            snprintf(body, sizeof(body), "who=teensy,fw=%s", kFirmwareVersion);
+            send(linkproto::FrameType::Hello, body);
+        }
+
         void sendTelemetry() {
             char body[linkproto::kMaxFrame];
 
@@ -138,8 +168,14 @@ namespace comms {
             // Sent as its own field rather than inferred at the far end,
             // because the head must never label raw counts as grams - a
             // plausible wrong weight on screen is worse than no weight.
+            // c1/c2 are the scale's CALIBRATION FACTORS, and they are here
+            // because the controller owns them: they are measured against a
+            // real mass on this side, not configured on the other. Reporting
+            // them lets the head DISPLAY the true factors instead of keeping a
+            // master copy it would push back - which it did once, overwriting
+            // a measured calibration with the 1.0 "uncalibrated" default.
             snprintf(body, sizeof(body),
-                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,sp=%.1f,hd=%.0f,hen=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,st=%s,flt=%s",
+                     "bt=%.1f,gt=%.1f,bok=%d,gok=%d,sp=%.1f,hd=%.0f,hen=%d,fl=%.2f,vol=%.1f,wt=%.1f,wok=%d,wcal=%d,pmp=%.0f,enc=%ld,c1=%.1f,c2=%.1f,st=%s,flt=%s",
                      temps::boilerC(),
                      temps::groupC(),
                      temps::boilerHealthy() ? 1 : 0,
@@ -154,6 +190,8 @@ namespace comms {
                      weight::calFactor() == 1.0f ? 0 : 1,
                      pump::actualSpeed(),
                      static_cast<long>(encoder::counter()),
+                     weight::calFactor(),
+                     weight::calFactor2(),
                      stateWord(),
                      safety::isFaulted() ? safetyFaultName(safety::latchedFault) : "none");
 
@@ -216,6 +254,34 @@ namespace comms {
             if (parser.get("flowreset", value, sizeof(value))) {
                 flow::reset();
                 ack("flowreset", true, "ok");
+
+                return;
+            }
+
+            if (parser.get("i2cscan", value, sizeof(value))) {
+                // The Teensy owns the I2C bus, so the head cannot scan it and
+                // has to ask. Answered with an Ack carrying the addresses as
+                // hex, because the alternative - a new frame type - would need
+                // both sides changed for one diagnostic.
+                //
+                // Synchronous, and that is fine: a full sweep is a few
+                // milliseconds of bus traffic, nothing in the control path
+                // waits on it, and the heater permit expiry would catch a loop
+                // that somehow stalled here.
+                uint8_t addresses[i2c::kMaxScanResults];
+                const int found = i2c::scanInto(addresses, i2c::kMaxScanResults);
+                const int shown = found < i2c::kMaxScanResults ? found : i2c::kMaxScanResults;
+
+                char list[80];
+                size_t at = 0;
+
+                for (int i = 0; i < shown && at + 4 < sizeof(list); i++) {
+                    at += snprintf(list + at, sizeof(list) - at, "%s%02X", i > 0 ? " " : "", addresses[i]);
+                }
+
+                list[at] = '\0';
+
+                ack("i2cscan", true, found > 0 ? list : "none");
 
                 return;
             }
@@ -288,6 +354,108 @@ namespace comms {
                 return;
             }
 
+            // --- Requests from the panel's home grid -----------------------
+            //
+            // THE HEAD ASKS; THIS SIDE DECIDES. Every one of these goes
+            // through the same entry point the brew switch and the console
+            // use, so the gates are identical whichever way the request
+            // arrived: a latched fault, an unhealthy boiler probe or a shot
+            // already running all refuse it here, and the hard time backstop
+            // applies regardless.
+            //
+            // This is the architecture working as written - "a touch is a
+            // request; the Teensy decides" - and NOT a new privilege for the
+            // display. It cannot drive an output; it can only ask.
+
+            if (parser.get("shot", value, sizeof(value))) {
+                const int index = atoi(value);
+
+                if (index < 0 || index >= shot::kProfileCount) {
+                    ack("shot", false, "noprofile");
+
+                    return;
+                }
+
+                const bool started = shot::startProfile(static_cast<uint8_t>(index));
+                ack("shot", started, started ? "ok" : "refused");
+
+                return;
+            }
+
+            if (parser.get("stop", value, sizeof(value))) {
+                // STOP WHATEVER IS RUNNING. One command rather than the panel
+                // picking between shotstop, flush=0 and backflush=0 from the
+                // state word it last received.
+                //
+                // That matters: telemetry is up to a frame old, so a panel
+                // deciding which stop to send could choose the wrong one at
+                // exactly the moment a sequence changes phase - and the one
+                // control nobody can afford to have miss is the one labelled
+                // STOP. This side knows what it is actually doing.
+                const char* what = "nothing";
+
+                if (shot::isBackflushing()) {
+                    shot::stopBackflush("panel stop");
+                    what = "backflush";
+                }
+                else if (shot::isFlushing()) {
+                    shot::stopFlush("panel stop");
+                    what = "flush";
+                }
+                else if (shot::isRunning()) {
+                    shot::stop("panel stop");
+                    what = "shot";
+                }
+
+                ack("stop", true, what);
+
+                return;
+            }
+
+            if (parser.get("shotstop", value, sizeof(value))) {
+                if (!shot::isRunning()) {
+                    ack("shotstop", false, "notrunning");
+
+                    return;
+                }
+
+                shot::stop("panel");
+                ack("shotstop", true, "ok");
+
+                return;
+            }
+
+            if (parser.get("flush", value, sizeof(value))) {
+                // 1 starts, 0 stops. The flush has its own cap
+                // (flush.max_time) which cannot be disabled, so a panel that
+                // crashes mid-flush does not leave the pump running.
+                if (atoi(value) == 0) {
+                    shot::stopFlush("panel");
+                    ack("flush", true, "ok");
+
+                    return;
+                }
+
+                const bool started = shot::startFlush("panel");
+                ack("flush", started, started ? "ok" : "refused");
+
+                return;
+            }
+
+            if (parser.get("backflush", value, sizeof(value))) {
+                if (atoi(value) == 0) {
+                    shot::stopBackflush("panel");
+                    ack("backflush", true, "ok");
+
+                    return;
+                }
+
+                const bool started = shot::startBackflush("panel");
+                ack("backflush", started, started ? "ok" : "refused");
+
+                return;
+            }
+
             ack("?", false, "unknown");
         }
 
@@ -314,9 +482,7 @@ namespace comms {
         static uint8_t rxBuffer[1024];
         Serial1.addMemoryForRead(rxBuffer, sizeof(rxBuffer));
 
-        char body[64];
-        snprintf(body, sizeof(body), "who=teensy,fw=%s", "0.1.0-phase2");
-        send(linkproto::FrameType::Hello, body);
+        sendHello();
 
         lastTelemetryMs = millis();
     }
@@ -341,12 +507,23 @@ namespace comms {
                     handleConfig();
                     break;
 
-                case linkproto::FrameType::Heartbeat:
                 case linkproto::FrameType::Hello:
+                    // The head booted and is asking who we are. Answer with
+                    // our own Hello, carrying this firmware's version - it has
+                    // no other way to find out, since it cannot read this
+                    // chip's flash, and we announce ourselves unprompted only
+                    // at OUR boot, which is far rarer than a head reflash.
+                    //
+                    // Safe against a ping-pong: the head stores a Hello and
+                    // never replies to one.
+                    sendHello();
+                    break;
+
+                case linkproto::FrameType::Heartbeat:
                     // Nothing to do beyond noting that something is out there,
-                    // which lastRxMs above already did. Deliberately silent: a
-                    // reply would double the traffic to report a fact neither
-                    // side acts on.
+                    // which lastRxMs above already did. Deliberately silent:
+                    // this one fires every few seconds and a reply would double
+                    // the traffic to report a fact neither side acts on.
                     break;
 
                 default:

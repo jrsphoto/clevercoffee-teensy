@@ -2,7 +2,14 @@
 
     <script type="module">
         (window.appCreated ? Promise.resolve() : new Promise(resolve => window.addEventListener('appCreated', resolve)))
-            .then(() => vueApp.mount('#content'));
+            .then(() => {
+                vueApp.mount('#content');
+
+                // The placeholder stood in for the cloaked template. Mounting
+                // removes v-cloak, so this has done its job - see dark-mode.css.
+                const loading = document.getElementById('cc-loading');
+                if (loading) loading.remove();
+            });
     </script>
 
     <style>
@@ -29,7 +36,11 @@
     </style>
 
     <div class="content-wrapper">
-        <div id="content" class="container my-5">
+        <div id="cc-loading">
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            Loading...
+        </div>
+        <div id="content" class="container my-5" v-cloak>
             <div class="card card-accent-dark mb-5 pb-0 shadow-sm rounded">
                 <div class="card-body bg-light pb-1 rounded">
                     <h5 class="card-title">

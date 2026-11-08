@@ -1,5 +1,33 @@
 const appCreatedEvent = new CustomEvent('appCreated')
 
+// Which top tab the URL is asking for.
+//
+// MUST be resolved before the first render, not in mounted(). mounted() runs
+// AFTER Vue has already painted once, so a default of 'settings' meant clicking
+// Hardware, System or About drew the Settings page for a frame and then
+// replaced it. Combined with the half second of unmounted template that
+// v-cloak now hides, that was the "it goes to a different page first" flicker.
+function resolveTopTab() {
+    const pathname = window.location.pathname
+
+    if (pathname !== '/parameters.html' && pathname !== '/parameters') {
+        return 'settings'
+    }
+
+    const params = new URLSearchParams(window.location.search)
+    const validTabs = ['settings', 'hardware', 'system', 'about']
+    let tab = params.get('tab')
+
+    // Honor old bookmarks/links using the previous ?filter= scheme.
+    if (!tab) {
+        const legacyFilter = params.get('filter')
+        if (legacyFilter === 'hardware') tab = 'hardware'
+        else if (legacyFilter === 'behavior') tab = 'settings'
+    }
+
+    return validTabs.includes(tab) ? tab : 'settings'
+}
+
 const vueApp = Vue.createApp({
     data() {
         return {
@@ -10,8 +38,10 @@ const vueApp = Vue.createApp({
             showPostSucceeded: false,
 
             // Settings page tabs (Settings/Hardware/System/About, each with its own
-            // sub-tabs) - only used on parameters.html, see mounted()
-            activeTopTab: 'settings',
+            // sub-tabs) - only used on parameters.html. Resolved from the URL HERE
+            // rather than in mounted(), so the first render is already the right
+            // tab - see resolveTopTab().
+            activeTopTab: resolveTopTab(),
             activeSection: null,
             currentFetchFilter: '',
 
@@ -47,21 +77,11 @@ const vueApp = Vue.createApp({
             return;
         }
 
+        // activeTopTab is already correct - resolveTopTab() set it in data() so the
+        // first paint is the requested tab. Nothing to decide here.
+        //
         // Settings/Hardware tabs share one combined fetch, so switching between them (or
         // editing one, then the other) never loses anything or needs a second round trip.
-        const urlParams = new URLSearchParams(window.location.search);
-        const validTabs = ['settings', 'hardware', 'system', 'about'];
-        let tab = urlParams.get('tab');
-
-        // Honor old bookmarks/links using the previous ?filter= scheme.
-        if (!tab) {
-            const legacyFilter = urlParams.get('filter');
-            if (legacyFilter === 'hardware') tab = 'hardware';
-            else if (legacyFilter === 'behavior') tab = 'settings';
-        }
-
-        this.activeTopTab = validTabs.includes(tab) ? tab : 'settings';
-
         this.currentFetchFilter = 'all';
         await this.fetchParameters('all');
         this.resetActiveSectionForCurrentTab();
@@ -237,7 +257,7 @@ const vueApp = Vue.createApp({
                 12: 'Relays',
                 13: 'Switches',
                 14: 'LEDs',
-                15: 'Sensors',
+                15: 'Scale',
                 16: 'Encoder'
             }
 

@@ -38,9 +38,20 @@ namespace shot {
          * make that harder.
          */
         Profile profiles[kProfileCount] = {
+            // Order matches the home grid's top row, left to right. Each
+            // stops on ONE thing and the panel labels it with that - there is
+            // no pressure sensor installed and no profiling loop, so a tile
+            // claiming "9 bar" would be describing something that does not
+            // exist. See TEENSY-PORT-BRIEF.md 9.8.
+            //
+            // ristretto: short, with a bloom. Stops on weight.
+            {4000, 3000, 25.0, 85.0, 20.0, 0.0, 0xFF3000, "ristretto"},
+            // espresso: the daily double. Stops on weight.
             {kDefaultPreInfuseMs, kDefaultPauseMs, kDefaultPreInfusePercent, kDefaultBrewPercent,
              kDefaultTargetGrams, kDefaultTargetMl, 0x0040FF, "espresso"},
-            {1000, 0, 40.0, 80.0, 60.0, 0.0, 0x00FFA0, "lungo"},
+            // lungo: long, stops on VOLUME rather than weight - targetGrams 0
+            // disables the weight stop, targetMl sets the volume one.
+            {1000, 0, 40.0, 80.0, 0.0, 60.0, 0x00FFA0, "lungo"},
         };
 
         uint8_t active = 0;

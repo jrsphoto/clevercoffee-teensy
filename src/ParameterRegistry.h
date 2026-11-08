@@ -59,7 +59,17 @@ inline const char* getSectionName(const int sectionId) {
         case sHardwareLedSection:
             return "LEDs";
         case sHardwareSensorSection:
-            return "Sensors";
+            // "Scale" rather than "Sensors" because on the Teensy board that
+            // is all this section holds - the RTD configuration is compiled
+            // constants on purpose (tempHandler.cpp), and the pressure and
+            // water-level sensors do not exist yet.
+            //
+            // WHEN THOSE TWO LAND they want their own section rather than this
+            // label widening back out to "Sensors": a page called Scale that
+            // also carries the water probe is how a settings page starts
+            // becoming a junk drawer. Keep it in step with the map in
+            // frontend/js/app.js, which is what the web UI actually reads.
+            return "Scale";
         case sHardwareEncoderSection:
             return "Encoder";
         default:

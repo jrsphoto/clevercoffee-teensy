@@ -28,7 +28,14 @@ namespace pump {
         uint32_t lastCommandMs = 0;
         uint32_t lastRampMs = 0;
 
-        bool loadShedEnabled = true;
+        // DEFAULT OFF since 2026-11-08. The interlock exists to keep a 2000 W
+        // element and the pump off the same 15 A circuit; the machine is now
+        // specified with a 1000 W heater (8.3 A) and a DC pump, which together
+        // never approach the limit. The MECHANISM IS KEPT and still works - it
+        // is one switch away on the Hardware page - because removing a tested
+        // interlock to save a boolean would be a poor trade if the element
+        // specification ever changes again.
+        bool loadShedEnabled = false;
         bool initialised = false;
 
         const char* refusal = "ok";

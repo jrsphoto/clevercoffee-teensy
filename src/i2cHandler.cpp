@@ -628,10 +628,16 @@ namespace i2c {
         }
     }
 
-    void scan() {
-        Serial.println("I2C scan (SDA 18, SCL 19), full 0x00-0x7F range:");
-
+    int scanInto(uint8_t* out, const int maxOut) {
         int found = 0;
+
+        const auto record = [&](const uint8_t addr) {
+            if (out != nullptr && found < maxOut) {
+                out[found] = addr;
+            }
+
+            found++;
+        };
 
         // Reserved ranges first, bit-banged: the hardware peripheral refuses to
         // send these addresses, and this scanner used to skip them entirely.
@@ -645,21 +651,13 @@ namespace i2c {
 
         for (uint8_t addr = 0x00; addr <= 0x07; addr++) {
             if (bitBangProbe(PIN_I2CSDA, PIN_I2CSCL, addr)) {
-                found++;
-                Serial.print("    0x0");
-                Serial.print(addr, HEX);
-                Serial.print("  ");
-                Serial.print(nameFor(addr));
-                Serial.println("   [I2C-reserved range, but the DuPPa's factory default lives here]");
+                record(addr);
             }
         }
 
         for (uint8_t addr = 0x78; addr <= 0x7F; addr++) {
             if (bitBangProbe(PIN_I2CSDA, PIN_I2CSCL, addr)) {
-                found++;
-                Serial.print("    0x");
-                Serial.print(addr, HEX);
-                Serial.println("   [RESERVED]");
+                record(addr);
             }
         }
 
@@ -669,17 +667,45 @@ namespace i2c {
             Wire.beginTransmission(addr);
 
             if (Wire.endTransmission() == 0) {
-                found++;
-                Serial.print("    0x");
-
-                if (addr < 0x10) {
-                    Serial.print("0");
-                }
-
-                Serial.print(addr, HEX);
-                Serial.print("  ");
-                Serial.println(nameFor(addr));
+                record(addr);
             }
+        }
+
+        return found;
+    }
+
+    void scan() {
+        Serial.println("I2C scan (SDA 18, SCL 19), full 0x00-0x7F range:");
+
+        // One scanner, two presentations. The probing sequence is identical for
+        // the console and for the web page, which matters: a second copy of it
+        // would eventually disagree with this one about the reserved range, and
+        // that range is exactly where this board's encoder lives.
+        uint8_t addresses[kMaxScanResults];
+        const int found = scanInto(addresses, kMaxScanResults);
+        const int shown = found < kMaxScanResults ? found : kMaxScanResults;
+
+        for (int i = 0; i < shown; i++) {
+            const uint8_t addr = addresses[i];
+
+            Serial.print("    0x");
+
+            if (addr < 0x10) {
+                Serial.print("0");
+            }
+
+            Serial.print(addr, HEX);
+            Serial.print("  ");
+            Serial.print(nameFor(addr));
+
+            if (addr <= 0x07) {
+                Serial.print("   [I2C-reserved range, but the DuPPa's factory default lives here]");
+            }
+            else if (addr >= 0x78) {
+                Serial.print("   [RESERVED]");
+            }
+
+            Serial.println();
         }
 
         if (found == 0) {

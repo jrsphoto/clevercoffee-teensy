@@ -41,6 +41,22 @@ namespace weight {
         /** Two cells under a shared plate is this machine's arrangement. */
         bool useDualCell = true;
 
+        /**
+         * Is a scale fitted at all? Pushed from the head's Hardware page.
+         *
+         * Default TRUE here because this machine has one and it is verified
+         * working. Must match the head's registered default - see the warning
+         * in CLAUDE.md about the head winning every disagreement.
+         */
+        bool scaleEnabled = true;
+
+        /**
+         * Mass of the calibration reference, in grams, used by 'scalecal' and
+         * by the web UI's calibration flow. Upstream's default is the drip
+         * tray's weight.
+         */
+        float knownWeightG = 267.0f;
+
         enum class State : uint8_t {
             NotCreated,  // init() has not run, or failed to allocate
             Stabilising, // conversions running, waiting to settle and tare
@@ -393,6 +409,23 @@ namespace weight {
     } // namespace
 
     bool init() {
+        // Not fitted means do not create anything and do not report a failure.
+        // A machine with no scale is a supported configuration - brewing by
+        // time and by volume both still work - and it must not look like
+        // broken hardware on the panel or in the log.
+        if (!scaleEnabled) {
+            delete scale;
+            scale = nullptr;
+            cell = nullptr;
+            cell2 = nullptr;
+            state = State::NotCreated;
+            failureReason = "";
+
+            Serial.println("scale: disabled by configuration");
+
+            return false;
+        }
+
         // Only on the very first call: a restart() must not quietly undo a
         // factor set by hand with 'scalefactor' since boot.
         static bool triedLoad = false;
@@ -781,6 +814,50 @@ namespace weight {
         if (cell2 != nullptr) {
             cell2->setCalFactor(factor);
         }
+    }
+
+    float calFactor2() {
+        return calibration2;
+    }
+
+    void setCalFactor2(const float factor) {
+        // Cell 2 only. setCalFactor() writes BOTH, which is right for a single
+        // cell and wrong for this machine's mirrored pair - they differ in sign
+        // and slightly in magnitude, so each needs its own number.
+        calibration2 = factor;
+
+        saveCalibration();
+
+        if (cell2 != nullptr) {
+            cell2->setCalFactor(factor);
+        }
+    }
+
+    void setEnabled(const bool on) {
+        if (on == scaleEnabled) {
+            return;
+        }
+
+        scaleEnabled = on;
+
+        Serial.print("scale: ");
+        Serial.println(on ? "enabled" : "disabled");
+
+        // Recreate or tear down now rather than at the next boot, so the
+        // setting visibly does something.
+        init();
+    }
+
+    bool enabled() {
+        return scaleEnabled;
+    }
+
+    void setKnownWeight(const float grams) {
+        knownWeightG = grams;
+    }
+
+    float knownWeight() {
+        return knownWeightG;
     }
 
     void setSamples(const int newSamples) {

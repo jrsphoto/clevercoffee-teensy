@@ -7,6 +7,7 @@
 #include "audio.h"
 #include "display.h"
 
+#include "iconCup.h"
 #include "link.h"
 #include "net.h"
 
@@ -185,8 +186,18 @@ namespace display {
         constexpr uint16_t kAlarm = 0xF800;      // red
         constexpr uint16_t kDim = 0x4208;        // disabled
 
-        Page currentPage = Page::Main;
+        Page currentPage = Page::Home;
         bool chromeDrawn = false;
+
+        /**
+         * Is the MANUAL tile's pump run going?
+         *
+         * Tracked here only so the tile knows whether the next tap means
+         * start or stop. It is NOT a belief about the machine: the Teensy
+         * stops the run on its own cap regardless, and the readout's status
+         * strip is what actually says whether the pump is on.
+         */
+        bool manualRunning = false;
 
         // Last-drawn values, so a field is only repainted when it changes.
         char lastBoiler[12] = "";
@@ -199,6 +210,9 @@ namespace display {
         int lastHeatBar = -1;
         int lastLink = -1;
         int lastHeaterOn = -1;
+
+        /** Is the STOP button currently painted? -1 = not yet decided. */
+        int lastStopShown = -1;
 
         // WiFi sub-page. Up here with the rest rather than next to the code
         // that draws them, so forgetValues() below can reach them.
@@ -218,6 +232,7 @@ namespace display {
             lastWeight[0] = lastFlow[0] = lastPump[0] = lastStatus[0] = '\0';
             lastHeatBar = -1;
             lastLink = -1;
+            lastStopShown = -1;
             lastHeaterOn = -1;
 
             // The WiFi page's fields too. Missing these meant entering the
@@ -236,6 +251,16 @@ namespace display {
         const lgfx::IFont* const kFontMid = &fonts::FreeSansBold12pt7b;
         const lgfx::IFont* const kFontCaption = &fonts::FreeSans9pt7b;
         const lgfx::IFont* const kFontButton = &fonts::FreeSansBold9pt7b;
+
+        // Home-grid tiles. FreeSansBold9pt is about 18 px tall and wide with
+        // it: RISTRETTO and BACKFLUSH both ran past their tile borders in it,
+        // and stepping down to the REGULAR weight of the same size was not
+        // enough - those two differ in weight, not in size, so the saving was
+        // a few pixels when tens were needed. DejaVu12 is genuinely smaller
+        // at 12 px and leaves real margin. DejaVu9 for the sub-label keeps
+        // the hierarchy visible.
+        const lgfx::IFont* const kFontTile = &fonts::DejaVu12;
+        const lgfx::IFont* const kFontTileSub = &fonts::DejaVu9;
 
         void drawCaption(const int x, const int y, const char* text) {
             lcd.setFont(kFontCaption);
@@ -358,6 +383,114 @@ namespace display {
         // panel is least accurate, and there is nothing else up there to hit.
         constexpr Hit kGear = {kW - 110, 0, 110, kHeaderH + 10};
 
+        // --- Main readout: STOP ---------------------------------------------
+        //
+        // In the gap to the right of the TARGET and GROUP readings. Checked
+        // against that page's own geometry, which is the mistake this project
+        // has made four times before:
+        //
+        //   boiler value      60..~100   clears x=20..250
+        //   gear hit box      0..40      (header, well clear above)
+        //   TARGET value      60..84     270..370, moved left from 300
+        //   GROUP value       116..140   same
+        //   heat bar          150..166   so nothing may extend past y=148
+        //
+        // The temperature column moved 30 px left - there is 20 px of clear
+        // air between it and the boiler reading - which makes room for a
+        // 94x92 button rather than 68x92. Worth doing: this is the one
+        // control that has to be hittable without looking at it.
+        constexpr Hit kBtnStop = {380, 56, 94, 92};
+
+        // --- HOME: the 3x3 grid -------------------------------------------
+        //
+        // Adapted from the DK Espresso machine John brought as a reference.
+        // See TEENSY-PORT-BRIEF.md 9.9, including why hot water and steam are
+        // NOT here: they are manual valves on this machine and the board has
+        // no output for either, so those tiles could only ever do nothing.
+        //
+        // GEOMETRY, worked out rather than estimated - the trap this project
+        // has already fallen into four times is computing against the wrong
+        // page's numbers.
+        //
+        // NO HEADER ON THIS PAGE. It carried the machine name and the gear,
+        // and neither earns 30 px here: the name is written on the machine
+        // you are standing at, and SETTINGS is already a tile. Dropping it
+        // gives every row 18 px more, which is the difference between a
+        // cramped tile and a comfortable one.
+        //
+        //   grid rows         4..96, 102..194, 200..292
+        //   footer rule       at kH - kFooterH = 294
+        //   footer strip      294..320   (boiler temp and state)
+        //
+        // 3 columns of 152 with 8 px gutters inside a 480 wide screen:
+        //   8 + 152 + 8 + 152 + 8 + 152 = 480. Rows are 92 tall with 6 between.
+        constexpr int kGridX0 = 8;
+        constexpr int kGridY0 = 4;
+        constexpr int kTileW = 152;
+        constexpr int kTileH = 92;
+        constexpr int kTileGapX = 8;
+        constexpr int kTileGapY = 6;
+
+        constexpr Hit homeTile(const int col, const int row) {
+            return {kGridX0 + col * (kTileW + kTileGapX),
+                    kGridY0 + row * (kTileH + kTileGapY),
+                    kTileW, kTileH};
+        }
+
+        /** What a home tile does. Order matches the grid, reading across. */
+        enum class HomeAction : uint8_t {
+            Ristretto, // profile 0, stops on weight
+            Espresso,  // profile 1, stops on weight
+            Lungo,     // profile 2, stops on volume
+            Manual,    // pump until tapped again, capped
+            Flush,     // purge the shower screen
+            Backflush, // the multi-cycle routine
+            Scale,     // tare
+            Status,    // temps, link, faults, clear
+            Settings,  // the existing setup menu
+            Count,
+        };
+
+        /** Icon style for a tile. Drinks use the artwork; the rest are drawn. */
+        enum class TileIcon : uint8_t {
+            Cup,
+            Hand,   // manual
+            Drop,   // flush
+            Cycle,  // backflush
+            Scales, // tare
+            Info,   // status
+            Gear,   // settings
+        };
+
+        struct HomeTile {
+                const char* label;
+                const char* sub; // what it stops on, or what it does
+                TileIcon icon;
+        };
+
+        // Labels say what a shot STOPS ON, never a pressure figure: there is
+        // no brew pressure sensor installed and no profiling loop, so "9 bar"
+        // would be describing something that does not exist. When the sensor
+        // and the loops land (brief 9.8) these can say more.
+        constexpr HomeTile kHomeTiles[static_cast<int>(HomeAction::Count)] = {
+            {"RISTRETTO", "by weight", TileIcon::Cup},
+            {"ESPRESSO", "by weight", TileIcon::Cup},
+            {"LUNGO", "by volume", TileIcon::Cup},
+            {"MANUAL", "tap to stop", TileIcon::Hand},
+            {"FLUSH", "purge", TileIcon::Drop},
+            {"BACKFLUSH", "clean cycle", TileIcon::Cycle},
+            {"SCALE", "tare", TileIcon::Scales},
+            {"STATUS", "live readout", TileIcon::Info},
+            {"SETTINGS", "", TileIcon::Gear},
+        };
+
+        Hit homeHit(const HomeAction a) {
+            const int i = static_cast<int>(a);
+
+            return homeTile(i % 3, i / 3);
+        }
+
+
         bool inside(const Hit& h, const int x, const int y) {
             return x >= h.x && x < (h.x + h.w) && y >= h.y && y < (h.y + h.h);
         }
@@ -403,8 +536,8 @@ namespace display {
             // is about 14 px tall, so anything less than that and the two
             // collide - which is exactly what 38/52 did.
             drawCaption(20, 40, "BOILER");
-            drawCaption(300, 40, "TARGET");
-            drawCaption(300, 96, "GROUP");
+            drawCaption(270, 40, "TARGET");
+            drawCaption(270, 96, "GROUP");
 
             // Heat bar below the right-hand column rather than underneath it.
             // An earlier version put the bar at y=132 with the group value at
@@ -472,6 +605,206 @@ namespace display {
             const int tw = lcd.textWidth(label);
             lcd.setCursor(h.x + (h.w - tw) / 2, h.y + (h.h - lcd.fontHeight()) / 2);
             lcd.print(label);
+        }
+
+        /**
+         * @brief Draw one tile icon, centred on (cx, cy).
+         *
+         * The drink glass is the artwork from assets/coffee-drink.png, reduced
+         * to 38x38 (iconCup.h). The rest are drawn with primitives rather than
+         * bitmaps: they are simple shapes, they cost no flash, and they stay
+         * crisp if the tile size ever changes. The reference machine mixes a
+         * pictorial cup with line symbols the same way.
+         */
+        void drawTileIcon(const TileIcon icon, const int cx, const int cy, const uint16_t col) {
+            switch (icon) {
+                case TileIcon::Cup: {
+                    // CAST TO rgb565_t, and do not remove it. LovyanGFX's
+                    // pushImage overload for a bare uint16_t* treats the data
+                    // as swap565_t - big-endian, the old TFT_eSPI convention -
+                    // so the bytes of every pixel come out the wrong way
+                    // round. The first attempt did exactly that and the glass
+                    // rendered as blue and purple noise with its shape just
+                    // visible through it. Solid fills were unaffected because
+                    // they take a colour value, not an image buffer.
+                    //
+                    // No transparency argument: the artwork is already
+                    // composited onto the tile colour. See iconCup.h for why
+                    // the colour-key version was abandoned.
+                    const auto* img = reinterpret_cast<const lgfx::rgb565_t*>(icons::kCup);
+
+                    lcd.pushImage(cx - icons::kCupW / 2, cy - icons::kCupH / 2,
+                                  icons::kCupW, icons::kCupH, img);
+                    break;
+                }
+
+                case TileIcon::Hand:
+                    // A paddle: lever on a pivot.
+                    lcd.fillCircle(cx - 8, cy + 8, 4, col);
+                    lcd.drawLine(cx - 8, cy + 8, cx + 10, cy - 10, col);
+                    lcd.drawLine(cx - 7, cy + 9, cx + 11, cy - 9, col);
+                    lcd.fillCircle(cx + 10, cy - 10, 3, col);
+                    break;
+
+                case TileIcon::Drop:
+                    // A falling droplet: triangular top, round bottom.
+                    lcd.fillCircle(cx, cy + 4, 8, col);
+                    lcd.fillTriangle(cx, cy - 12, cx - 8, cy + 5, cx + 8, cy + 5, col);
+                    break;
+
+                case TileIcon::Cycle:
+                    // Two arcs chasing each other, with arrow heads.
+                    lcd.drawArc(cx, cy, 11, 9, 200, 340, col);
+                    lcd.drawArc(cx, cy, 11, 9, 20, 160, col);
+                    lcd.fillTriangle(cx + 11, cy - 7, cx + 16, cy - 3, cx + 7, cy - 2, col);
+                    lcd.fillTriangle(cx - 11, cy + 7, cx - 16, cy + 3, cx - 7, cy + 2, col);
+                    break;
+
+                case TileIcon::Scales:
+                    // A balance: platform on a column on a base.
+                    lcd.drawFastHLine(cx - 12, cy - 8, 24, col);
+                    lcd.drawFastHLine(cx - 12, cy - 7, 24, col);
+                    lcd.drawFastVLine(cx, cy - 7, 14, col);
+                    lcd.drawFastHLine(cx - 9, cy + 8, 18, col);
+                    lcd.drawFastHLine(cx - 9, cy + 9, 18, col);
+                    break;
+
+                case TileIcon::Info:
+                    lcd.drawCircle(cx, cy, 12, col);
+                    lcd.drawCircle(cx, cy, 11, col);
+                    lcd.fillRect(cx - 1, cy - 8, 3, 3, col);
+                    lcd.fillRect(cx - 1, cy - 2, 3, 10, col);
+                    break;
+
+                case TileIcon::Gear:
+                    lcd.drawCircle(cx, cy, 9, col);
+                    lcd.drawCircle(cx, cy, 4, col);
+
+                    for (int a = 0; a < 360; a += 60) {
+                        const float r = a * 3.14159f / 180.0f;
+                        lcd.drawLine(cx + static_cast<int>(9 * cosf(r)), cy + static_cast<int>(9 * sinf(r)),
+                                     cx + static_cast<int>(13 * cosf(r)), cy + static_cast<int>(13 * sinf(r)), col);
+                    }
+
+                    break;
+            }
+        }
+
+        /**
+         * @brief One home-grid tile: icon left, label and sub-label right.
+         *
+         * 152x74 is not enough for an icon ABOVE a label at a readable size,
+         * so they sit side by side. The icon column is 46 px, leaving ~100 for
+         * text, which kFontButton fits comfortably.
+         */
+        void drawHomeTile(const HomeAction a, const uint16_t edge, const bool enabled) {
+            const Hit h = homeHit(a);
+            const HomeTile& t = kHomeTiles[static_cast<int>(a)];
+            const uint16_t textCol = enabled ? kValue : kDim;
+            const uint16_t iconCol = enabled ? edge : kDim;
+
+            lcd.fillRoundRect(h.x, h.y, h.w, h.h, 8, kPanel);
+            lcd.drawRoundRect(h.x, h.y, h.w, h.h, 8, enabled ? edge : kRule);
+
+            drawTileIcon(t.icon, h.x + 26, h.y + h.h / 2, iconCol);
+
+            // WRAPPING OFF, and this is the important one. A label wider than
+            // the screen does not get truncated by default - LovyanGFX wraps
+            // the overflow to x=0 on the next line. "BACKFLUSH" in the
+            // right-hand column did exactly that: the tile showed "BACKFLUS"
+            // and a stray "H" appeared floating in the left margin, which
+            // looked like two unrelated faults and was one.
+            lcd.setTextWrap(false);
+
+            // The cup artwork is 38 wide and centred on h.x+26, so it reaches
+            // h.x+45; the drawn icons are narrower and reach about h.x+42.
+            // Long labels get those few pixels back rather than being shrunk
+            // unnecessarily.
+            const int textX = h.x + (t.icon == TileIcon::Cup ? 50 : 46);
+            const int labelW = (h.x + h.w - 6) - textX;
+
+            // Backstop only. DejaVu12 fits every label here with room to
+            // spare; this catches a future one that does not, so it shrinks
+            // rather than running over the border. Measured, not assumed -
+            // with a proportional font a character count is a bad estimate.
+            lcd.setFont(kFontTile);
+            lcd.setTextSize(1);
+
+            if (lcd.textWidth(t.label) > labelW) {
+                lcd.setFont(kFontTileSub);
+            }
+
+            // Two lines centred as a block in a 92 px tile: label 12 px, gap
+            // 6, sub 9 px, so the pair starts about 32 from the top. A single
+            // line centres on its own.
+            lcd.setTextColor(textCol, kPanel);
+            lcd.setCursor(textX, h.y + (t.sub[0] != '\0' ? 32 : 40));
+            lcd.print(t.label);
+
+            if (t.sub[0] != '\0') {
+                lcd.setFont(kFontTileSub);
+                lcd.setTextColor(enabled ? kLabel : kDim, kPanel);
+                lcd.setCursor(textX, h.y + 52);
+                lcd.print(t.sub);
+            }
+        }
+
+        /**
+         * The HOME grid.
+         *
+         * Drawn as chrome because the tiles themselves do not change; what
+         * changes is the footer strip, which drawHomeValues() repaints.
+         */
+        void drawHomeChrome() {
+            lcd.fillScreen(kBg);
+
+            for (int i = 0; i < static_cast<int>(HomeAction::Count); i++) {
+                const auto a = static_cast<HomeAction>(i);
+                const bool drink = i < 3;
+
+                drawHomeTile(a, drink ? kAccent : kValue, true);
+            }
+
+            lcd.drawFastHLine(0, kH - kFooterH, kW, kRule);
+        }
+
+        /**
+         * The home grid's footer strip.
+         *
+         * Boiler temperature, shot timer and machine state, on the one page
+         * where none of the big readouts are visible. Same idea as the
+         * reference machine's bottom line ("91.9C / 0.0s"): whatever page you
+         * are on, the two numbers that matter are still there.
+         *
+         * Occupies kH - kFooterH + 1 .. kH. Nothing else may draw there.
+         */
+        void drawHomeValues() {
+            const auto& st = machinelink::state();
+            const bool live = machinelink::isConnected();
+
+            char buf[40];
+            uint16_t col = kDim;
+            const char* text = statusText(st, live, &col);
+
+            if (live) {
+                snprintf(buf, sizeof(buf), "%.1fC  %s", st.boilerC, text);
+            }
+            else {
+                snprintf(buf, sizeof(buf), "%s", text);
+            }
+
+            if (strncmp(buf, lastStatus, sizeof(lastStatus)) == 0) {
+                return;
+            }
+
+            snprintf(lastStatus, sizeof(lastStatus), "%s", buf);
+
+            lcd.fillRect(0, kH - kFooterH + 1, kW, kFooterH - 1, kBg);
+            lcd.setFont(kFontMid);
+            lcd.setTextSize(1);
+            lcd.setTextColor(col, kBg);
+            lcd.setCursor(12, kH - kFooterH + 4);
+            lcd.print(buf);
         }
 
         /**
@@ -643,8 +976,12 @@ namespace display {
             lcd.setCursor(152, 82);
             lcd.print("C");
 
+            // 100 wide, not 170. These used to clear all the way to x=470,
+            // which is why the space to their right only LOOKED empty - the
+            // reading is short, but the clear behind it was not, and anything
+            // drawn there was wiped on the next update. STOP lives there now.
             snprintf(buf, sizeof(buf), "%.1f", live ? st.setpointC : 0.0f);
-            drawField(300, 60, 170, kFontValue, kValue, buf, lastSetpoint, sizeof(lastSetpoint));
+            drawField(270, 60, 100, kFontValue, kValue, buf, lastSetpoint, sizeof(lastSetpoint));
 
             if (live && st.groupOk) {
                 snprintf(buf, sizeof(buf), "%.1f", st.groupC);
@@ -653,7 +990,7 @@ namespace display {
                 snprintf(buf, sizeof(buf), "--.-");
             }
 
-            drawField(300, 116, 170, kFontValue, (live && st.groupOk) ? kValue : kDim, buf, lastGroup, sizeof(lastGroup));
+            drawField(270, 116, 100, kFontValue, (live && st.groupOk) ? kValue : kDim, buf, lastGroup, sizeof(lastGroup));
 
             // Heater bar. Width is the duty, colour says whether it is allowed
             // to be doing anything.
@@ -706,6 +1043,38 @@ namespace display {
 
             snprintf(buf, sizeof(buf), "%.0f%%", live ? st.pumpPercent : 0.0f);
             drawField(344, 220, 130, kFontValue, (live && st.pumpPercent > 0.0f) ? kReady : kDim, buf, lastPump, sizeof(lastPump));
+
+            // STOP, shown only while something is actually running.
+            //
+            // A stop control that is always there is a control you cannot
+            // read: when it is live matters as much as where it is. Driven
+            // off the controller's own state word, so it reflects the machine
+            // rather than what this board last asked for.
+            const bool running = live
+                                 && strcmp(st.status, "idle") != 0
+                                 && strcmp(st.status, "heating") != 0
+                                 && strcmp(st.status, "fault") != 0;
+
+            if (running != (lastStopShown == 1)) {
+                lastStopShown = running ? 1 : 0;
+
+                if (running) {
+                    lcd.fillRoundRect(kBtnStop.x, kBtnStop.y, kBtnStop.w, kBtnStop.h, 8, kAlarm);
+                    lcd.drawRoundRect(kBtnStop.x, kBtnStop.y, kBtnStop.w, kBtnStop.h, 8, kValue);
+
+                    lcd.setFont(kFontButton);
+                    lcd.setTextSize(1);
+                    lcd.setTextColor(kValue, kAlarm);
+
+                    const int tw = lcd.textWidth("STOP");
+                    lcd.setCursor(kBtnStop.x + (kBtnStop.w - tw) / 2,
+                                  kBtnStop.y + (kBtnStop.h - lcd.fontHeight()) / 2);
+                    lcd.print("STOP");
+                }
+                else {
+                    lcd.fillRect(kBtnStop.x, kBtnStop.y, kBtnStop.w, kBtnStop.h, kBg);
+                }
+            }
 
             // Footer status strip.
             uint16_t col = kDim;
@@ -779,26 +1148,134 @@ namespace display {
                 return Page::Setup;
 
             case Page::Setup:
-                return Page::Main;
-
             case Page::Main:
+                return Page::Home;
+
+            case Page::Home:
                 // Its own parent, so Back at the top does nothing rather than
                 // navigating off the end of the tree.
-                return Page::Main;
+                return Page::Home;
         }
 
-        return Page::Main;
+        return Page::Home;
     }
 
     bool handleTouch(const int x, const int y) {
+        if (currentPage == Page::Home) {
+            // NO GEAR TEST HERE. This page has no header, so the old gear box
+            // in the top-right corner now sits squarely on the LUNGO tile -
+            // testing it first would mean a tap meant for a lungo opened the
+            // settings menu instead. SETTINGS has its own tile.
+            for (int i = 0; i < static_cast<int>(HomeAction::Count); i++) {
+                const auto a = static_cast<HomeAction>(i);
+
+                if (!inside(homeHit(a), x, y)) {
+                    continue;
+                }
+
+                // EVERY ONE OF THESE IS A REQUEST. The head cannot drive an
+                // output; it asks the Teensy, which runs the same gates the
+                // brew switch and the console go through and is free to say
+                // no. Nothing here assumes it worked - the next telemetry
+                // frame says what actually happened.
+                switch (a) {
+                    case HomeAction::Ristretto:
+                    case HomeAction::Espresso:
+                    case HomeAction::Lungo: {
+                        char cmd[24];
+                        snprintf(cmd, sizeof(cmd), "shot=%d", i);
+                        machinelink::sendCommand(cmd);
+
+                        // Straight to the readout, because that is what you
+                        // want to be looking at for the next thirty seconds.
+                        // If the controller refuses, the readout says so in
+                        // its status strip rather than this page guessing.
+                        setPage(Page::Main);
+
+                        break;
+                    }
+
+                    case HomeAction::Manual:
+                        // A toggle: the pump runs until tapped again. Its cap
+                        // (flush.max_time) cannot be disabled, so a panel that
+                        // dies mid-run does not leave the pump going.
+                        machinelink::sendCommand(manualRunning ? "flush=0" : "flush=1");
+                        manualRunning = !manualRunning;
+                        setPage(Page::Main);
+
+                        break;
+
+                    case HomeAction::Flush:
+                        machinelink::sendCommand("flush=1");
+                        setPage(Page::Main);
+
+                        break;
+
+                    case HomeAction::Backflush:
+                        machinelink::sendCommand("backflush=1");
+                        setPage(Page::Main);
+
+                        break;
+
+                    case HomeAction::Scale:
+                        machinelink::sendCommand("tare=1");
+
+                        break;
+
+                    case HomeAction::Status:
+                        // The readout IS the status panel. It was the top page
+                        // before this grid existed and is kept unchanged, so
+                        // there is no second page showing the same numbers.
+                        setPage(Page::Main);
+
+                        break;
+
+                    case HomeAction::Settings:
+                        setPage(Page::Setup);
+
+                        break;
+
+                    case HomeAction::Count:
+                        break;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
         if (currentPage == Page::Main) {
+            // STOP FIRST, before the gear and before tap-to-go-home. It is
+            // the one control on this page that must never be swallowed by
+            // something else, and it is only live while the machine is doing
+            // something - lastStopShown says whether it is painted, so a tap
+            // on blank space cannot stop a machine that is already idle.
+            if (lastStopShown == 1 && inside(kBtnStop, x, y)) {
+                // One command; the CONTROLLER decides what to stop. Telemetry
+                // is up to a frame old, so a panel choosing between shotstop,
+                // flush and backflush could pick the wrong one exactly as a
+                // sequence changes phase.
+                machinelink::sendCommand("stop=1");
+                manualRunning = false;
+
+                return true;
+            }
+
             if (inside(kGear, x, y)) {
                 setPage(Page::Setup);
 
                 return true;
             }
 
-            return false;
+            // Anywhere else goes back to the grid. No BACK button, because
+            // this page is a dense readout with no spare room for one and
+            // every pixel of it is already spoken for - see drawMainChrome().
+            // Navigating away does NOT affect a running shot: the Teensy owns
+            // that, and the grid's footer keeps showing the state.
+            setPage(Page::Home);
+
+            return true;
         }
 
         // From here down we are somewhere in the setup tree. Every action is
@@ -818,7 +1295,7 @@ namespace display {
 
         if (inside(kGear, x, y)) {
             forgetArmed = false;
-            setPage(Page::Main);
+            setPage(Page::Home);
 
             return true;
         }
@@ -999,6 +1476,7 @@ namespace display {
             chromeDrawn = true;
 
             switch (currentPage) {
+                case Page::Home: drawHomeChrome(); break;
                 case Page::Main: drawMainChrome(); break;
                 case Page::Setup: drawSetupChrome(); break;
                 case Page::SetupBrew: drawBrewChrome(); break;
@@ -1008,6 +1486,7 @@ namespace display {
         }
 
         switch (currentPage) {
+            case Page::Home: drawHomeValues(); break;
             case Page::Main: drawMainValues(); break;
             case Page::Setup: drawSetupValues(); break;
             case Page::SetupBrew: drawBrewValues(); break;

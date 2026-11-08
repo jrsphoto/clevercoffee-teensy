@@ -49,6 +49,22 @@ namespace i2c {
      */
     void scan();
 
+    /** How many addresses a single scan will report. The bus holds 128. */
+    constexpr int kMaxScanResults = 16;
+
+    /**
+     * @brief Scan the bus and COLLECT the addresses rather than printing them.
+     *
+     * Same probing sequence as scan(), including the bit-banged sweep of the
+     * reserved range where this board's encoder actually lives. Used by the
+     * web UI's "Scan for I2C Devices" button, which reaches this over the link.
+     *
+     * @param out    receives up to maxOut addresses, lowest first. May be null.
+     * @param maxOut capacity of `out`.
+     * @return how many devices were found, which may exceed maxOut.
+     */
+    int scanInto(uint8_t* out, int maxOut);
+
     /**
      * @brief Report the electrical state of SDA and SCL before talking to anyone.
      *

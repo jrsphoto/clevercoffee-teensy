@@ -49,31 +49,55 @@ namespace encoder {
          * states that exist today are: faulted, heating toward setpoint, and
          * idle/ready. Brew and steam join this when those handlers land.
          */
+        // Live configuration. Defaults from the header; the head pushes
+        // changes over the link - see configStore.cpp's table.
+        bool cfgFitted = true;
+        uint8_t cfgAddress = kDefaultAddress;
+        bool cfgHasRgbLed = kDefaultHasRgbLed;
+        bool cfgStatusColors = kDefaultStatusColors;
+
+        uint32_t cfgColors[5] = {
+            kDefaultColorIdle,
+            kDefaultColorHeating,
+            kDefaultColorReady,
+            kDefaultColorActive,
+            kDefaultColorError,
+        };
+
+        // Named indices into cfgColors, so the ordering lives in one place.
+        enum ColorSlot {
+            kSlotIdle = 0,
+            kSlotHeating = 1,
+            kSlotReady = 2,
+            kSlotActive = 3,
+            kSlotError = 4,
+        };
+
         /**
          * Colour for the selected shot profile, shown only when nothing more
          * important needs saying.
          */
-        uint32_t profileColor = kColorReady;
+        uint32_t profileColor = kDefaultColorReady;
 
         uint32_t statusColor() {
             // Safety first, always. A profile colour must never be able to
             // mask a fault, so these come before anything cosmetic.
             if (safety::isFaulted()) {
-                return kColorError;
+                return cfgColors[kSlotError];
             }
 
             if (!temps::boilerHealthy()) {
-                return kColorError;
+                return cfgColors[kSlotError];
             }
 
             if (shot::isRunning()) {
-                return kColorActive;
+                return cfgColors[kSlotActive];
             }
 
             // Heating hard enough to be worth saying so. Below this the PID is
             // just trimming and the machine is effectively ready.
             if (heater::enabled() && heater::dutyPercent() > 10.0) {
-                return kColorHeating;
+                return cfgColors[kSlotHeating];
             }
 
             // Nothing to report, so show which profile is selected.
@@ -81,7 +105,7 @@ namespace encoder {
         }
 
         void updateStatusColor() {
-            if (!kHasRgbLed || !kStatusColorsEnabled || dev == nullptr) {
+            if (!cfgHasRgbLed || !cfgStatusColors || dev == nullptr) {
                 return;
             }
 
@@ -97,23 +121,87 @@ namespace encoder {
 
     } // namespace
 
+    void setFitted(const bool f) {
+        cfgFitted = f;
+    }
+
+    bool fitted() {
+        return cfgFitted;
+    }
+
+    void setAddress(const uint8_t a) {
+        cfgAddress = a;
+    }
+
+    uint8_t address() {
+        return cfgAddress;
+    }
+
+    void setHasRgbLed(const bool has) {
+        cfgHasRgbLed = has;
+    }
+
+    void setStatusColorsEnabled(const bool on) {
+        cfgStatusColors = on;
+
+        // Apply at once rather than waiting for the next state change. Turning
+        // the effects off has to actually turn the LED off, or the setting
+        // looks broken; turning them on has to repaint, which the sentinel
+        // forces by making the next comparison fail.
+        if (dev != nullptr && cfgHasRgbLed) {
+            if (on) {
+                lastColor = 0xFFFFFFFF;
+                updateStatusColor();
+            }
+            else {
+                dev->writeRGBCode(0x000000);
+                lastColor = 0x000000;
+            }
+        }
+    }
+
+    bool setStatusColor(const int which, const uint32_t rgb) {
+        if (which < 0 || which > 4) {
+            return false;
+        }
+
+        cfgColors[which] = rgb;
+
+        // If the colour that just changed is the one currently showing, repaint
+        // so the picker in the browser has a visible effect.
+        lastColor = 0xFFFFFFFF;
+        updateStatusColor();
+
+        return true;
+    }
+
     bool init() {
+        // Not fitted means do not even probe. Nothing in the control path
+        // depends on the encoder, so this is a supported configuration - the
+        // brew switch and the web UI both still work.
+        if (!cfgFitted) {
+            present = false;
+            Serial.println("encoder: disabled by configuration");
+
+            return false;
+        }
+
         // Confirm something actually answers before constructing a driver around
         // it. The library will happily talk into the void otherwise, and a
         // missing encoder would look like a working one that never moves.
-        Wire.beginTransmission(kAddress);
+        Wire.beginTransmission(cfgAddress);
 
-        if (kAddress > 0x07 && Wire.endTransmission() != 0) {
+        if (cfgAddress > 0x07 && Wire.endTransmission() != 0) {
             present = false;
 
             return false;
         }
 
-        dev = new i2cEncoderLibV2(kAddress);
+        dev = new i2cEncoderLibV2(cfgAddress);
 
         uint16_t flags = i2cEncoderLibV2::INT_DATA | i2cEncoderLibV2::WRAP_DISABLE | i2cEncoderLibV2::DIRE_RIGHT | i2cEncoderLibV2::IPUP_ENABLE | i2cEncoderLibV2::RMOD_X1;
 
-        if (kHasRgbLed) {
+        if (cfgHasRgbLed) {
             flags |= i2cEncoderLibV2::RGB_ENCODER;
         }
 
@@ -135,8 +223,8 @@ namespace encoder {
         dev->writeDoublePushPeriod(50); // 500 ms window for a double-press
         dev->writeAntibouncingPeriod(20); // 200 ms
 
-        if (kHasRgbLed) {
-            const uint32_t boot = kStatusColorsEnabled ? kColorIdle : 0x000000;
+        if (cfgHasRgbLed) {
+            const uint32_t boot = cfgStatusColors ? cfgColors[kSlotIdle] : 0x000000;
             dev->writeRGBCode(boot);
             lastColor = boot;
         }
@@ -247,7 +335,7 @@ namespace encoder {
 
     void printStatus() {
         Serial.print("  encoder (0x");
-        Serial.print(kAddress, HEX);
+        Serial.print(cfgAddress, HEX);
         Serial.print(") : ");
 
         if (!present) {

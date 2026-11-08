@@ -5,10 +5,15 @@
  *
  * Ported from the ESP32 build. Two things differ on the Teensy:
  *
- *  1. Config comes from constants here rather than the web UI, because the web
- *     UI now lives on the ESP32-S3 and reaches this side over the UART. Those
- *     values will arrive over the link in phase 6; until then they are plain
- *     constants in one place.
+ *  1. Config arrives OVER THE LINK from the web UI on the ESP32-S3, which is
+ *     where the settings pages now live. The values below are the defaults
+ *     used until the head pushes something else, and they must match the
+ *     head's registered defaults or the head will silently overwrite them at
+ *     the next handshake - see the warning in CLAUDE.md.
+ *
+ *     ADDRESS, FITTED AND RGB-VARIANT ONLY TAKE EFFECT AT BOOT, because the
+ *     driver is constructed in init() around a fixed address. The web UI marks
+ *     them as needing a restart. The status colours apply immediately.
  *
  *  2. The address is 0x04, not the 0x66 the ESP32 board used. That is the
  *     factory state of a DuPPa with NO address jumpers soldered. It is in the
@@ -31,23 +36,62 @@
 namespace encoder {
 
     /**
-     * I2C address, set by the A0-A6 solder jumpers on the encoder board.
-     * 0x04 is the factory default (A2 fitted). The ESP32 board's unit is 0x66.
+     * DEFAULTS. Every one of these is also a key the head can push.
+     *
+     * Keep them identical to the head's registered defaults in
+     * headConfig.cpp. The head holds the master config and wins at every
+     * handshake, so a mismatch here is not a disagreement - it is this side
+     * being silently overwritten.
      */
-    constexpr uint8_t kAddress = 0x04;
+
+    /**
+     * I2C address, set by the A0-A6 solder jumpers on the encoder board.
+     * 0x04 is the factory default (A2 fitted). The ESP32 board's unit is 0x66,
+     * and THAT is the number in the shared Config.h - which is exactly the
+     * mismatch described above, so the head deliberately registers 0x04.
+     */
+    constexpr uint8_t kDefaultAddress = 0x04;
 
     /** Is this the RGB-LED variant? */
-    constexpr bool kHasRgbLed = true;
+    constexpr bool kDefaultHasRgbLed = true;
 
     /** Drive the RGB LED as a machine-status indicator. */
-    constexpr bool kStatusColorsEnabled = true;
+    constexpr bool kDefaultStatusColors = true;
 
     // Status colours, matching the ESP32 build's defaults.
-    constexpr uint32_t kColorIdle = 0x101010;    // dim white
-    constexpr uint32_t kColorHeating = 0xFF4000; // amber
-    constexpr uint32_t kColorReady = 0x00FF00;   // green
-    constexpr uint32_t kColorActive = 0x0000FF;  // blue
-    constexpr uint32_t kColorError = 0xFF0000;   // red
+    constexpr uint32_t kDefaultColorIdle = 0x101010;    // dim white
+    constexpr uint32_t kDefaultColorHeating = 0xFF4000; // amber
+    constexpr uint32_t kDefaultColorReady = 0x00FF00;   // green
+    constexpr uint32_t kDefaultColorActive = 0x0000FF;  // blue
+    constexpr uint32_t kDefaultColorError = 0xFF0000;   // red
+
+    /**
+     * @brief Is the encoder fitted at all? Takes effect at the next boot.
+     *
+     * Disabled means init() does not even probe the bus. Nothing in the
+     * control path depends on the encoder, so running without it is a
+     * supported configuration rather than a degraded one.
+     */
+    void setFitted(bool fitted);
+    bool fitted();
+
+    /** @brief I2C address. Takes effect at the next boot. */
+    void setAddress(uint8_t address);
+    uint8_t address();
+
+    /** @brief Is this the RGB variant? Takes effect at the next boot. */
+    void setHasRgbLed(bool has);
+
+    /** @brief Drive the LED from machine status. Applies immediately. */
+    void setStatusColorsEnabled(bool on);
+
+    /**
+     * @brief One of the five status colours. Applies immediately.
+     *
+     * @param which 0 idle, 1 heating, 2 ready, 3 active, 4 error
+     * @return false if `which` is out of range
+     */
+    bool setStatusColor(int which, uint32_t rgb);
 
     /**
      * @brief Construct and configure the encoder. Call after i2c::init().
