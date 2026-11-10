@@ -691,3 +691,165 @@ invalidates the Teensy's EEPROM cache and the next boot logs that it is using
 compiled defaults. That is the mechanism working as designed, not a fault, and
 the head re-pushes the whole config at the next handshake anyway. The scale
 calibration is NOT affected - it lives in its own EEPROM block at address 64.
+
+### 9.15 The head's UI moves to LVGL, edited in SquareLine (2026-11-10)
+
+**Decision, John's, 2026-11-10:** the display head's UI is rebuilt on LVGL,
+graphs included. The ~2000 lines of hand-drawn LovyanGFX in
+`src-esp32s3/display.cpp` are replaced.
+
+**The screens are written in code, by firmware, as before.** SquareLine Studio
+is installed and the project is structured so an export can drop in, but it is
+an OPTION for nudging a layout later - not how the screens get made. This was
+got wrong first: the editor was read as John wanting to take on the design
+work, and he corrected it twice. His words: he CAN edit a design if he needs
+to, not because he wants to. Designing the panel is firmware's job. Do not
+hand him SquareLine instructions as a step in the work.
+
+**So what decided it is the measurements and the structure**, not the editor.
+LVGL repaints a page in 97 ms against 139 ms, a widget knows its own touch
+area so the hand-maintained table of hit rectangles disappears, and the
+layout-arithmetic traps recorded in 9.x stop being possible. The editor is a
+door left open, and `uiContract.h` is what keeps it open for the price of one
+header.
+
+**A correction worth recording, because it was argued from.** The case for
+LVGL was first made on the strength of its chart widget, citing this brief's
+own 9.7 and the CLAUDE.md line saying on-panel graphs were unwritten. That
+line was stale: the **boiler chart already existed**, hand-built, in a PSRAM
+sprite with auto-scaling, a dashed setpoint line and genuine gaps for
+unhealthy samples. So the chart was never the argument. Read `display.cpp`
+before repeating a claim from a status note.
+
+#### What was measured, not assumed
+
+A single page - `Page::Main`, the live readout plus the boiler chart - was
+rebuilt on LVGL as `[env:esp32s3_lvgl]` / `src-esp32s3-lvgl/`, deliberately
+the one page that already existed hand-drawn, so the comparison is a side by
+side rather than a demo. `link.cpp`, `net.cpp` and `headConfig.cpp` are
+compiled in unchanged, so WiFi, the web server, the registry and the Teensy
+link are all running underneath the measurement.
+
+| | hand-drawn | LVGL 9.6 |
+|---|---|---|
+| full page repaint | 139 ms (134 ms wrapped) | **101.5 ms** |
+| one chart sample | no equivalent benchmark exists | **11.2 ms** |
+| static RAM | 58,012 | 119,576 |
+| flash | 1,547,209 | 1,609,145 |
+| free internal heap, everything running | not measured | 91,024 (largest block 81,908) |
+| PSRAM in use | 78 KB (the chart sprite) | ~0 |
+
+**LVGL is about a quarter FASTER at a full repaint**, which is the opposite of
+the usual assumption and was the surprise of the exercise. The mechanism is
+mundane: the hand-drawn page issues hundreds of individual primitives, each
+setting up its own bus transaction, while LVGL composes a rectangle in RAM and
+DMAs it in one go.
+
+**It is not faster at the chart and nothing could be by much.** 230x84 RGB565
+is 38,640 bytes, which at 40 MHz is 7.7 ms of wire time before anything is
+drawn. LVGL's 11.2 ms is that floor plus 3.4 ms of work. The hand-drawn chart
+pays the same floor. The flash figures are NOT like for like either - the
+trial omits `display.cpp`, `audio.cpp` and `es8311.cpp` - so treat +62 KB as a
+lower bound on LVGL's cost, and note that 4.9 MB of flash is free regardless.
+
+**Memory is the real price, and it is knowable:** a 64 KB LVGL working pool of
+which this page uses 15 KB, plus 61 KB of draw buffers deliberately placed in
+internal RAM rather than PSRAM (9.7 measured that PSRAM blits more slowly, and
+this buffer is touched every repaint). About 125 KB of 320 KB. The 8 MB PSRAM
+is an escape hatch if a later page needs more, at a speed cost.
+
+#### Two traps found by running it
+
+**1. Byte order, which does not look like a colour fault.** RGB565 is two
+bytes a pixel; the ST7796 wants the high byte first and an ESP32 stores a
+uint16_t low byte first. Handing LovyanGFX a raw `uint16_t*` pushes memory
+order, so every colour came out wrong - and because anti-aliased text picked
+up coloured fringes, the first thing anyone says is "the fonts look blurry",
+not "the colours are wrong". Fixed by rendering in the panel's order from the
+start, via `lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED)`.
+
+That is a RUNTIME call on purpose. 9.6 has an `lv_conf.h` key for it
+(`LV_COLOR_FORMAT_DEFAULT`) and 9.5 has none; the runtime call exists in both.
+The LVGL version moved twice while settling what SquareLine wanted, and this
+form survived both moves. **Do not also swap in the flush callback** - that
+puts the colours back.
+
+**2. A long repaint starves the link.** The head logged bad checksums during
+forced full repaints and none when idle. At 115200 baud the UART holds about
+11 ms of data and a full repaint is 100 ms, so frames are lost. Page changes
+only, so not a live problem - but **the UI must never block for 100 ms during
+a shot**, and the hand-drawn build has the same exposure at 139 ms with nobody
+having looked.
+
+#### The version pin, which is a rule rather than a number
+
+**The LVGL version in `platformio.ini` must match the LVGL version selected in
+the SquareLine project**, and the two change in the same commit. An export is
+generated C calling LVGL's API directly, so the editor's idea of that API and
+the library's have to agree. The dependency is pinned exactly, not with a
+caret: a floating minor version drifts away from whatever the editor exported
+against.
+
+SquareLine Studio **1.6.3** bundles runtimes for 8.3.11, 9.1.0, 9.2.2, 9.3,
+9.5 and 9.6 - read from `lvgl/` inside its install folder, which beats its
+release notes, and which contradicted both a web search (said 1.6.2 / 9.5) and
+a Google AI summary (said LCD Ultra Pro supports 9.5, having merged it with
+the unrelated official LVGL Pro). **Both sides are on 9.6.**
+
+Not chosen, with reasons: **LCD Ultra Pro** is LVGL 8.4 by its own docs, and
+its value is exporting board driver files for 100+ boards, of which the
+LCDwiki/Hosyond ST7796S is not one. **LVGL Pro**, the official editor, is
+worth revisiting when its announced v2.0 ships - first-party tooling cannot
+drift from the library, and it stores UIs as XML, which would put screen
+layouts in git as readable files instead of generated C.
+
+#### The structure, and the one rule that makes it work
+
+**SquareLine regenerates its export wholesale.** Anything hand-written living
+among those files is destroyed on the next export. So the split is not a
+preference, it is the whole design:
+
+| | |
+|---|---|
+| `src-esp32s3/uiScreens.cpp` | **THE UI.** Hand-written layout: what exists, where, what size and colour. |
+| `src-esp32s3/uiBind.cpp` | **HAND-WRITTEN.** Telemetry into widgets; widget events out as link commands. Every honesty rule lives here. |
+| `src-esp32s3/uiLvgl.cpp` | **HAND-WRITTEN.** LVGL bring-up and the panel glue. Implements the existing `display::` interface, which is why `main.cpp` and `net.cpp` needed no changes at all. |
+| `src-esp32s3/uiContract.h` | The widget names. The seam that lets a SquareLine export replace `uiScreens.cpp` one day without touching anything else. |
+| `src-esp32s3/ui/` | Empty. Where a SquareLine export would land. GENERATED, never hand-edited. |
+
+Export **UI files only**, not a board template: `display.h` already describes
+this panel correctly and is measured, and SquareLine does not know this board
+anyway.
+
+**Everything that makes this machine's UI honest is logic, not layout, and
+lives in the hand-written half** - which is precisely why a re-export cannot
+lose it:
+
+- A stale or faulty reading shows `--.-`, never the last good value.
+- A chart sample taken while the sensor was unhealthy is a GAP.
+  `LV_CHART_POINT_NONE` is skipped when drawing, so the framework supports
+  this rule rather than fighting it.
+- An uncalibrated scale is never labelled "grams".
+- The backflush tile reads its armed state from telemetry (`bfa`), never from
+  what the head last asked for. See 9.10.
+- Every tile is a REQUEST. The head cannot drive an output; the Teensy decides
+  and is free to refuse. See 9.9.
+
+**What becomes John's job rather than firmware's:** the palette, the fonts and
+the layout move into the editor.
+
+#### Phasing
+
+1. The readout page plus the chart. Already exists as the trial, so it is a
+   port into the real build rather than new work.
+2. The home grid (9.9), with its tile actions re-bound.
+3. The setup menu and its sub-pages. **Keep the sub-page structure** - 9.x
+   records that cramming controls onto one page failed four times and that
+   making SETUP a menu is what fixed it.
+4. The About page.
+5. Delete `display.cpp` only once every page has a replacement, and keep the
+   hand-drawn env buildable until then.
+
+The trial build is a measuring instrument and is disposable. It keeps its own
+`main.cpp` and `lv_conf.h` and is not the shape the real UI should take; do
+not grow it into the product.
