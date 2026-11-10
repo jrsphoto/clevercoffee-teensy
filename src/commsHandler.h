@@ -55,4 +55,38 @@ namespace comms {
     /** @brief Print link state for the bench console. */
     void printStatus();
 
+    /**
+     * @brief Report RAW bytes arriving on the link UART, for a fixed window.
+     *
+     * Exists because the ordinary counters cannot answer the question that
+     * matters when the link is one-way. `recv`, `badsum` and `malformed` all
+     * count things the PARSER saw, so all three read zero both when bytes are
+     * arriving and failing to frame, and when no bytes are arriving at all.
+     * Those two have completely different causes and the status line cannot
+     * tell them apart.
+     *
+     * This reads the port directly and reports the byte count plus a dump, so
+     * "nothing on the wire" and "noise on the wire" stop looking identical.
+     *
+     * CONSUMES the bytes it sees, so a frame in flight is lost. That is
+     * acceptable in a bench diagnostic and is why it is not left running.
+     *
+     * Feeds the watchdog while it waits - the timeout is 4 s and a useful
+     * window is longer than that.
+     *
+     * @param windowMs how long to listen.
+     */
+    void sniffRaw(uint32_t windowMs);
+
+    /**
+     * @brief Look at the link RX pad directly, as a plain input.
+     *
+     * Answers the two questions `sniffRaw` cannot: is the pin free or is
+     * something holding it, and does the other board's signal physically
+     * arrive. Takes the pin off Serial1 for the duration and gives it back.
+     *
+     * @param windowMs how long to count edges for.
+     */
+    void probeRxPin(uint32_t windowMs);
+
 } // namespace comms

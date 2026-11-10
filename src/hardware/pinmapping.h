@@ -91,10 +91,33 @@
 #define PIN_HXCLK  39
 
 // --- Link to the ESP32-S3 head ------------------------------------------
-// Serial1. Teensy TX1 (D1) -> ESP32 RX, Teensy RX1 (D0) <- ESP32 TX.
-// 3.3V both ends, no level shifter. Use Serial1 directly; these are for reference.
+//
+// Serial1. Teensy TX1 (D1) -> ESP32 RX (IO43), Teensy RX1 (D0) <- ESP32 TX
+// (IO44). 3.3V both ends, no level shifter.
+//
+// MOVED TO Serial2/D7/D8 on 2026-11-10 and moved straight back, which is
+// worth recording so nobody repeats the investigation:
+//
+// The first Teensy (serial 8314800) developed a dead short on D0 - 4.8 ohms
+// pin-to-ground with everything disconnected, against 335k on D1 beside it.
+// The firmware found the same fault independently: `rxpin` showed the pad
+// held LOW against both internal pulls, and the head's 67,620 driven edges
+// were swallowed. That board then lost its 3.3V rail entirely while out of
+// circuit with 5V present, so the regulator failed too. A dead part, not a
+// design fault and nothing to do with these pins - so the replacement goes
+// back on D0/D1 and the schematic stands unchanged.
 #define PIN_LINK_RX 0
 #define PIN_LINK_TX 1
+
+/**
+ * The link's UART, named once.
+ *
+ * Kept from the brief move to Serial2: every reference in commsHandler goes
+ * through this, so relocating the link is editing this file and nothing else.
+ * Scattered `Serial1` references were the only reason that move touched more
+ * than one place.
+ */
+#define LINK_SERIAL Serial1
 
 // Spare after the review: D4, D6, D7, D8 (D7/D8 = Serial2 if a second UART is
 // ever wanted), plus D14, D17, D20-D23, D27-D37, D41 and the analog-only pins.

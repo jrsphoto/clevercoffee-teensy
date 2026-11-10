@@ -119,6 +119,8 @@ namespace {
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
+        Serial.println("  linkraw [ms]      RAW bytes on the link UART - dead wire vs noise");
+        Serial.println("  rxpin [ms]        probe the link RX pad directly: held? signal arriving?");
         Serial.println("  update            reboot into firmware-update mode (machine must be idle)");
         Serial.println("  led <rrggbb>      force the encoder LED to a colour");
         Serial.println("  encint            watch the encoder INT line while you turn the knob");
@@ -905,6 +907,15 @@ namespace {
         }
         else if (strcasecmp(command, "link") == 0) {
             comms::printStatus();
+        }
+        else if (strcasecmp(command, "rxpin") == 0) {
+            comms::probeRxPin(argument != nullptr ? static_cast<uint32_t>(atol(argument)) : 3000);
+        }
+        else if (strcasecmp(command, "linkraw") == 0) {
+            // Settles "is anything arriving at all", which the counters in
+            // `link` cannot: they all count what the PARSER saw, so they read
+            // zero for a dead wire and for noise alike.
+            comms::sniffRaw(argument != nullptr ? static_cast<uint32_t>(atol(argument)) : 3000);
         }
         else if (strcasecmp(command, "enc") == 0) {
             encoder::printStatus();

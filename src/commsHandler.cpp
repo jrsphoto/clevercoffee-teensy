@@ -55,7 +55,7 @@ namespace comms {
         /**
          * @brief Send one frame.
          *
-         * Writes and returns. Serial1's buffer absorbs it; if the head is absent
+         * Writes and returns. the link UART's buffer absorbs it; if the head is absent
          * the bytes simply go nowhere, which is the intended behaviour - the
          * Teensy never waits on the head for anything.
          */
@@ -67,7 +67,7 @@ namespace comms {
                 return;
             }
 
-            Serial1.write(frame, n);
+            LINK_SERIAL.write(frame, n);
             sent++;
         }
 
@@ -316,7 +316,7 @@ namespace comms {
                 // Tell the head before rebooting, so it can show something
                 // useful rather than just watching telemetry stop.
                 ack("update", true, "rebooting");
-                Serial1.flush();
+                LINK_SERIAL.flush();
 
                 updateMode::requestAndReboot(&reason); // does not return
             }
@@ -476,7 +476,7 @@ namespace comms {
     } // namespace
 
     void init() {
-        Serial1.begin(linkproto::kBaud);
+        LINK_SERIAL.begin(linkproto::kBaud);
 
         // ENLARGE THE RECEIVE BUFFER. Teensy's default is 64 bytes, which is
         // about ONE frame of this protocol.
@@ -494,7 +494,7 @@ namespace comms {
         // shows. 1 kB holds roughly twenty frames, so the loop can fall a long
         // way behind without losing any.
         static uint8_t rxBuffer[1024];
-        Serial1.addMemoryForRead(rxBuffer, sizeof(rxBuffer));
+        LINK_SERIAL.addMemoryForRead(rxBuffer, sizeof(rxBuffer));
 
         sendHello();
 
@@ -504,8 +504,8 @@ namespace comms {
     void loop() {
         // Receive first, so a command issued just before this pass is reflected
         // in the telemetry sent during it.
-        while (Serial1.available() > 0) {
-            if (!parser.feed(static_cast<char>(Serial1.read()))) {
+        while (LINK_SERIAL.available() > 0) {
+            if (!parser.feed(static_cast<char>(LINK_SERIAL.read()))) {
                 continue;
             }
 
@@ -596,8 +596,182 @@ namespace comms {
         return parser.badChecksums();
     }
 
+    void sniffRaw(const uint32_t windowMs) {
+        // Cap it: this consumes link traffic, so it must not be possible to
+        // leave the machine deaf for minutes by typing a large number.
+        const uint32_t window = (windowMs == 0 || windowMs > 15000) ? 3000 : windowMs;
+
+        Serial.print("link raw: listening on the link UART (RX=");
+        Serial.print(PIN_LINK_RX);
+        Serial.print(") for ");
+        Serial.print(window);
+        Serial.println(" ms - frames arriving during this are CONSUMED");
+
+        constexpr size_t kDumpMax = 160;
+        uint8_t dump[kDumpMax];
+        size_t dumped = 0;
+        uint32_t total = 0;
+        uint32_t printableRun = 0;
+
+        const uint32_t start = millis();
+
+        while ((millis() - start) < window) {
+            // The watchdog is 4 s and a useful window is longer than that.
+            safetyWatchdogFeed();
+
+            while (LINK_SERIAL.available() > 0) {
+                const auto b = static_cast<uint8_t>(LINK_SERIAL.read());
+
+                total++;
+
+                if (b >= 0x20 && b < 0x7F) {
+                    printableRun++;
+                }
+
+                if (dumped < kDumpMax) {
+                    dump[dumped++] = b;
+                }
+            }
+        }
+
+        Serial.print("link raw: ");
+        Serial.print(total);
+        Serial.print(" bytes in ");
+        Serial.print(window);
+        Serial.println(" ms");
+
+        if (total == 0) {
+            // The decisive result. Nothing is reaching this pin at all, so the
+            // fault is upstream of the parser: the other board is not
+            // transmitting, or the signal is not getting here. No amount of
+            // protocol work will change it.
+            Serial.println("          NOTHING on the wire. Not a framing problem -");
+            Serial.println("          no bytes are reaching RX1 at all.");
+
+            return;
+        }
+
+        Serial.print("          ");
+        Serial.print(printableRun);
+        Serial.print(" of them printable ASCII (the protocol is ASCII, so a healthy");
+        Serial.println(" link is nearly all printable)");
+
+        Serial.print("          first ");
+        Serial.print(dumped);
+        Serial.println(" bytes:");
+        Serial.print("          ");
+
+        for (size_t i = 0; i < dumped; i++) {
+            const uint8_t b = dump[i];
+
+            if (b == '\n') {
+                Serial.println();
+                Serial.print("          ");
+            }
+            else if (b >= 0x20 && b < 0x7F) {
+                Serial.write(b);
+            }
+            else {
+                Serial.print("<");
+                Serial.print(b, HEX);
+                Serial.print(">");
+            }
+        }
+
+        Serial.println();
+    }
+
+    void probeRxPin(const uint32_t windowMs) {
+        const uint32_t window = (windowMs == 0 || windowMs > 15000) ? 3000 : windowMs;
+
+        Serial.print("rxpin: taking pin ");
+        Serial.print(PIN_LINK_RX);
+        Serial.println(" away from the link UART and looking at it directly");
+
+        LINK_SERIAL.end();
+
+        // 1. Is the pin FREE, or is something holding it?
+        //
+        // With the internal pull-up a free pin reads HIGH; with the pull-down
+        // it reads LOW. A pin that reads the same both ways is being driven
+        // by something - which is exactly the trap BENCH.md records, where a
+        // logic analyser's PWM output left wired to a Teensy pin idled low
+        // and shorted it to ground.
+        pinMode(PIN_LINK_RX, INPUT_PULLUP);
+        delayMicroseconds(500);
+        const int withPullup = digitalReadFast(PIN_LINK_RX);
+
+        pinMode(PIN_LINK_RX, INPUT_PULLDOWN);
+        delayMicroseconds(500);
+        const int withPulldown = digitalReadFast(PIN_LINK_RX);
+
+        Serial.print("rxpin: pull-up reads ");
+        Serial.print(withPullup ? "HIGH" : "LOW");
+        Serial.print(", pull-down reads ");
+        Serial.println(withPulldown ? "HIGH" : "LOW");
+
+        if (withPullup == 1 && withPulldown == 0) {
+            Serial.println("       -> the pin FOLLOWS the pull, so it is FREE.");
+            Serial.println("          Nothing is driving it. An idle UART line should");
+            Serial.println("          be held HIGH by the other board, so a free-floating");
+            Serial.println("          pin means nothing is connected to it.");
+        }
+        else if (withPullup == withPulldown) {
+            Serial.print("       -> HELD ");
+            Serial.print(withPullup ? "HIGH" : "LOW");
+            Serial.println(" against both pulls. Something is driving this pin.");
+            Serial.println("          If that something is not the display head, find it:");
+            Serial.println("          a stray lead shorting the pin will look exactly like");
+            Serial.println("          a dead link.");
+        }
+
+        // 2. Does the other board's signal actually ARRIVE?
+        //
+        // Run the head's `txtest` while this is counting. Edges here means the
+        // wire is good and the fault is in how the UART is set up; no edges
+        // means the signal is not reaching this pad at all.
+        pinMode(PIN_LINK_RX, INPUT_PULLUP);
+
+        Serial.print("rxpin: counting edges for ");
+        Serial.print(window);
+        Serial.println(" ms - run 'txtest' on the HEAD now");
+
+        uint32_t edges = 0;
+        int last = digitalReadFast(PIN_LINK_RX);
+        const uint32_t start = millis();
+
+        while ((millis() - start) < window) {
+            safetyWatchdogFeed();
+
+            for (int i = 0; i < 2000; i++) {
+                const int now = digitalReadFast(PIN_LINK_RX);
+
+                if (now != last) {
+                    last = now;
+                    edges++;
+                }
+            }
+        }
+
+        Serial.print("rxpin: ");
+        Serial.print(edges);
+        Serial.println(" edges seen");
+
+        if (edges == 0) {
+            Serial.println("       -> the signal is NOT reaching this pad. Not firmware.");
+        }
+        else {
+            Serial.println("       -> the wire is GOOD. The signal arrives; the fault is");
+            Serial.println("          in how the UART is configured, not in the wiring.");
+        }
+
+        // Give the pin back.
+        LINK_SERIAL.begin(linkproto::kBaud);
+        Serial.println("rxpin: link UART restored");
+    }
+
     void printStatus() {
-        Serial.print("  link (Serial1, TX1=");
+        Serial.print("  link (LINK_SERIAL, TX1=");
         Serial.print(PIN_LINK_TX);
         Serial.print(" RX1=");
         Serial.print(PIN_LINK_RX);

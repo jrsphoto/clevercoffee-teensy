@@ -97,6 +97,45 @@ namespace {
             machinelink::sendCommand(body.c_str());
             Serial.printf("sent: %s\n", body.c_str());
         }
+        else if (line.startsWith("txtest")) {
+            // Is this board's link TX pin actually driving?
+            //
+            // The Teensy's `linkraw` can say whether ANY bytes reach its RX,
+            // but not why none do. This drives IO44 directly as a GPIO, fast,
+            // which the Teensy's UART sees as framing garbage. So:
+            //
+            //   Teensy sees junk bytes -> the wire is fine and the fault is in
+            //                             how this board's UART is configured
+            //   Teensy sees nothing    -> the signal is not getting there at
+            //                             all; no firmware change will fix it
+            //
+            // Takes the pin away from Serial1 and gives it back afterwards.
+            const int secs = line.substring(6).toInt();
+            const uint32_t window = (secs > 0 && secs < 30) ? secs * 1000U : 8000U;
+
+            Serial.printf("txtest: bit-banging IO%d for %lu ms - run 'linkraw' on the Teensy NOW\n",
+                          display::kPinLinkTx, static_cast<unsigned long>(window));
+
+            Serial1.flush();
+            pinMode(display::kPinLinkTx, OUTPUT);
+
+            const uint32_t start = millis();
+            uint32_t edges = 0;
+
+            while ((millis() - start) < window) {
+                digitalWrite(display::kPinLinkTx, HIGH);
+                delayMicroseconds(87); // ~ one bit at 115200
+                digitalWrite(display::kPinLinkTx, LOW);
+                delayMicroseconds(87);
+                edges += 2;
+            }
+
+            // Hand the pin back to the UART.
+            Serial1.begin(115200, SERIAL_8N1, display::kPinLinkRx, display::kPinLinkTx);
+
+            Serial.printf("txtest: done, %lu edges. Serial1 restored.\n",
+                          static_cast<unsigned long>(edges));
+        }
         else if (line == "net" || line == "wifi") {
             net::printStatus();
         }
@@ -168,6 +207,7 @@ namespace {
         }
         else if (line == "help" || line.isEmpty()) {
             Serial.println("commands: rot <0-3> | inv | bl <0-255> | redraw | cmd <body>");
+            Serial.println("          txtest [s]  bit-bang the link TX pin, to prove the wire");
             Serial.println("          play | vol <0-100> | audio | tone <hz> | stop | amp <0|1> | regs | dpin <6|8>");
             Serial.println("  cmd ping=1        ask the Teensy to reply");
             Serial.println("  cmd flowreset=1   zero the flow accumulator");
