@@ -478,12 +478,10 @@ class Config {
             _configDefs.emplace("cooling_flush.max_time", ConfigDef::forDouble(15.0, 1.0, 60.0));
             _configDefs.emplace("cooling_flush.pump_percent", ConfigDef::forDouble(100.0, 0.0, 100.0));
 
-            // Load shed. Upstream has no 15 A problem to solve, and as of
-            // 2026-11-08 neither does this machine: a 1000 W heater (8.3 A)
-            // plus a DC pump stays well inside a 120 V outlet, so there is
-            // nothing for the interlock to protect. Default OFF; the mechanism
-            // is kept and tested in case the element specification changes.
-            _configDefs.emplace("pump.load_shed", ConfigDef::forBool(false));
+            // NOTE: there is no "pump.load_shed" key. The heater/pump load-shed
+            // interlock was removed entirely on 2026-11-09 - a 1000 W element
+            // (8.3 A) plus a 24 V DC pump never approaches a 120 V outlet's
+            // limit, so it had nothing to protect. See pumpHandler.h.
 
             // Board-specific overrides, applied LAST so they win. See
             // defaultOverrides() for why this exists.

@@ -8,7 +8,6 @@
 
 #include <Arduino.h>
 
-#include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
 #include "safetyHandler.h"
 
@@ -28,14 +27,6 @@ namespace pump {
         uint32_t lastCommandMs = 0;
         uint32_t lastRampMs = 0;
 
-        // DEFAULT OFF since 2026-11-08. The interlock exists to keep a 2000 W
-        // element and the pump off the same 15 A circuit; the machine is now
-        // specified with a 1000 W heater (8.3 A) and a DC pump, which together
-        // never approach the limit. The MECHANISM IS KEPT and still works - it
-        // is one switch away on the Hardware page - because removing a tested
-        // interlock to save a boolean would be a poor trade if the element
-        // specification ever changes again.
-        bool loadShedEnabled = false;
         bool initialised = false;
 
         const char* refusal = "ok";
@@ -91,9 +82,7 @@ namespace pump {
         Serial.print(kPwmFrequencyHz);
         Serial.print(" Hz, ");
         Serial.print(kPwmResolutionBits);
-        Serial.print("-bit, load shed ");
-        Serial.print(loadShedEnabled ? "ON" : "off");
-        Serial.println(", stopped");
+        Serial.println("-bit, stopped");
     }
 
     bool setSpeed(const float percent) {
@@ -115,14 +104,6 @@ namespace pump {
 
         if (safety::isFaulted()) {
             refusal = "fault latched";
-
-            return false;
-        }
-
-        // Load shed. Checked against the heater's COMMANDED state, which is the
-        // only thing knowable - there is no feedback from the SSR.
-        if (loadShedEnabled && outputs::isOn(outputs::Channel::Heater)) {
-            refusal = "heater is on (load shed)";
 
             return false;
         }
@@ -158,17 +139,6 @@ namespace pump {
             stop();
 
             Serial.println("pump: stopped - fault latched");
-
-            return;
-        }
-
-        // Load shed, enforced continuously rather than only at the moment of
-        // the request. The heater can come on after the pump was already
-        // running, and the interlock has to hold then too.
-        if (loadShedEnabled && requested > 0.0f && outputs::isOn(outputs::Channel::Heater)) {
-            stop();
-
-            Serial.println("pump: stopped - heater came on (load shed)");
 
             return;
         }
@@ -225,20 +195,6 @@ namespace pump {
         return applied > 0.0f;
     }
 
-    void setLoadShed(const bool enabled) {
-        loadShedEnabled = enabled;
-
-        if (enabled && isRunning() && outputs::isOn(outputs::Channel::Heater)) {
-            stop();
-
-            Serial.println("pump: stopped - load shed just enabled and the heater is on");
-        }
-    }
-
-    bool loadShed() {
-        return loadShedEnabled;
-    }
-
     const char* lastRefusal() {
         return refusal;
     }
@@ -265,8 +221,6 @@ namespace pump {
         Serial.print(kPwmFrequencyHz);
         Serial.print(" Hz on pin ");
         Serial.print(PIN_PUMP);
-        Serial.print(", load shed ");
-        Serial.print(loadShedEnabled ? "ON" : "off");
 
         if (requested > 0.0f) {
             Serial.print(", command age ");

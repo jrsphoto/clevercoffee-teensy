@@ -33,7 +33,7 @@
  * SAFETY
  *
  * A pump is the actuator most able to make a mess, and unlike the heater it does
- * damage quietly. Four rules, all enforced here rather than trusted to callers:
+ * damage quietly. Three rules, all enforced here rather than trusted to callers:
  *
  *   1. OFF AT BOOT, and off before the firmware runs at all. The 10 k pull-down
  *      on the PMP_PWM net holds IN1 low from power-on, and safetyHardOff() takes
@@ -42,18 +42,22 @@
  *   2. NO SPEED WHILE FAULTED. setSpeed() refuses outright if a fault is
  *      latched, the same way outputs::set() refuses to energise a relay.
  *
- *   3. LOAD SHED. Never run while the heater is on, so the machine cannot
- *      exceed a 15 A circuit. Configurable because the MG304 draws only ~0.7 A
- *      and it may prove unnecessary, but it defaults ON until that is measured
- *      rather than assumed.
- *
- *   4. COMMAND STALENESS. This is the one that is easy to leave out and the one
+ *   3. COMMAND STALENESS. This is the one that is easy to leave out and the one
  *      that matters most. A speed command EXPIRES: if nothing re-commands the
  *      pump within kCommandTimeoutMs, it stops itself. A pump left running
  *      because the control loop died or a state machine wedged is a flood, and
  *      a gear pump dead-heading against a closed valve is also a pump
  *      destroying itself. Requiring the speed to be continuously re-asserted
  *      means a stalled caller stops the pump instead of abandoning it on.
+ *
+ * THERE IS NO LOAD-SHED INTERLOCK, and that is deliberate. An earlier version
+ * refused to run the pump while the heater was on, to keep a 2000 W element and
+ * the pump off the same 15 A circuit. The machine is specified with a 1000 W
+ * element (8.3 A) and a 24 V DC pump drawing well under an amp, so the two
+ * together never approach a 120 V outlet's limit. John's decision, 2026-11-08,
+ * restated 2026-11-09: remove it rather than ship a disabled mechanism. Do not
+ * re-add it without a measured reason - a gate that cannot trip is a gate
+ * nobody will notice breaking.
  *
  * safetyHardOff() stops a PWM-driven pump correctly, which is not obvious and
  * was verified rather than assumed: it calls pinMode(PIN_PUMP, OUTPUT), and on
@@ -130,8 +134,7 @@ namespace pump {
      * @brief Request a pump speed, 0-100%.
      *
      * Advisory in the same sense as everything else here: asking is not
-     * getting. Refused while a fault is latched, and refused above zero while
-     * the heater is on if load shedding is enabled.
+     * getting. Refused while a fault is latched.
      *
      * The command expires - see kCommandTimeoutMs. To hold the pump running,
      * keep calling this.
@@ -151,12 +154,6 @@ namespace pump {
 
     /** @brief Is the pump turning at all? */
     bool isRunning();
-
-    /** @brief Enable or disable the heater/pump load-shed interlock. */
-    void setLoadShed(bool enabled);
-
-    /** @brief Is load shedding enabled? */
-    bool loadShed();
 
     /** @brief Why the last setSpeed() was refused, or "ok". */
     const char* lastRefusal();

@@ -237,12 +237,6 @@ namespace configStore {
             return true;
         }
 
-        bool applyLoadShed(const double v) {
-            pump::setLoadShed(v != 0.0);
-
-            return true;
-        }
-
         bool applyBrewSwitchType(const double v) {
             // Upstream's Switch::Type: MOMENTARY = 0, TOGGLE = 1.
             switches::setMomentary(static_cast<int>(v) == 0);
@@ -443,10 +437,6 @@ namespace configStore {
             {"hardware.encoder.color.ready", 1.0, applyEncoderColorReady},
             {"hardware.encoder.color.active", 1.0, applyEncoderColorActive},
             {"hardware.encoder.color.error", 1.0, applyEncoderColorError},
-
-            // Load shed has no upstream equivalent - upstream has no 15 A
-            // problem to solve.
-            {"pump.load_shed", 1.0, applyLoadShed},
         };
 
         constexpr uint16_t kEntryCount = sizeof(kEntries) / sizeof(kEntries[0]);

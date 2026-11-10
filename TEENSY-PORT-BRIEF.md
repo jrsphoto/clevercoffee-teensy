@@ -71,7 +71,7 @@ Build and test these as first-class features, not add-ons:
 - [ ] Low-water / dry-fire interlock: no heat unless the probe confirms water.
 - [ ] Firmware over-temp cutoff on the boiler RTD (hard limit).
 - [ ] Over-pressure handling on the brew sensor; pump pressure/flow ceiling enforced in manual AND auto.
-- [ ] Load-shed (heater + pump never together) — configurable, default on.
+- [x] ~~Load-shed (heater + pump never together)~~ — **dropped entirely 2026-11-09.** Built, tested, then removed on John's decision: a 1000 W element (8.3 A) and a 24 V DC pump never approach a 120 V outlet's limit, so it had nothing to protect. No code, no config key, no console command. See 9.14.
 - [ ] Autofill anti-flood timeout preserved.
 - [ ] A hardwired brew switch path that works even if the ESP32/UART is dead.
 - [ ] Mechanical over-pressure relief is assumed present (the MG304 dead-heads) but is plumbing, not firmware — the firmware still enforces its own ceiling.
@@ -651,3 +651,43 @@ a small adjustment rather than a retune:
 * loss, from the holding power at setpoint: `k = P_hold / (T - T_room)`
 
 If those come out near 7400 J/K and 1.2 W/K these gains stand as they are.
+
+### 9.14 Load shed is gone, not disabled (2026-11-09)
+
+**Decision:** remove the heater/pump load-shed interlock from the firmware
+entirely. John's instruction, and it supersedes the 2026-11-08 position of
+keeping a disabled mechanism.
+
+**Why it existed.** The original element measured 7 ohms, 2000 W, 17 A - over a
+15 A branch circuit on its own. With a pump on the same circuit the machine
+could not run both, so the firmware refused to.
+
+**Why it does not any more.** The machine is specified to run ONE leg of the
+dual element: about 1000 W, 8.3 A. The pump is a 24 V DC motor off its own
+supply, drawing well under an amp from the mains side. Together they are
+nowhere near a 120 V outlet's limit, so the interlock had nothing to protect.
+
+**Why removing beat keeping it switched off.** The 2026-11-08 argument for
+keeping it was that it was already written and tested, so re-enabling it would
+be one registration rather than a rewrite. Against that: it was two gates in
+the two most safety-critical modules in the firmware, in the `setSpeed()` refusal
+path and in the heater's permit chain, that could never fire. A gate that cannot
+trip is a gate nobody notices breaking, and both of those chains are read by
+anyone trying to work out why the heater or the pump will not run. If the element
+specification ever changes back, the interlock is eleven lines and it is in this
+repository's history.
+
+**What was removed.** `pump::setLoadShed()` and `pump::loadShed()`; the
+`loadShedEnabled` flag and both gates in `pumpHandler.cpp`; the gate in
+`heaterHandler.cpp`'s `gatesAllow()`; the `pumpshed` console command; the
+`pump.load_shed` config key on both sides, including its entry in the Teensy's
+`configStore` table; and the `#include "pumpHandler.h"` in `heaterHandler.cpp`
+and `#include "hardware/outputs.h"` in `pumpHandler.cpp`, both of which existed
+only for load shed. The heater's gate list is now seven, not eight.
+
+**One side effect worth knowing.** `configStore`'s stored values are keyed by
+table index and protected by a hash of every key name, so dropping a key
+invalidates the Teensy's EEPROM cache and the next boot logs that it is using
+compiled defaults. That is the mechanism working as designed, not a fault, and
+the head re-pushes the whole config at the next handshake anyway. The scale
+calibration is NOT affected - it lives in its own EEPROM block at address 64.

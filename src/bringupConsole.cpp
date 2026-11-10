@@ -101,7 +101,6 @@ namespace {
         Serial.println("  profile <1|2>     select a shot profile (encoder: 1 press / 2 presses)");
         Serial.println("  shotset <k> <v>   pre/preamt/soak/brew/grams/ml/maxms");
         Serial.println("  pump <0-100>      pump speed %% (PWM); re-issue to hold, 0 stops");
-        Serial.println("  pumpshed <0|1>    heater/pump load-shed interlock");
         Serial.println("  brew              brew switch: raw level, debounced state, sense");
         Serial.println("  brewsense         flip which level means pressed (JP2 orientation)");
         Serial.println("  brewpull <u|d|x>  pull: internal up / internal down / none (PCB has R9)");
@@ -714,19 +713,6 @@ namespace {
                     Serial.print("pump: REFUSED - ");
                     Serial.println(pump::lastRefusal());
                 }
-            }
-        }
-        else if (strcasecmp(command, "pumpshed") == 0) {
-            if (argument == nullptr) {
-                Serial.print("load shed is ");
-                Serial.println(pump::loadShed() ? "ON" : "off");
-                Serial.println("usage: pumpshed 0 | 1");
-            }
-            else {
-                pump::setLoadShed(atoi(argument) != 0);
-
-                Serial.print("load shed is now ");
-                Serial.println(pump::loadShed() ? "ON - pump will not run with the heater on" : "off");
             }
         }
         else if (strcasecmp(command, "scale") == 0) {

@@ -55,7 +55,6 @@ Because this build lacks an external secondary relay chain, the firmware layer e
 * **Stale Readings Are Not Readings**: A sensor value that has stopped updating is treated as absent rather than as the last good value, and staleness is measured from the last successful read so a dead sensor cannot refresh its own freshness.
 * **Dry-Fire Interlock**: Heater power is inhibited unless the boiler water level probe confirms water. That probe circuit is not built yet, so the firmware currently refuses to heat at all. This is correct behavior, not a defect.
 * **Output Stage Verification**: A monitor pin on the heater channel samples the ULN2003 output, so the duty actually reaching the driver can be measured against what the PID requested. This checks the whole path from PID through the ISR and the Teensy pin to the ULN output.
-* **Load Shedding**: A software interlock prevents the heater and pump from running simultaneously, keeping the machine within a 120 V / 15 A branch circuit.
 
 An inline thermal fuse serves as the final non-resettable physical backstop inside the chassis. The firmware neither knows about it nor relies on it.
 

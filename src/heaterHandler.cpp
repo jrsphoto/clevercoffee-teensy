@@ -11,7 +11,6 @@
 
 #include "hardware/outputs.h"
 #include "hardware/pinmapping.h"
-#include "pumpHandler.h"
 #include "safetyHandler.h"
 #include "tempHandler.h"
 
@@ -185,14 +184,6 @@ namespace heater {
             // must mean no. See the header - do not default this to true.
             if (!benchOverrideOn) {
                 gateReason = "no water-level probe (dry-fire interlock)";
-
-                return false;
-            }
-
-            // Load shed. The pump handler enforces the same rule from its side;
-            // both directions are checked so whichever starts second loses.
-            if (pump::isRunning() && pump::loadShed()) {
-                gateReason = "pump running (load shed)";
 
                 return false;
             }

@@ -45,8 +45,11 @@
  *   4. the boiler RTD is healthy and its reading is fresh
  *   5. the boiler is below the over-temperature limit
  *   6. WATER IS PRESENT - the dry-fire interlock
- *   7. load shed: the pump is not running
- *   8. the permit is fresh (ISR-side, as above)
+ *   7. the permit is fresh (ISR-side, as above)
+ *
+ * There is NO load-shed gate. It was removed 2026-11-09 on John's decision: a
+ * 1000 W element (8.3 A) and a 24 V DC pump together stay well inside a 120 V
+ * outlet, so the interlock had nothing to protect. See pumpHandler.h.
  *
  * ON GATE 6, WHICH IS CURRENTLY ALWAYS FALSE
  *

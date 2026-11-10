@@ -425,15 +425,14 @@ void ParameterRegistry::initialize(Config& config) {
     // Everything below is real, settable, and goes through the controller's
     // own validating setter.
 
-    // NO LOAD SHED SETTING. John's decision, 2026-11-08: the machine is
-    // specified with a 1000 W heater (8.3 A) and a DC pump, so it never
-    // approaches a 120 V outlet's limit and the interlock has nothing to
-    // protect. The setting is useless, so it is not on any page.
-    //
-    // THE MECHANISM IS STILL THERE and still works - pump::setLoadShed(), the
-    // `loadshed` console command, and the gate in pumpHandler.cpp - defaulted
-    // off. Kept because it is written and tested, and re-exposing it if the
-    // element specification changes is one registration rather than a rewrite.
+    // NO LOAD SHED SETTING, AND NO LOAD SHED MECHANISM. John's decision,
+    // 2026-11-08 and again 2026-11-09: the machine is specified with a 1000 W
+    // element (8.3 A) and a 24 V DC pump, so it never approaches a 120 V
+    // outlet's limit and the interlock had nothing to protect. It is now gone
+    // from the controller firmware as well - there is no pump::setLoadShed(),
+    // no `pumpshed` console command and no gate in pumpHandler.cpp. See
+    // pumpHandler.h for the reasoning. Do not re-add it without a measured
+    // reason.
     //
     // This leaves the Relays section with nothing in it, so it does not appear
     // at all: the front end only renders sections that have parameters.
