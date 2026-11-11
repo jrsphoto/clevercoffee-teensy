@@ -73,6 +73,7 @@ Build and test these as first-class features, not add-ons:
 - [ ] Over-pressure handling on the brew sensor; pump pressure/flow ceiling enforced in manual AND auto.
 - [x] ~~Load-shed (heater + pump never together)~~ — **dropped entirely 2026-11-09.** Built, tested, then removed on John's decision: a 1000 W element (8.3 A) and a 24 V DC pump never approach a 120 V outlet's limit, so it had nothing to protect. No code, no config key, no console command. See 9.14.
 - [ ] Autofill anti-flood timeout preserved.
+- [ ] **Autofill must not run during a shot.** On this machine the boiler fill is fed from the PUMP OUTPUT (manual §10), so a cold-inlet flow meter counts fill water as delivered volume and a shot would stop short. Required for brew-by-volume to be truthful, not just for pressure stability. See 9.17.
 - [ ] A hardwired brew switch path that works even if the ESP32/UART is dead.
 - [ ] Mechanical over-pressure relief is assumed present (the MG304 dead-heads) but is plumbing, not firmware — the firmware still enforces its own ceiling.
 
@@ -691,6 +692,112 @@ invalidates the Teensy's EEPROM cache and the next boot logs that it is using
 compiled defaults. That is the mechanism working as designed, not a fault, and
 the head re-pushes the whole config at the next handshake anyway. The scale
 calibration is NOT affected - it lives in its own EEPROM block at address 64.
+
+### 9.17 Flow sensing: which meter, where it can go, and the autofill coupling (2026-11-10)
+
+Raised by John after reading the DM60 data sheet. Nothing here is built yet;
+it is recorded because the reasoning is not recoverable from the parts list.
+
+#### The DM60 is the wrong shape for this machine, and still probably the right choice
+
+Its data sheet is explicit: "specially designed for coffee machines that use
+**vibratory pumps**. The device is installed between the water tank and the
+vibration pump (**on the suction side**)." This machine is direct-plumbed with
+a gear pump, so that topology does not exist here. Three limits follow:
+
+| | DM60 Nano | this machine |
+|---|---|---|
+| pressure | -1 to 5 bar | 8-9 bar after the pump |
+| temperature | 0 to 65 C | 90 C+ downstream of the exchanger |
+| linear flow | 0.05 to 0.40 l/min | extraction 1-2.5 ml/s (in range); flush and autofill exceed it |
+
+So it can only live on the **cold inlet, downstream of the pressure
+regulator**. Hose must be clamped (the sheet warns above 0.5 bar), it must be
+kept away from the pump motor's magnetic field, and the sub-10-micron filter
+stops being optional because the nozzle is 1.1 mm.
+
+**Why keep it anyway: RESOLUTION, and that is the whole argument.**
+
+* DM60: **49,162 pulses/litre** - about 49 per millilitre. At 2 ml/s that is
+  ~98 Hz, ten pulses per tenth of a second. Enough to derive an instantaneous
+  flow rate and close a loop on it.
+* A typical Gicar volumetric meter: **roughly 2,000 pulses/litre**, two per
+  millilitre, ~4 Hz at the same flow. Fine for counting out a dose to within
+  half a millilitre. Useless for profiling - the loop would chase
+  quantisation noise.
+
+The two are not alternatives. The Gicar doses; the DM60 doses AND profiles.
+And the trade is structural rather than bad luck: resolution comes from a tiny
+fast turbine behind a 1.1 mm nozzle, which is inherently a small-bore,
+low-pressure, plastic design. Brass meters rated for mains pressure have
+bigger, slower turbines and far fewer pulses.
+
+**The cost of choosing it:** the inlet pressure regulator becomes REQUIRED
+EQUIPMENT, not a nicety. A polypropylene body rated to 5 bar sits on a mains
+line that in a US house can reach 5.5 bar. A drifting regulator or a
+water-hammer spike puts it over its limit inside the cabinet.
+
+**The machine's original Gicar is in hand** (the one with the pulse LED - the
+manual describes exactly that: "the flashing of the LED indicates that the
+electrical impulse has been sent"). Its pulse rate is NOT in either manual and
+would have to be measured with `flowcal` gravimetrically. Worth testing dry as
+a signal-chain check: wire it up and spin the turbine, and the counter, the
+pull-up and the interrupt path are all proven before water exists. **Do not
+blow air through the DM60** - its sheet says that destroys it. The brass Gicar
+does not care.
+
+Firmware is sensor-agnostic: the rate is a config value (49162 today, the
+datasheet figure) and `flowcal` recalibrates it. Swapping meters is a number.
+
+#### THE AUTOFILL COUPLING, which is the part that is easy to miss
+
+From the machine's own manual, section 10: the pump raises pressure "for the
+delivery of the coffee **and for automatic filling of the boiler**".
+
+**So the boiler fill is fed from the PUMP OUTPUT, not from the inlet.** The
+split is after the pump. A meter on the cold inlet therefore measures
+everything the pump moves - brew water and boiler fill water together. There
+is no tee to get past.
+
+**Consequence, and it is a firmware rule rather than a plumbing one:**
+
+> **AUTOFILL MUST NOT RUN DURING A SHOT.**
+
+Otherwise the boiler can start filling mid-extraction and the meter counts it
+as delivered volume, stopping the shot early on a volume target - and the same
+error corrupts any flow-derived weight estimate (9.1) and any flow profiling
+loop (9.8).
+
+This is good practice anyway: filling the boiler mid-shot robs pressure from
+the group. But it moves from hygiene to REQUIRED, because without it
+brew-by-volume reports a number that is wrong rather than merely imprecise.
+
+The autofill handler is not written yet, so this is a constraint to design in
+rather than a bug to retrofit. Note it interacts with the anti-flood timeout
+already on the safety checklist: a fill deferred until the shot ends must not
+have its timeout running while it waits.
+
+### 9.16 WANTED, NOT BUILT: show how long a running operation has left
+
+John's, 2026-11-10, after a backflush ran for 75 seconds and he had no way to
+know whether it was stuck. Explicitly not urgent.
+
+**The gap.** The panel shows STOP while something runs, and nothing else. No
+elapsed time, no remaining time, no progress. That is the same omission three
+times over - a shot (60 s backstop), a manual flush (20 s cap) and a backflush
+(5 cycles x 15 s = 75 s). A backflush is the worst of them because it visibly
+stops and starts between cycles, so a person reasonably wonders whether it has
+finished or jammed.
+
+**Shape, if it gets built.** A countdown is the obvious thing, but for
+backflush the cycle matters as much as the clock: "cycle 2 of 5, 48 s left"
+tells you it is working, where "48" alone does not. A shot wants elapsed
+rather than remaining, because the 60 s figure is a SAFETY BACKSTOP and not a
+target - showing a shot counting down to it would present a limit as a plan.
+
+**Check before writing it** whether the controller already reports what is
+needed. The shot timer exists; cycle number and stage deadlines may not cross
+the link yet, and adding them is a telemetry change, not a UI one.
 
 ### 9.15 The head's UI moves to LVGL, edited in SquareLine (2026-11-10)
 
