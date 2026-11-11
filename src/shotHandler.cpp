@@ -183,6 +183,22 @@ namespace shot {
         BackflushState backflush = BackflushState::Idle;
 
         bool backflushIsArmed = false;
+
+        /**
+         * When the arming happened, and how long it lasts.
+         *
+         * Arming EXPIRES. The same reasoning as every other expiry in this
+         * firmware: the safe state is what you get by doing nothing. Armed
+         * means a short press on the brew switch drives the pump into a
+         * blind basket instead of brewing, and leaving that true indefinitely
+         * because somebody armed it and walked away is exactly the trap the
+         * two-step arming was meant to avoid.
+         *
+         * 30 s is deliberate: long enough to arm at the panel and walk to the
+         * group, short enough that it cannot be forgotten about.
+         */
+        uint32_t backflushArmedAtMs = 0;
+        constexpr uint32_t kBackflushArmedTimeoutMs = 30000;
         uint8_t backflushCycles = kDefaultBackflushCycles;
         uint8_t backflushCycleNow = 1;
         uint32_t backflushFillMs = kDefaultBackflushFillMs;
@@ -523,6 +539,17 @@ namespace shot {
     }
 
     void loop() {
+        // Let the arming lapse. Checked before anything else so a press
+        // arriving in the same pass as the expiry is treated as unarmed.
+        if (backflushIsArmed && !isBackflushing() &&
+            (millis() - backflushArmedAtMs) > kBackflushArmedTimeoutMs) {
+            backflushIsArmed = false;
+
+            Serial.print("backflush: arming EXPIRED after ");
+            Serial.print(kBackflushArmedTimeoutMs / 1000);
+            Serial.println(" s - disarmed, the brew switch brews again");
+        }
+
         // --- Brew switch, mirroring upstream's brew() ------------------
         //
         // Three behaviours taken from upstream, all of which matter:
@@ -1086,6 +1113,7 @@ namespace shot {
 
     void setBackflushArmed(const bool armed) {
         backflushIsArmed = armed;
+        backflushArmedAtMs = millis();
 
         if (!armed) {
             // loop() also catches this, but doing it here means disarming
@@ -1099,8 +1127,10 @@ namespace shot {
             return;
         }
 
-        Serial.println("backflush: ARMED - a short press on the brew switch now backflushes,");
-        Serial.println("           it does NOT brew. 'backflush off' to disarm.");
+        Serial.print("backflush: ARMED for ");
+        Serial.print(kBackflushArmedTimeoutMs / 1000);
+        Serial.println(" s - a short press on the brew switch now backflushes,");
+        Serial.println("           it does NOT brew. 'backflush off' to disarm sooner.");
         Serial.println();
         Serial.println("  WARNING, and the firmware cannot check any of this:");
         Serial.println("  This drives the pump against a blind basket. The MG304 is a gear pump");
@@ -1173,6 +1203,20 @@ namespace shot {
         backflush = BackflushState::Idle;
         backflushCycleNow = 1;
         backflushStopReason = why;
+
+        // A FINISHED BACKFLUSH DISARMS ITSELF.
+        //
+        // It did not, and that was wrong in both directions: the brew switch
+        // kept backflushing instead of brewing until somebody noticed, and
+        // the panel's tile had no way back - first tap arms, second runs, and
+        // there was no third state that disarmed. John found both on the
+        // bench 2026-11-10.
+        //
+        // Disarms on ANY end, not just a completed run, so there is one rule
+        // rather than an exception to remember. Re-arming after an abort is
+        // two taps; a machine left silently armed is the thing that drives a
+        // gear pump into a blind basket when somebody expected a shot.
+        backflushIsArmed = false;
 
         // A press is only consumed once. Upstream advances the switch to
         // WaitForRelease when a backflush finishes, and that matters here: a
