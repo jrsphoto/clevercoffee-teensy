@@ -126,7 +126,7 @@ namespace heater {
                 delayMicroseconds(2);
 
                 // Output is inverted: driven high means the output sinks low.
-                if ((digitalReadFast(kPinUlnOut1Monitor) == LOW) != on) {
+                if ((digitalReadFast(kPinHtrRlMonitor) == LOW) != on) {
                     ++isrUlnMismatches;
                 }
             }
@@ -397,7 +397,7 @@ namespace heater {
     } // namespace
 
     void startOutputDutyMeasurement(const uint32_t seconds) {
-        pinMode(kPinUlnOut1Monitor, INPUT_PULLUP);
+        pinMode(kPinHtrRlMonitor, INPUT_PULLUP);
         ulnMonitorArmed = true;
 
         measuring = true;
@@ -468,7 +468,7 @@ namespace heater {
     }
 
     bool testOutputStage() {
-        pinMode(kPinUlnOut1Monitor, INPUT_PULLUP);
+        pinMode(kPinHtrRlMonitor, INPUT_PULLUP);
 
         // Stop the window timer briefly so the ISR cannot fight this test for
         // the pin. Restarted before returning, whatever the outcome.
@@ -476,29 +476,29 @@ namespace heater {
 
         Serial.print("heater: testing the ULN2003 output stage (pin ");
         Serial.print(PIN_HEATER);
-        Serial.print(" -> I1, O1 -> pin ");
-        Serial.print(kPinUlnOut1Monitor);
+        Serial.print(" drives net HEATER -> ULN -> net HTR_RL -> pin ");
+        Serial.print(kPinHtrRlMonitor);
         Serial.println(")");
 
         // Input LOW: the Darlington is off, the output floats, and the
         // internal pull-up should bring the monitor pin high.
         driveHeater(false);
         delayMicroseconds(500);
-        const int offState = digitalRead(kPinUlnOut1Monitor);
+        const int offState = digitalRead(kPinHtrRlMonitor);
 
         // Input HIGH: the Darlington conducts and should pull the output to
         // near ground against the pull-up.
         driveHeater(true);
         delayMicroseconds(500);
-        const int onState = digitalRead(kPinUlnOut1Monitor);
+        const int onState = digitalRead(kPinHtrRlMonitor);
 
         driveHeater(false);
 
         windowTimer.begin(onTick, kTickMs * 1000);
 
-        Serial.print("  heater pin LOW  -> O1 reads ");
+        Serial.print("  HEATER low   -> HTR_RL reads ");
         Serial.println(offState == HIGH ? "HIGH (floating, pulled up)  as expected" : "LOW   <-- WRONG");
-        Serial.print("  heater pin HIGH -> O1 reads ");
+        Serial.print("  HEATER high  -> HTR_RL reads ");
         Serial.println(onState == LOW ? "LOW  (sinking)              as expected" : "HIGH  <-- WRONG");
 
         const bool pass = (offState == HIGH) && (onState == LOW);
@@ -512,12 +512,16 @@ namespace heater {
         Serial.println("  *** FAIL - the ULN2003 is not switching as expected. ***");
 
         if (offState == LOW && onState == LOW) {
-            Serial.println("  Output stuck low: check the chip has GND on pin 8, and that");
-            Serial.println("  nothing else is holding O1 down.");
+            Serial.println("  HTR_RL stuck low: check the chip has GND on pin 8, and that");
+            Serial.println("  nothing else is holding that net down.");
         }
         else if (offState == HIGH && onState == HIGH) {
-            Serial.println("  Output never sinks: the input is probably not reaching I1, or");
-            Serial.println("  the chip is absent or dead. Check pin 2 to ULN pin 1.");
+            Serial.println("  HTR_RL never sinks. In order of likelihood:");
+            Serial.println("   1. the monitor jumper is not fitted - an unconnected pin reads");
+            Serial.println("      exactly like this. It must land on net HTR_RL.");
+            Serial.println("   2. net HEATER is not reaching the ULN input.");
+            Serial.println("   3. the chip has no supply or ground, or is dead.");
+            Serial.println("  HTR_RL is the heater's output. GRP_RL and FILL_RL are the others.");
         }
 
         return false;

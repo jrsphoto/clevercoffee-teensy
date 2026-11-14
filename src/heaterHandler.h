@@ -198,8 +198,22 @@ namespace heater {
     void printStatus();
 
     /**
-     * Bench pin watching ULN2003 output 1, so the firmware can verify its own
-     * output stage rather than assume it.
+     * Bench pin watching the heater's ULN2003 output, so the firmware can
+     * verify its own output stage rather than assume it.
+     *
+     * **WIRE THIS TO THE `HTR_RL` NET.**
+     *
+     * Named by NET, not by channel number, deliberately. The Teensy drives
+     * `HEATER` into the ULN and the ULN drives `HTR_RL` out to the heater
+     * SSR; those two are the same Darlington. Verified from the schematic
+     * (`relays.kicad_sch`): inputs sit at x~102.87 and outputs at x~142.24,
+     * and `HEATER` / `HTR_RL` share row y=161.29. `FILL` / `FILL_RL` and
+     * `GROUP` / `GRP_RL` are the other two.
+     *
+     * This was previously described by channel number and got written down
+     * two different ways within a few lines - "output 1" and "input 3" - for
+     * the same connection. Channel numbers are ambiguous and the nets are
+     * not. Do not reintroduce them here.
      *
      * The ULN output is open collector: it sinks when its input is high and
      * floats otherwise. Configured INPUT_PULLUP, this pin supplies the load
@@ -207,11 +221,17 @@ namespace heater {
      * with no external components at all - the inverse of the heater pin is
      * what a working buffer produces.
      *
-     * ONLY VALID WHILE NOTHING ELSE IS ON O1. If that output is ever pulled up
-     * to the 24 V rail, as it would be driving a real SSR, this pin must be
-     * disconnected first - 24 V into a 3.3 V input destroys it.
+     * An UNCONNECTED pin also reads a clean high both ways, which looks
+     * identical to "output never sinks". If the test reports that, check the
+     * jumper exists before suspecting the chip. Measured 2026-11-12 with the
+     * ULN off the board: exactly that reading, chip entirely innocent.
+     *
+     * ONLY VALID WHILE NOTHING ELSE IS ON `HTR_RL`. Once that net drives a
+     * real SSR it is pulled up to the SSR's control rail, and this pin must
+     * be disconnected first - 24 V into a 3.3 V input destroys it, and a
+     * Teensy 4.1 is not 5 V tolerant either.
      */
-    constexpr int kPinUlnOut1Monitor = 14;
+    constexpr int kPinHtrRlMonitor = 14;
 
     /**
      * @brief Verify the ULN2003 actually inverts, by driving it and reading back.
