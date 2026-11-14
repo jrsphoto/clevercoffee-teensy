@@ -58,6 +58,10 @@ FLAGS=(
     -O1 -g0 -w
     -DLV_CONF_INCLUDE_SIMPLE
     -I "$LVGL"
+    # SquareLine's generated code includes LVGL as "lvgl/lvgl.h", so the folder
+    # ABOVE the library has to be on the path too. Same flag the firmware build
+    # needed for the same reason.
+    -I "$LVGL/.."
     -I "$HERE"
     -I "$HEAD"
 )
@@ -75,12 +79,33 @@ find "$LVGL/src" -name '*.c' -print0 |
         fi
     ' _ {} "$LIBOBJ" "${FLAGS[@]}"
 
-echo "building the UI and the preview"
+# Which UI to draw, decided the same way the firmware decides it: if a
+# SquareLine export is sitting in src-esp32s3/ui, that IS the UI, and
+# uiScreens.cpp compiles to nothing. So the preview follows suit and you are
+# always looking at whatever the panel would run.
+UIOBJ=()
 
-g++ "${FLAGS[@]}" -std=gnu++17 -c "$HEAD/uiScreens.cpp" -o "$OBJ/uiScreens.o"
+if [ -f "$HEAD/ui/ui.h" ]; then
+    echo "building the UI from the SquareLine export in src-esp32s3/ui"
+
+    i=0
+    while IFS= read -r src; do
+        g++ "${FLAGS[@]}" -I "$LVGL/.." -x c -std=gnu11 -c "$src" -o "$OBJ/ui$i.o"
+        UIOBJ+=("$OBJ/ui$i.o")
+        i=$((i + 1))
+    done < <(find "$HEAD/ui" -name '*.c')
+else
+    echo "building the UI from uiScreens.cpp (no export present)"
+
+    g++ "${FLAGS[@]}" -std=gnu++17 -c "$HEAD/uiScreens.cpp" -o "$OBJ/uiScreens.o"
+    UIOBJ+=("$OBJ/uiScreens.o")
+fi
+
+echo "building the preview"
+
 g++ "${FLAGS[@]}" -std=gnu++17 -c "$HERE/preview.cpp" -o "$OBJ/preview.o"
 
-g++ "$OBJ/preview.o" "$OBJ/uiScreens.o" "$LIBOBJ"/*.o -o "$HERE/build/preview" -lm
+g++ "$OBJ/preview.o" "${UIOBJ[@]}" "$LIBOBJ"/*.o -o "$HERE/build/preview" -lm
 
 cd "$HERE"
 ./build/preview

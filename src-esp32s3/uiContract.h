@@ -123,13 +123,33 @@ extern "C" {
      *   MANUAL     FLUSH     BACKFLUSH
      *   SCALE      STATUS    SETTINGS
      *
-     * An array rather than nine names because the firmware iterates them and
-     * attaches one handler with the index as its argument.
+     * NINE SEPARATE NAMES, not an array. SquareLine exports one global per
+     * widget and has no way to express an array, so these are declared the way
+     * an export declares them. `uiBind::begin()` gathers them into a local
+     * array, which is the only place that wants one.
+     *
+     * HomeTileSubN is the sub-label inside tile N. BACKFLUSH's changes to say
+     * ARMED.
      */
-    extern lv_obj_t* ui_HomeTiles[9];
+    extern lv_obj_t* ui_HomeTile0;
+    extern lv_obj_t* ui_HomeTile1;
+    extern lv_obj_t* ui_HomeTile2;
+    extern lv_obj_t* ui_HomeTile3;
+    extern lv_obj_t* ui_HomeTile4;
+    extern lv_obj_t* ui_HomeTile5;
+    extern lv_obj_t* ui_HomeTile6;
+    extern lv_obj_t* ui_HomeTile7;
+    extern lv_obj_t* ui_HomeTile8;
 
-    /** The sub-label inside each tile. BACKFLUSH's changes to say ARMED. */
-    extern lv_obj_t* ui_HomeTileSubs[9];
+    extern lv_obj_t* ui_HomeTileSub0;
+    extern lv_obj_t* ui_HomeTileSub1;
+    extern lv_obj_t* ui_HomeTileSub2;
+    extern lv_obj_t* ui_HomeTileSub3;
+    extern lv_obj_t* ui_HomeTileSub4;
+    extern lv_obj_t* ui_HomeTileSub5;
+    extern lv_obj_t* ui_HomeTileSub6;
+    extern lv_obj_t* ui_HomeTileSub7;
+    extern lv_obj_t* ui_HomeTileSub8;
 
     /** Label. The footer strip: boiler temperature and machine state. */
     extern lv_obj_t* ui_HomeFooter;

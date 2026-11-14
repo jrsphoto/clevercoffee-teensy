@@ -54,8 +54,27 @@ extern "C" {
     lv_obj_t* ui_BoilerChart = nullptr;
 
     lv_obj_t* ui_ScreenHome = nullptr;
-    lv_obj_t* ui_HomeTiles[9] = {};
-    lv_obj_t* ui_HomeTileSubs[9] = {};
+
+    // Nine separate globals, named exactly as a SquareLine export names them.
+    lv_obj_t* ui_HomeTile0 = nullptr;
+    lv_obj_t* ui_HomeTile1 = nullptr;
+    lv_obj_t* ui_HomeTile2 = nullptr;
+    lv_obj_t* ui_HomeTile3 = nullptr;
+    lv_obj_t* ui_HomeTile4 = nullptr;
+    lv_obj_t* ui_HomeTile5 = nullptr;
+    lv_obj_t* ui_HomeTile6 = nullptr;
+    lv_obj_t* ui_HomeTile7 = nullptr;
+    lv_obj_t* ui_HomeTile8 = nullptr;
+
+    lv_obj_t* ui_HomeTileSub0 = nullptr;
+    lv_obj_t* ui_HomeTileSub1 = nullptr;
+    lv_obj_t* ui_HomeTileSub2 = nullptr;
+    lv_obj_t* ui_HomeTileSub3 = nullptr;
+    lv_obj_t* ui_HomeTileSub4 = nullptr;
+    lv_obj_t* ui_HomeTileSub5 = nullptr;
+    lv_obj_t* ui_HomeTileSub6 = nullptr;
+    lv_obj_t* ui_HomeTileSub7 = nullptr;
+    lv_obj_t* ui_HomeTileSub8 = nullptr;
     lv_obj_t* ui_HomeFooter = nullptr;
     lv_obj_t* ui_StopButton = nullptr;
     lv_obj_t* ui_ScreenSetup = nullptr;
@@ -239,8 +258,18 @@ namespace {
         lv_obj_set_style_text_color(sub, kLabel, 0);
         lv_obj_align(sub, LV_ALIGN_CENTER, 0, 12);
 
-        ui_HomeTiles[i] = btn;
-        ui_HomeTileSubs[i] = sub;
+        // The nine globals, addressed by index. A table of their addresses,
+        // because they are separate variables rather than an array - see the
+        // note in uiContract.h about why.
+        lv_obj_t** const tiles[9] = {&ui_HomeTile0, &ui_HomeTile1, &ui_HomeTile2,
+                                     &ui_HomeTile3, &ui_HomeTile4, &ui_HomeTile5,
+                                     &ui_HomeTile6, &ui_HomeTile7, &ui_HomeTile8};
+        lv_obj_t** const subs[9] = {&ui_HomeTileSub0, &ui_HomeTileSub1, &ui_HomeTileSub2,
+                                    &ui_HomeTileSub3, &ui_HomeTileSub4, &ui_HomeTileSub5,
+                                    &ui_HomeTileSub6, &ui_HomeTileSub7, &ui_HomeTileSub8};
+
+        *tiles[i] = btn;
+        *subs[i] = sub;
     }
 
     void buildHomeScreen() {

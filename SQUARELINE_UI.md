@@ -16,14 +16,21 @@ Read `TEENSY-PORT-BRIEF.md` 9.15 for why the UI moved to LVGL at all.
 | `ui-design/assets/` | image assets. SquareLine picks up PNGs dropped here. |
 | `ui-design/icons/` | the original 40x40 icon artwork, and a contact sheet |
 | `ui-design/*.backup`, `.prelabels`, `.preicon` | snapshots taken before each generation pass |
-| `src-esp32s3/ui/` | where an export lands. **Empty today.** |
-| `src-esp32s3/uiScreens.cpp` | the screens in code. What the panel actually runs right now. |
+| `ui-design/exports/` | John's export, taken from SquareLine on 2026-11-13 |
+| `src-esp32s3/ui/` | that export, copied in. **THIS IS WHAT THE PANEL RUNS.** |
+| `src-esp32s3/uiScreens.cpp` | the hand-written screens. Still present, compiles to NOTHING while an export exists - see the `#if` in `uiContract.h` |
 | `src-esp32s3/uiContract.h` | the widget names both halves agree on |
 | `src-esp32s3/uiBind.cpp` | telemetry in, events out, every honesty rule |
 
-**Nothing in the SquareLine project is wired to the firmware yet.** The panel
-runs `uiScreens.cpp`. The project can be edited freely without breaking the
-machine.
+**The SquareLine export IS the UI now, since 2026-11-13.** John exported it
+("UI files only") to `ui-design/exports/`, it was copied to `src-esp32s3/ui/`,
+and the panel was flashed and confirmed working. `uiScreens.cpp` switched
+itself off the moment that folder appeared, because `uiContract.h` tests for
+it.
+
+**So the project is no longer a copy of the UI - editing it changes the
+machine's screens.** To put a change on the panel: export over
+`ui-design/exports/`, copy it to `src-esp32s3/ui/`, build and flash.
 
 ---
 
@@ -235,20 +242,34 @@ trial: `HomeTileIcon4` on the FLUSH tile, `TOP_MID` at `[0,56]`, montserrat_20.
 
 ---
 
-## WHAT FIRMWARE MUST DO WHEN AN EXPORT LANDS
+## WHAT FIRMWARE DID WHEN THE EXPORT LANDED
 
-Nothing is wired yet. Three jobs, none of them John's:
+All three jobs are done. Kept here because a future export walks the same path.
 
-**1. The tile arrays have to go.** `uiContract.h` declares
-`ui_HomeTiles[9]` and `ui_HomeTileSubs[9]`. **SquareLine exports individual
-globals, not arrays** - it will produce `ui_HomeTile0` .. `ui_HomeTile8` and
-`ui_HomeTileSub0` .. `8`, which is how they are named in the project. Change
-the contract to declare the nine individually and have `uiBind::begin()`
-gather them into a local array.
+**1. The tile arrays are gone.** `uiContract.h` used to declare
+`ui_HomeTiles[9]` and `ui_HomeTileSubs[9]`, and **SquareLine exports
+individual globals, with no way to express an array**. The contract now
+declares `ui_HomeTile0`..`8` and `ui_HomeTileSub0`..`8`, and `uiBind::begin()`
+calls `gatherTiles()` to collect them into two local tables, which is the only
+place that wanted an array.
 
-**2. `uiScreens.cpp` drops out by itself** - `uiContract.h` already does
-`#if __has_include("ui/ui.h")`, so the hand-written definitions disappear the
-moment an export exists. Remove it from `build_src_filter` at the same time.
+**2. `uiScreens.cpp` switched itself off**, exactly as designed - its whole
+body sits inside `#if UI_EXPORT_PRESENT == 0`, so it now compiles to an empty
+file. It did NOT need removing from `build_src_filter`. It is left in place as
+the way back: delete `src-esp32s3/ui/` and the hand-written screens build
+again.
+
+**3. Two things the export does differently, both handled in `uiBind.cpp`:**
+
+* **It loads the READOUT first.** SquareLine's `ui_init()` ends by loading
+  whichever screen is first in the project. The grid is meant to be the root
+  page, so `uiBind::begin()` now loads it explicitly. Navigation is that
+  file's job anyway.
+* **It includes LVGL as `"lvgl/lvgl.h"`**, which PlatformIO does not resolve,
+  because it puts each library's own folder on the include path rather than the
+  folder above it. `-I .pio/libdeps/esp32s3` is in `platformio.ini` so the
+  export compiles **unchanged** - it is regenerated wholesale, so a hand-edited
+  include would have to be redone after every export.
 
 **3. The healthy-boiler colour must become `#278ADE`.** DONE 2026-11-13, in
 firmware, without waiting for an export - the running UI was still the old

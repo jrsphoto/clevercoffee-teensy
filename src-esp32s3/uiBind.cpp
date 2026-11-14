@@ -67,6 +67,31 @@ namespace uibind {
         lv_chart_series_t* traceSeries = nullptr;
         lv_chart_series_t* setpointSeries = nullptr;
 
+        /**
+         * The nine tiles and their sub-labels, gathered once.
+         *
+         * The widgets are nine separate globals because that is how SquareLine
+         * exports them - one global per widget, no arrays. Everything here
+         * wants to address them by index, so they are collected in begin() and
+         * used from these two tables afterwards.
+         */
+        lv_obj_t* tiles[9] = {};
+        lv_obj_t* tileSubs[9] = {};
+
+        void gatherTiles() {
+            lv_obj_t* const t[9] = {ui_HomeTile0, ui_HomeTile1, ui_HomeTile2,
+                                    ui_HomeTile3, ui_HomeTile4, ui_HomeTile5,
+                                    ui_HomeTile6, ui_HomeTile7, ui_HomeTile8};
+            lv_obj_t* const s[9] = {ui_HomeTileSub0, ui_HomeTileSub1, ui_HomeTileSub2,
+                                    ui_HomeTileSub3, ui_HomeTileSub4, ui_HomeTileSub5,
+                                    ui_HomeTileSub6, ui_HomeTileSub7, ui_HomeTileSub8};
+
+            for (int i = 0; i < 9; i++) {
+                tiles[i] = t[i];
+                tileSubs[i] = s[i];
+            }
+        }
+
         uint32_t lastSampleMs = 0;
 
         /** @brief Set a label's text, skipping a null widget. */
@@ -586,9 +611,11 @@ namespace uibind {
         // page compared touch coordinates against a table of rectangles that
         // had to be kept in step with the drawing; an LVGL button knows its
         // own area, so that table and its whole class of bug are gone.
+        gatherTiles();
+
         for (int i = 0; i < 9; i++) {
-            if (ui_HomeTiles[i] != nullptr) {
-                lv_obj_add_event_cb(ui_HomeTiles[i], tileClicked, LV_EVENT_CLICKED,
+            if (tiles[i] != nullptr) {
+                lv_obj_add_event_cb(tiles[i], tileClicked, LV_EVENT_CLICKED,
                                     reinterpret_cast<void*>(static_cast<intptr_t>(i)));
             }
         }
@@ -652,6 +679,14 @@ namespace uibind {
                 lv_obj_add_event_cb(b.widget, b.handler, LV_EVENT_CLICKED, b.arg);
             }
         }
+
+        // THE GRID IS THE ROOT PAGE, and that is decided here rather than in
+        // the screens. SquareLine's generated ui_init() ends by loading
+        // whichever screen is first in its project, which is the readout; the
+        // hand-written screens ended by loading the grid. Setting it here
+        // makes both behave the same, and navigation is this file's job
+        // anyway.
+        showHome();
 
         // Restore the head-local display settings. Rotation FIRST, because a
         // panel mounted upside down must come up the right way round without
@@ -790,13 +825,13 @@ namespace uibind {
         // a run and on reboot.
         const bool armed = live && st.backflushArmed;
 
-        if (ui_HomeTileSubs[5] != nullptr) {
-            lv_label_set_text(ui_HomeTileSubs[5], armed ? "ARMED - tap to run" : "tap to arm");
-            lv_obj_set_style_text_color(ui_HomeTileSubs[5], armed ? kAlarm : kDim, 0);
+        if (tileSubs[5] != nullptr) {
+            lv_label_set_text(tileSubs[5], armed ? "ARMED - tap to run" : "tap to arm");
+            lv_obj_set_style_text_color(tileSubs[5], armed ? kAlarm : kDim, 0);
         }
 
-        if (ui_HomeTiles[5] != nullptr) {
-            lv_obj_set_style_border_color(ui_HomeTiles[5], armed ? kAlarm : kValue, 0);
+        if (tiles[5] != nullptr) {
+            lv_obj_set_style_border_color(tiles[5], armed ? kAlarm : kValue, 0);
         }
 
         if (live) {
