@@ -95,6 +95,17 @@ namespace net {
     /** @brief The network name we are on, or the AP's name while in portal. */
     const char* networkName();
 
+    /**
+     * @brief This board's firmware version.
+     *
+     * From AUTO_VERSION, which auto_firmware_version.py builds out of
+     * VERSION.txt plus the git branch and commit. It lives in net.cpp because
+     * the web About page needed it first; exposed here so the PANEL's About
+     * page reads the same string rather than formatting its own, which could
+     * drift.
+     */
+    const char* headVersion();
+
     /** @brief Is the web server listening? */
     bool serverRunning();
 

@@ -945,18 +945,71 @@ lose it:
 **What becomes John's job rather than firmware's:** the palette, the fonts and
 the layout move into the editor.
 
-#### Phasing
+#### Phasing - ALL FIVE DONE, 2026-11-13
 
-1. The readout page plus the chart. Already exists as the trial, so it is a
-   port into the real build rather than new work.
-2. The home grid (9.9), with its tile actions re-bound.
-3. The setup menu and its sub-pages. **Keep the sub-page structure** - 9.x
-   records that cramming controls onto one page failed four times and that
+1. ~~The readout page plus the chart.~~ Already existed as the trial, so it was
+   a port into the real build rather than new work.
+2. ~~The home grid (9.9), with its tile actions re-bound.~~
+3. ~~The setup menu and its sub-pages.~~ **The sub-page structure was kept** -
+   9.x records that cramming controls onto one page failed four times and that
    making SETUP a menu is what fixed it.
-4. The About page.
-5. Delete `display.cpp` only once every page has a replacement, and keep the
-   hand-drawn env buildable until then.
+4. ~~The About page.~~ Built 2026-11-13, on the panel as well as the web UI,
+   and it exposed a second gap while being added: the hand-drawn DISPLAY page
+   had a sound volume control that the LVGL port had silently dropped. That
+   gap was found by COMPARING THE TWO UIs, which is the argument for having
+   kept the old one buildable right up to the end.
+5. ~~Delete `display.cpp`.~~ Deleted once John confirmed the panel on hardware
+   and all three of its actions were proven from the new UI (see 9.18).
+   `[env:esp32s3_ui]` folded back into `[env:esp32s3]`, so there is one head
+   build again. The file is kept FROZEN AND UNCOMPILED in
+   `reference/display-lovyangfx/`, with a README saying what it was and what
+   is worth reading it for - John asked for that rather than relying on git
+   history, and it is in no build filter on purpose: half-maintained code is
+   worse than plainly frozen code.
 
 The trial build is a measuring instrument and is disposable. It keeps its own
-`main.cpp` and `lv_conf.h` and is not the shape the real UI should take; do
-not grow it into the product.
+`main.cpp` and is not the shape the real UI should take; do not grow it into
+the product. It has no `lv_conf.h` of its own - it uses the head's through
+`-I src-esp32s3`, checked when the envs merged.
+
+### 9.18 The LVGL panel, verified on hardware (2026-11-13)
+
+The LVGL head had been measured as a trial and built as the product, but until
+this session it had never actually run the machine. It had also never been
+LOOKED at: the head on the bench was still flashed with the hand-drawn UI from
+four commits earlier, which is worth remembering as a general caution - ask
+the board what it is running rather than assuming it has what the repository
+has. `/api/version` answers that in one line.
+
+John confirmed the panel itself ("this looks good") and then connected the
+Teensy, after which all three of the home grid's actions were fired FROM THE
+NEW UI and recorded independently of it, by polling `/api/status` four times a
+second. The point was not the controller, which 9.10 already proved; it was
+`uiBind.cpp`, which is new code turning a touch into a link command.
+
+| action | result |
+|---|---|
+| FLUSH | pump ramps 40% then 100% within 0.4 s, runs 19.9 s and 20.1 s on two attempts, ended by the flush cap |
+| STOP | three runs ended at 6.9 s, 3.9 s and 3.8 s, all far short of the 20 s cap, so the press and not the timer |
+| BACKFLUSH | armed on the first tap, ran on the second: five cycles of 5.2/4.8/5.1/4.6/4.7 s on against 10.1/10.1/10.2/10.5/10.1 s off, 75.4 s total against the 75 s specified |
+
+The heater never moved through any of it - `heater=100/False` throughout,
+meaning the PID wanted full duty and the master enable refused it, which is
+the state the firmware is meant to sit in with no water proven.
+
+**A process failure worth recording, because it wasted two attempts.** The
+first STOP test was unmeasurable: the instruction to press STOP was sent
+AFTER the flush had already ended on its own, so the log showed a run exactly
+as long as the cap and said nothing about the button. Asking for a press
+inside a window that has already closed is worse than not asking, and the fix
+is the one [[timed-bench-tests-need-live-prompts]] already states: **start the
+recorder first, then give the whole sequence in ONE message** - press this,
+wait, press that - so no round trip is needed while the clock is running. Said
+plainly: John does not mind pressing things and wants to learn the panel; what
+he cannot do is receive an instruction mid-window.
+
+Also: there is nothing hydraulic on that bench. No boiler, no element, no
+pump, no valves, no SSRs. What a tile tap proves is that the tap reaches the
+binding code, the command crosses the link, and the Teensy moves its own
+output pins. Describing any of it as "the group valve opened" is wrong and was
+said once.

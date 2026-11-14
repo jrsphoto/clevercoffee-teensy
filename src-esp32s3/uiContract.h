@@ -158,14 +158,20 @@ extern "C" {
     /** Label on the Display page saying which way up the panel is. */
     extern lv_obj_t* ui_FlipValue;
 
+    /** Label on the Display page showing the sound volume, 0-100%. */
+    extern lv_obj_t* ui_VolumeValue;
+
     /** Navigation and action buttons on the setup pages. */
     extern lv_obj_t* ui_SetupBack;
     extern lv_obj_t* ui_SetupDisplayBtn;
     extern lv_obj_t* ui_SetupBrewBtn;
     extern lv_obj_t* ui_SetupWifiBtn;
+    extern lv_obj_t* ui_SetupAboutBtn;
     extern lv_obj_t* ui_DisplayBack;
     extern lv_obj_t* ui_BrightnessDown;
     extern lv_obj_t* ui_BrightnessUp;
+    extern lv_obj_t* ui_VolumeDown;
+    extern lv_obj_t* ui_VolumeUp;
 
     /** FLIP 180. Rotates the panel and REMEMBERS it across a power cycle. */
     extern lv_obj_t* ui_FlipButton;
@@ -192,6 +198,34 @@ extern "C" {
     extern lv_obj_t* ui_WifiSetupBtn;
     extern lv_obj_t* ui_WifiForgetBtn;
     extern lv_obj_t* ui_WifiForgetLbl; ///< its label: FORGET / TAP AGAIN
+
+    // --- Setup > ABOUT ---------------------------------------------------
+    //
+    // What this machine is running, on the PANEL. The web UI has the same
+    // card, but the panel is the only place to read it when the head is not
+    // on a network - which is exactly when somebody is standing at the
+    // machine wondering why.
+    //
+    // Product name, both boards and the repository are static text and so
+    // belong to layout, not here. Only the two version labels are bound,
+    // because only they can change while the machine is running.
+
+    extern lv_obj_t* ui_ScreenAbout;
+    extern lv_obj_t* ui_AboutBack;
+
+    /** Label. This board's firmware version, compiled in from AUTO_VERSION. */
+    extern lv_obj_t* ui_AboutHeadVersion;
+
+    /**
+     * Label. The CONTROLLER's firmware version.
+     *
+     * This board cannot read the Teensy's flash, so this is whatever the
+     * controller announced over the link. When it has not announced, the
+     * label says WHY rather than printing a dash - "no link" and "has not
+     * announced since this board started" are different situations and only
+     * one of them is a fault.
+     */
+    extern lv_obj_t* ui_AboutControllerVersion;
 
     /**
      * Chart, LINE type, one or two series.

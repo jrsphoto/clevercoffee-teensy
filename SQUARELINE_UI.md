@@ -134,22 +134,71 @@ failure we want: loud, immediate, and naming the thing that moved.
 | `ScreenReadout` | boiler chart, big boiler number, target, group, heater bar, weight / flow / pump, status strip, STOP |
 | `ScreenHome` | the 3x3 tile grid, nine buttons each with a label and a sub-label, plus the footer |
 | `ScreenSetup` | DISPLAY / BREW / WIFI menu, BACK |
-| `ScreenDisplay` | brightness down/up, FLIP 180, BACK |
+| `ScreenDisplay` | brightness down/up, volume down/up, FLIP 180, BACK |
+| `ScreenAbout` | machine, both boards, both firmware versions, BACK |
 | `ScreenBrew` | setpoint down/up, heater toggle, TARE, ZERO VOL, CLEAR, BACK |
 | `ScreenWifi` | status / network / address, SET UP WIFI, FORGET, BACK |
 
-### John's layout decisions, do not undo
+**Seven screens, not six, since 2026-11-13.** `ScreenAbout` was added along
+with the VOLUME group on `ScreenDisplay` and the ABOUT tile on `ScreenSetup`,
+to match what the firmware gained the same day.
+
+| added | where |
+|---|---|
+| `CapVolume`, `VolumeDown`, `VolumeUp`, `VolumeValue` | `ScreenDisplay`, rows 130..190 |
+| `SetupAboutBtn` | `ScreenSetup`, the free fourth slot at `[250,160]` |
+| `ScreenAbout` with `AboutBack`, `AboutHeadVersion`, `AboutControllerVersion` and eight fixed labels | new |
+
+`CapOrientation`, `FlipButton` and `FlipValue` moved DOWN to rows 204..264,
+because VOLUME now sits where they were. Same numbers as
+`buildDisplayScreen()`.
+
+**Done by script, by deep-copying existing widgets** of the same kind and then
+changing name, position and text - so every `nid` property and every style
+block came across unchanged rather than being hand-authored. The script
+asserts what it wrote by reloading the file: expected widgets at expected
+positions, all guids unique, all names unique. **Names must be unique because
+the export makes one global per name**; two widgets sharing one would collide
+at link time.
+
+**Verified in step, mechanically:** every one of the 73 `ui_*` names declared
+in `uiContract.h` now exists in the project, arrays expanded (`ui_HomeTiles[9]`
+against `HomeTile0`..`HomeTile8`). Re-run that check after changing either
+side.
+
+**One leftover worth knowing about: `ImgButton5` on `ScreenSetup`**, an
+IMGBUTTON at `CENTER`, 198x64, with no image set and no counterpart in the
+firmware. It looks like something added while trying the editor out. It is
+left alone deliberately - it is not firmware's to delete - but if an export
+ever lands it will draw an empty button across the middle of the SETUP page,
+on top of the tiles. Delete it in the editor, or say so and firmware will drop
+it from the file.
+
+### Layout decisions
 
 - **Tile text is `TOP_MID`**: label at `[0,17]`, sub at `[0,40]`. All nine.
 - **`HomeTileLbl8` (SETTINGS) is `CENTER`** because that tile has no sub-text.
-- **Accent colour is `#278ADE`**, his pick, replacing the old cyan.
+- **Accent colour is `#278ADE`**, replacing the old cyan.
+
+**Colours are FIRMWARE'S CALL, not John's.** He said so plainly on
+2026-11-13: "I don't really care about the accent colors. Pick what seems to
+work best." An earlier version of this file recorded the accent as his
+decision and told future sessions not to undo it, which overstated it. Pick
+what reads well and move on - but keep it CONSISTENT, because the accent is
+set in two places that must agree (`kAccent` in `uiScreens.cpp` and
+`kTraceColour` in `uiBind.cpp`; see job 3 below).
+
+The same applies more widely: he does not do UI design, and never took it on.
+Firmware writes the screens. If a layout is wrong he says what is wrong and
+firmware fixes it, so never hand him editor steps as part of the work.
 
 ### Icons
 
 `ui-design/icons/` holds 40x40 RGBA PNGs: cup, manual, flush, backflush,
 scale, status, settings. The cup is the real artwork from
 `assets/coffee-drink.png`; the other six were regenerated from the shapes the
-old hand-drawn UI drew with primitives (`drawTileIcon` in `display.cpp`).
+old hand-drawn UI drew with primitives (`drawTileIcon`, now in
+`reference/display-lovyangfx/display.cpp`).
 These have **real alpha** - the magenta colour-key hack the old RGB565 build
 needed is gone.
 
@@ -184,9 +233,14 @@ gather them into a local array.
 `#if __has_include("ui/ui.h")`, so the hand-written definitions disappear the
 moment an export exists. Remove it from `build_src_filter` at the same time.
 
-**3. The healthy-boiler colour must become `#278ADE`.** `uiBind.cpp` sets some
-colours AT RUNTIME because they carry meaning, and it would otherwise
-overwrite John's choice within a second of boot.
+**3. The healthy-boiler colour must become `#278ADE`.** DONE 2026-11-13, in
+firmware, without waiting for an export - the running UI was still the old
+cyan, and the colour is John's recorded pick either way. It is set in TWO
+places that must stay in step: `kAccent` in `uiScreens.cpp` for the layout,
+and `kTraceColour` in `uiBind.cpp` for the boiler reading and the chart trace.
+`uiBind.cpp` sets those AT RUNTIME because they carry meaning, so a value set
+anywhere else is overwritten within a second of boot. An export changing the
+accent must change `uiBind.cpp` too.
 
 ### Colours firmware owns, which the editor cannot
 

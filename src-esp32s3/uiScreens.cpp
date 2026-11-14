@@ -61,14 +61,18 @@ extern "C" {
     lv_obj_t* ui_ScreenSetup = nullptr;
     lv_obj_t* ui_ScreenDisplay = nullptr;
     lv_obj_t* ui_BrightnessValue = nullptr;
+    lv_obj_t* ui_VolumeValue = nullptr;
     lv_obj_t* ui_FlipValue = nullptr;
     lv_obj_t* ui_SetupBack = nullptr;
     lv_obj_t* ui_SetupDisplayBtn = nullptr;
     lv_obj_t* ui_SetupBrewBtn = nullptr;
     lv_obj_t* ui_SetupWifiBtn = nullptr;
+    lv_obj_t* ui_SetupAboutBtn = nullptr;
     lv_obj_t* ui_DisplayBack = nullptr;
     lv_obj_t* ui_BrightnessDown = nullptr;
     lv_obj_t* ui_BrightnessUp = nullptr;
+    lv_obj_t* ui_VolumeDown = nullptr;
+    lv_obj_t* ui_VolumeUp = nullptr;
     lv_obj_t* ui_FlipButton = nullptr;
     lv_obj_t* ui_ScreenBrew = nullptr;
     lv_obj_t* ui_BrewBack = nullptr;
@@ -81,6 +85,10 @@ extern "C" {
     lv_obj_t* ui_ZeroVolButton = nullptr;
     lv_obj_t* ui_ClearFaultButton = nullptr;
     lv_obj_t* ui_BrewStatus = nullptr;
+    lv_obj_t* ui_ScreenAbout = nullptr;
+    lv_obj_t* ui_AboutBack = nullptr;
+    lv_obj_t* ui_AboutHeadVersion = nullptr;
+    lv_obj_t* ui_AboutControllerVersion = nullptr;
     lv_obj_t* ui_ScreenWifi = nullptr;
     lv_obj_t* ui_WifiBack = nullptr;
     lv_obj_t* ui_WifiState = nullptr;
@@ -183,7 +191,17 @@ namespace {
     };
 
     const lv_color_t kPanel = lv_color_hex(0x1C1C1C);
-    const lv_color_t kAccent = lv_color_hex(0x00FFFF);
+
+    /**
+     * The accent. JOHN'S PICK, 2026-11-13, replacing the cyan this UI
+     * inherited from the hand-drawn build. Recorded in SQUARELINE_UI.md under
+     * his layout decisions, so do not take it back to cyan.
+     *
+     * uiBind.cpp holds the same value for the boiler reading and the chart
+     * trace, because those are set at runtime and would otherwise overwrite
+     * this within a second of boot. The two must stay in step.
+     */
+    const lv_color_t kAccent = lv_color_hex(0x278ADE);
     const lv_color_t kAlarm = lv_color_hex(0xFF0000);
 
     /** @brief One tile: a button with a label and a sub-label. */
@@ -318,9 +336,27 @@ namespace {
         ui_SetupDisplayBtn = actionButton(ui_ScreenSetup, 20, 60, 210, 84, "DISPLAY", kValue);
         ui_SetupBrewBtn = actionButton(ui_ScreenSetup, 250, 60, 210, 84, "BREW", kValue);
         ui_SetupWifiBtn = actionButton(ui_ScreenSetup, 20, 160, 210, 84, "WIFI", kValue);
+        ui_SetupAboutBtn = actionButton(ui_ScreenSetup, 250, 160, 210, 84, "ABOUT", kValue);
     }
 
-    /** The DISPLAY sub-page: brightness, and which way up the panel is. */
+    /**
+     * The DISPLAY sub-page: brightness, sound volume, and which way up the
+     * panel is.
+     *
+     * Three groups, each a caption with a pair of -/+ buttons and the value
+     * beside them, separated by rules. Occupied rows, so the next person
+     * adding something can see at a glance that there is no space left:
+     *
+     *   0..32    header and its rule
+     *   56..116  BRIGHTNESS
+     *   124      rule
+     *   130..190 VOLUME
+     *   198      rule
+     *   204..264 ORIENTATION
+     *
+     * A fourth group does not fit. Per the lesson that cost four attempts on
+     * the hand-drawn pages: add a SUB-PAGE, do not squeeze in another row.
+     */
     void buildDisplayScreen() {
         ui_ScreenDisplay = makeScreen();
 
@@ -337,7 +373,25 @@ namespace {
         ui_BrightnessDown = actionButton(ui_ScreenDisplay, 20, 72, 70, 44, "-", kValue);
         ui_BrightnessUp = actionButton(ui_ScreenDisplay, 100, 72, 70, 44, "+", kValue);
 
-        rule(ui_ScreenDisplay, 0, 130, kScreenW, 1);
+        rule(ui_ScreenDisplay, 0, 124, kScreenW, 1);
+
+        // SOUND VOLUME. The hand-drawn DISPLAY page carried this and the first
+        // LVGL version of the page dropped it, which was an oversight rather
+        // than a decision - the machine has a speaker and plays tones, and
+        // with no control the only volume available is whatever the codec
+        // comes up at.
+        caption(ui_ScreenDisplay, 20, 130, "VOLUME");
+
+        ui_VolumeValue = lv_label_create(ui_ScreenDisplay);
+        lv_label_set_text(ui_VolumeValue, "100%");
+        lv_obj_set_style_text_font(ui_VolumeValue, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(ui_VolumeValue, kValue, 0);
+        lv_obj_set_pos(ui_VolumeValue, 200, 150);
+
+        ui_VolumeDown = actionButton(ui_ScreenDisplay, 20, 146, 70, 44, "-", kValue);
+        ui_VolumeUp = actionButton(ui_ScreenDisplay, 100, 146, 70, 44, "+", kValue);
+
+        rule(ui_ScreenDisplay, 0, 198, kScreenW, 1);
 
         // SCREEN ORIENTATION. John asked for this 2026-11-10: the panel can
         // end up mounted either way round in the machine, and a screen that
@@ -346,15 +400,15 @@ namespace {
         // It PERSISTS - see uiBind's flip handler. A flip that forgets itself
         // on every power cycle would have to be redone every time the machine
         // is switched on, which is worse than not having the button.
-        caption(ui_ScreenDisplay, 20, 146, "ORIENTATION");
+        caption(ui_ScreenDisplay, 20, 204, "ORIENTATION");
 
         ui_FlipValue = lv_label_create(ui_ScreenDisplay);
         lv_label_set_text(ui_FlipValue, "normal");
         lv_obj_set_style_text_font(ui_FlipValue, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(ui_FlipValue, kValue, 0);
-        lv_obj_set_pos(ui_FlipValue, 200, 166);
+        lv_obj_set_pos(ui_FlipValue, 200, 224);
 
-        ui_FlipButton = actionButton(ui_ScreenDisplay, 20, 162, 160, 44, "FLIP 180", kAccent);
+        ui_FlipButton = actionButton(ui_ScreenDisplay, 20, 220, 160, 44, "FLIP 180", kAccent);
     }
 
 
@@ -440,6 +494,55 @@ namespace {
         // long way back from a mis-tap on a machine across the room.
         ui_WifiForgetBtn = actionButton(ui_ScreenWifi, 240, 210, 200, 44, "FORGET", kAlarm);
         ui_WifiForgetLbl = buttonLabel(ui_WifiForgetBtn);
+    }
+
+    /** A one-line fact: small, readable, left-aligned under its caption. */
+    lv_obj_t* infoValue(lv_obj_t* parent, const int x, const int y, const char* text,
+                        const lv_color_t colour) {
+        lv_obj_t* l = lv_label_create(parent);
+
+        lv_label_set_text(l, text);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, colour, 0);
+        lv_obj_set_pos(l, x, y);
+
+        return l;
+    }
+
+    /**
+     * Setup > ABOUT.
+     *
+     * What this machine is, and what both halves of it are running. The web UI
+     * carries the same card, but this is the only place to read it when the
+     * head is not on a network - which is the situation in which somebody is
+     * most likely to want it.
+     *
+     * The two version labels are the only live things here; everything else is
+     * fixed text and so is layout. See the note in uiContract.h about why the
+     * controller's version is a separate case from the head's.
+     */
+    void buildAboutScreen() {
+        ui_ScreenAbout = makeScreen();
+
+        ui_AboutBack = pageHeader(ui_ScreenAbout, "ABOUT");
+
+        caption(ui_ScreenAbout, 20, 44, "MACHINE");
+        settingValue(ui_ScreenAbout, 20, 60, "Argenta SME 1N Junior", kAccent);
+
+        caption(ui_ScreenAbout, 20, 96, "BOARDS");
+        infoValue(ui_ScreenAbout, 20, 112,
+                  "Teensy 4.1 controller + ESP32-S3 display head", kValue);
+
+        caption(ui_ScreenAbout, 20, 140, "CONTROLLER FIRMWARE");
+        ui_AboutControllerVersion = infoValue(ui_ScreenAbout, 20, 156, "-", kValue);
+
+        caption(ui_ScreenAbout, 20, 184, "DISPLAY FIRMWARE");
+        ui_AboutHeadVersion = infoValue(ui_ScreenAbout, 20, 200, "-", kValue);
+
+        rule(ui_ScreenAbout, 0, 232, kScreenW, 1);
+
+        caption(ui_ScreenAbout, 20, 240, "CleverCoffee, ported to Teensy 4.1");
+        caption(ui_ScreenAbout, 20, 258, "github.com/jrsphoto/clevercoffee-teensy");
     }
 
 } // namespace
@@ -567,6 +670,7 @@ void ui_init() {
     buildDisplayScreen();
     buildBrewScreen();
     buildWifiScreen();
+    buildAboutScreen();
 
     // THE GRID IS THE ROOT, as it is in the hand-drawn build. The readout is
     // reached from the STATUS tile, and a shot started from a drink tile

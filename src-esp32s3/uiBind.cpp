@@ -13,6 +13,7 @@
 
 #include <Preferences.h>
 
+#include "audio.h"
 #include "display.h"
 #include "link.h"
 #include "net.h"
@@ -42,8 +43,17 @@ namespace uibind {
          */
         constexpr int32_t kTenths = 10;
 
-        /** Cyan for the reading, dim grey for the setpoint. */
-        const lv_color_t kTraceColour = lv_color_hex(0x00FFFF);
+        /**
+         * The accent for the reading, dim grey for the setpoint.
+         *
+         * 0x278ADE is John's pick, 2026-11-13, replacing the old cyan.
+         * SQUARELINE_UI.md records it under his layout decisions and names
+         * this exact case: the boiler reading and the chart trace are coloured
+         * at RUNTIME because the colour carries meaning (healthy against
+         * faulty), so a value set anywhere else would be overwritten within a
+         * second of boot. It must match `kAccent` in uiScreens.cpp.
+         */
+        const lv_color_t kTraceColour = lv_color_hex(0x278ADE);
         const lv_color_t kSetpointColour = lv_color_hex(0x404040);
 
         /** Colours for values whose meaning changes with their state. */
@@ -325,6 +335,7 @@ namespace uibind {
         constexpr char kPrefNamespace[] = "ccui";
         constexpr char kPrefRotation[] = "rot";
         constexpr char kPrefBrightness[] = "bl";
+        constexpr char kPrefVolume[] = "vol";
 
         constexpr uint8_t kRotNormal = 1;  // landscape
         constexpr uint8_t kRotFlipped = 3; // landscape, 180 round
@@ -382,6 +393,35 @@ namespace uibind {
             display::setBrightness(brightness);
             saveByte(kPrefBrightness, brightness);
             showBrightness();
+        }
+
+        void showVolume() {
+            if (ui_VolumeValue != nullptr) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "%d%%", audio::volumePercent());
+                lv_label_set_text(ui_VolumeValue, buf);
+            }
+        }
+
+        /**
+         * Sound volume, in tens, matching the steps the hand-drawn page used.
+         *
+         * It PERSISTS, which the hand-drawn one did not. The codec comes up at
+         * 100% every boot, so without this, turning the machine down had to be
+         * done again at every power-up - the same argument as the FLIP button
+         * above, and the same one-line mechanism. Head-local NVS, not the
+         * shared config: what this panel sounds like is nothing the controller
+         * needs to know.
+         */
+        void volumeClicked(lv_event_t* e) {
+            const bool up = lv_event_get_user_data(e) != nullptr;
+            const int v = audio::volumePercent();
+            const auto next = static_cast<uint8_t>(up ? (v < 90 ? v + 10 : 100)
+                                                      : (v > 10 ? v - 10 : 0));
+
+            audio::setVolumePercent(next);
+            saveByte(kPrefVolume, next);
+            showVolume();
         }
 
         // --- Setup > BREW -------------------------------------------------
@@ -482,10 +522,39 @@ namespace uibind {
 
         void showDisplayPage(lv_event_t*) {
             showBrightness();
+            showVolume();
             showFlipState();
 
             if (ui_ScreenDisplay != nullptr) {
                 lv_screen_load(ui_ScreenDisplay);
+            }
+        }
+
+        // --- Setup > ABOUT ------------------------------------------------
+
+        /**
+         * @brief What the controller is running, or WHY that is not known.
+         *
+         * Two different situations and only one of them is a fault: the link
+         * being down, and the link being up but the Teensy not having
+         * announced itself since this board started. The second is ordinary -
+         * the controller announces at ITS boot - and must not read like a
+         * problem. Same wording as the web About page in net.cpp, deliberately.
+         */
+        const char* controllerVersionText() {
+            const char* fw = machinelink::controllerFirmware();
+
+            if (fw[0] == '\0' || (fw[0] == '-' && fw[1] == '\0')) {
+                return machinelink::isConnected() ? "not announced since this board started"
+                                                  : "unknown - no link to the controller";
+            }
+
+            return fw;
+        }
+
+        void showAboutPage(lv_event_t*) {
+            if (ui_ScreenAbout != nullptr) {
+                lv_screen_load(ui_ScreenAbout);
             }
         }
 
@@ -547,6 +616,8 @@ namespace uibind {
             {ui_FlipButton, flipClicked, nullptr},
             {ui_BrightnessDown, brightnessClicked, nullptr},
             {ui_BrightnessUp, brightnessClicked, reinterpret_cast<void*>(1)},
+            {ui_VolumeDown, volumeClicked, nullptr},
+            {ui_VolumeUp, volumeClicked, reinterpret_cast<void*>(1)},
         };
 
         for (const auto& b : buttons) {
@@ -572,6 +643,8 @@ namespace uibind {
             {ui_ClearFaultButton, clearFaultClicked, nullptr},
             {ui_WifiSetupBtn, wifiSetupClicked, nullptr},
             {ui_WifiForgetBtn, wifiForgetClicked, nullptr},
+            {ui_SetupAboutBtn, showAboutPage, nullptr},
+            {ui_AboutBack, backToSetup, nullptr},
         };
 
         for (const auto& b : more) {
@@ -588,6 +661,10 @@ namespace uibind {
         if (prefs.begin(kPrefNamespace, true)) {
             const uint8_t rot = prefs.getUChar(kPrefRotation, kRotNormal);
             brightness = prefs.getUChar(kPrefBrightness, 200);
+
+            // The codec's own default is full volume, so that is the default
+            // here too: a saved value is a deliberate change away from it.
+            const uint8_t vol = prefs.getUChar(kPrefVolume, 100);
             prefs.end();
 
             if (rot != display::rotation()) {
@@ -595,10 +672,17 @@ namespace uibind {
             }
 
             display::setBrightness(brightness);
+            audio::setVolumePercent(vol);
         }
 
         showFlipState();
         showBrightness();
+        showVolume();
+
+        // The head's own version never changes while it is running, so it is
+        // written once. The controller's is live - see update().
+        setText(ui_AboutHeadVersion, net::headVersion());
+        setText(ui_AboutControllerVersion, controllerVersionText());
 
         if (ui_BoilerChart == nullptr) {
             Serial.println("ui: no chart widget in the export - graph disabled");
@@ -772,6 +856,17 @@ namespace uibind {
                                                                      : kLabelGrey);
         setText(ui_WifiNetwork, net::networkName());
         setText(ui_WifiAddress, net::addressText());
+
+        // --- Setup > ABOUT -------------------------------------------
+        //
+        // The controller's version is kept live because it ARRIVES late: the
+        // Teensy announces itself at its own boot, so a head that started
+        // first learns it only when the link comes up, and a head reflashed
+        // while the Teensy keeps running learns it from the Hello this board
+        // sends at boot. Either way the page must not be stuck on whatever was
+        // true when it was built.
+        setText(ui_AboutControllerVersion, controllerVersionText());
+        setColour(ui_AboutControllerVersion, live ? kValue : kDim);
 
         // Let an armed FORGET lapse rather than sit waiting indefinitely.
         if (forgetArmed && (millis() - forgetArmedAtMs) > kForgetArmedMs) {

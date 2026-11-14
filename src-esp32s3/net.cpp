@@ -1112,6 +1112,10 @@ namespace net {
         return networkBuf;
     }
 
+    const char* headVersion() {
+        return kHeadVersion;
+    }
+
     bool serverRunning() {
         return listening;
     }

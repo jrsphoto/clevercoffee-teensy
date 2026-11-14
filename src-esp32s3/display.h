@@ -216,60 +216,17 @@ namespace display {
      */
     uint32_t benchmarkRedraw(uint8_t iterations);
 
-    /**
-     * @enum Page
-     * @brief Which screen is showing.
-     */
-    /**
-     * @enum Page
-     * @brief Screens, arranged as a shallow tree rather than a flat list.
-     *
-     * Setup is going to collect sub-pages - WiFi first, then whatever else
-     * needs more room than a single row of buttons. So Back works off a
-     * declared PARENT per page (see parentOf) instead of a hardcoded "go to
-     * Main". Adding a sub-page then means adding an enum value, its parent, a
-     * draw case and a touch case, and nothing else has to change.
-     *
-     * A parent table rather than a navigation stack on purpose: the tree is two
-     * deep and a stack would add state that can be wrong - a stack that leaks
-     * entries sends Back somewhere surprising, which is a bug nobody notices
-     * until they are standing at the machine.
-     */
-    enum class Page : uint8_t {
-        Home,         // the 3x3 tile grid you start from
-        // The live readout. It was the top page before the grid existed, and
-        // it is kept EXACTLY as it was rather than being replaced: it is
-        // already the status panel the STATUS tile wanted, so building a
-        // second page showing the same boiler, group, weight, flow and pump
-        // would have been duplication. Reached from the STATUS tile, and
-        // shown automatically while a shot runs.
-        Main,
-        Setup,        // a MENU of sub-pages, not a wall of controls
-        SetupBrew,    // temperature, heater, tare, zero, clear
-        SetupDisplay, // brightness and volume
-        SetupWifi,    // network status, and starting the setup portal
-    };
-
-    /** @brief Current page. */
-    Page page();
-
-    /** @brief Switch page and repaint everything. */
-    void setPage(Page p);
-
-    /**
-     * @brief Which page Back goes to from here.
-     *
-     * Main is its own parent, so Back on the top page does nothing rather than
-     * falling off the end.
-     */
-    Page parentOf(Page p);
-
-    /**
-     * @brief Handle a touch. Call from the touch poll.
-     *
-     * @return true if the touch hit something and was consumed
-     */
-    bool handleTouch(int x, int y);
+    // PAGE NAVIGATION IS NOT DECLARED HERE ANY MORE.
+    //
+    // The hand-drawn UI exposed a `Page` enum, `page()`, `setPage()`,
+    // `parentOf()` and `handleTouch()`. Nothing outside that one file ever
+    // called them - checked before removing - and LVGL owns both halves of the
+    // job now: a screen is an `lv_obj_t` and a widget knows its own touch
+    // area, so there is nothing for a page enum or a hit test to do.
+    //
+    // Navigation lives in `uiBind.cpp`, next to the handlers that perform it.
+    // The old implementation is kept, frozen and uncompiled, in
+    // `reference/display-lovyangfx/`.
 
     /** @brief Force a full repaint, chrome included. */
     void invalidate();
