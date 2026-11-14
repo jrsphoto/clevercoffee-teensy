@@ -6754,7 +6754,7 @@
                   {
                     "nid": 1030,
                     "strtype": "LABEL/Text",
-                    "strval": "\uf043",
+                    "strval": "",
                     "InheritedType": 10
                   },
                   {
@@ -10628,175 +10628,6 @@
               }
             ],
             "saved_objtypeKey": "BUTTON"
-          },
-          {
-            "guid": "GUID45638639-223454S268835317",
-            "properties": [
-              {
-                "nid": 10,
-                "strtype": "OBJECT/Name",
-                "strval": "ImgButton5",
-                "InheritedType": 10
-              },
-              {
-                "nid": 20,
-                "strtype": "OBJECT/Layout",
-                "InheritedType": 1
-              },
-              {
-                "Flow": 0,
-                "Wrap": false,
-                "Reversed": false,
-                "MainAlignment": 0,
-                "CrossAlignment": 0,
-                "TrackAlignment": 0,
-                "LayoutType": 0,
-                "nid": 30,
-                "strtype": "OBJECT/Layout_type",
-                "strval": "No_layout",
-                "InheritedType": 13
-              },
-              {
-                "nid": 40,
-                "strtype": "OBJECT/Transform",
-                "InheritedType": 1
-              },
-              {
-                "nid": 50,
-                "flags": 17,
-                "strtype": "OBJECT/Position",
-                "intarray": [
-                  115,
-                  43
-                ],
-                "InheritedType": 7
-              },
-              {
-                "nid": 60,
-                "flags": 17,
-                "strtype": "OBJECT/Size",
-                "intarray": [
-                  198,
-                  64
-                ],
-                "InheritedType": 7
-              },
-              {
-                "nid": 70,
-                "strtype": "OBJECT/Align",
-                "strval": "CENTER",
-                "InheritedType": 3
-              },
-              {
-                "nid": 75,
-                "strtype": "OBJECT/Extend_click_area",
-                "InheritedType": 6
-              },
-              {
-                "nid": 90,
-                "flags": 1048576,
-                "strtype": "OBJECT/Flags",
-                "InheritedType": 1
-              },
-              {
-                "nid": 223,
-                "strtype": "OBJECT/State_trickle",
-                "strval": "False",
-                "InheritedType": 2
-              },
-              {
-                "nid": 225,
-                "flags": 1048576,
-                "strtype": "OBJECT/Scrolling",
-                "InheritedType": 1
-              },
-              {
-                "nid": 300,
-                "strtype": "OBJECT/Scrollbar_mode",
-                "strval": "AUTO",
-                "InheritedType": 3
-              },
-              {
-                "nid": 310,
-                "strtype": "OBJECT/Scroll_direction",
-                "strval": "ALL",
-                "InheritedType": 3
-              },
-              {
-                "nid": 314,
-                "strtype": "OBJECT/Scroll_snap_x",
-                "strval": "NONE",
-                "InheritedType": 3
-              },
-              {
-                "nid": 315,
-                "strtype": "OBJECT/Scroll_snap_y",
-                "strval": "NONE",
-                "InheritedType": 3
-              },
-              {
-                "nid": 320,
-                "flags": 1048576,
-                "strtype": "OBJECT/States",
-                "InheritedType": 1
-              },
-              {
-                "nid": 1010,
-                "strtype": "IMGBUTTON/Images",
-                "InheritedType": 1
-              },
-              {
-                "nid": 1020,
-                "strtype": "IMGBUTTON/Button_state",
-                "strval": "RELEASED",
-                "InheritedType": 3
-              },
-              {
-                "nid": 1030,
-                "strtype": "IMGBUTTON/Image_released",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "nid": 1040,
-                "strtype": "IMGBUTTON/Image_pressed",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "nid": 1050,
-                "strtype": "IMGBUTTON/Image_disabled",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "nid": 1060,
-                "strtype": "IMGBUTTON/Image_checked_released",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "nid": 1070,
-                "strtype": "IMGBUTTON/Image_checked_pressed",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "nid": 1080,
-                "strtype": "IMGBUTTON/Image_checked_disabled",
-                "strval": "",
-                "InheritedType": 5
-              },
-              {
-                "part": "lv.PART.MAIN",
-                "childs": [],
-                "nid": 1090,
-                "strtype": "IMGBUTTON/Style_main",
-                "strval": "lv.PART.MAIN, Rectangle, Image, Text, Transform",
-                "InheritedType": 11
-              }
-            ],
-            "saved_objtypeKey": "IMGBUTTON"
           },
           {
             "guid": "GUID32795333-79296S2430622",
@@ -22143,7 +21974,7 @@
   },
   "animations": [],
   "selected_theme": "Default",
-  "selected_screen": "GUID21599917-72501S7416036",
+  "selected_screen": "GUID99952606-72530S1829449",
   "info": {
     "name": "ArgentaUI.spj",
     "depth": 1,
@@ -22175,7 +22006,7 @@
     "separate_screen_save": false,
     "hierarchy_state_save": false,
     "reverse_event_order": false,
-    "backup_cnt": 6,
+    "backup_cnt": 7,
     "autosave_cnt": 0,
     "group_color_cnt": 0,
     "imagebytearrayprefix": null,

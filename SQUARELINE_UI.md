@@ -166,13 +166,30 @@ in `uiContract.h` now exists in the project, arrays expanded (`ui_HomeTiles[9]`
 against `HomeTile0`..`HomeTile8`). Re-run that check after changing either
 side.
 
-**One leftover worth knowing about: `ImgButton5` on `ScreenSetup`**, an
-IMGBUTTON at `CENTER`, 198x64, with no image set and no counterpart in the
-firmware. It looks like something added while trying the editor out. It is
-left alone deliberately - it is not firmware's to delete - but if an export
-ever lands it will draw an empty button across the middle of the SETUP page,
-on top of the tiles. Delete it in the editor, or say so and firmware will drop
-it from the file.
+**A leftover `ImgButton5` on `ScreenSetup` was removed by John in the editor**
+the same day, once it was pointed out: an IMGBUTTON with no image that would
+have drawn an empty box over the setup tiles if an export ever landed.
+
+### The round trip is PROVEN, not assumed (2026-11-13)
+
+**SquareLine 1.6.3 opened the scripted file, displayed it, and saved it back
+without losing anything.** That happened by accident - John opened the project
+to delete `ImgButton5` - and it is the one check a session cannot run itself,
+because the editor is a GUI.
+
+Measured after his save: seven screens still there, `ScreenAbout` still
+carrying its 12 widgets, every position the firmware draws unchanged, all 73
+`ui_*` names from `uiContract.h` still present, and 134 nodes where there had
+been 135 - exactly the one he deleted.
+
+So generating widget nodes by script is safe in both directions: the editor
+accepts what a script writes, and a script can read what the editor writes.
+That is what makes this whole file's approach workable rather than theoretical.
+
+**What his save DID change is formatting and bookkeeping.** The editor rewrote
+`.spj`, `.sll` and `.slp` together, and its own indentation differs from a
+Python dump, so expect a large whitespace-only diff after any editor save.
+Compare structure, not bytes: count nodes and check names, as above.
 
 ### Layout decisions
 
