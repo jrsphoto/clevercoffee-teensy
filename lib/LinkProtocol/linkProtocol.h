@@ -68,6 +68,22 @@ namespace linkproto {
      */
     enum class FrameType : char {
         Telemetry = 'T', ///< Teensy -> head. Machine state. Unsolicited, periodic.
+
+        /**
+         * Teensy -> head. Diagnostics, once a second.
+         *
+         * Separate from Telemetry for two reasons. The telemetry frame is
+         * close to kMaxFrame already - 185 of 192 with the longest fault name
+         * and extreme values - so adding fields there risks silent
+         * truncation. And none of this needs the telemetry rate: output
+         * states, pin levels and counters are for a person looking at a
+         * screen, not for the control loop, so once a second costs a
+         * twentieth of the wire time.
+         *
+         * Nothing in the control path reads this frame. Dropping every one of
+         * them changes nothing about how the machine runs.
+         */
+        Diag = 'D',
         Command = 'C',   ///< head -> Teensy. A request, which the Teensy may refuse.
         Ack = 'A',       ///< Teensy -> head. Result of a command.
         Hello = 'H',     ///< Either way. Identifies the sender and its firmware.

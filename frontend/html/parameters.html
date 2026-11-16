@@ -84,6 +84,12 @@
                             <li class="nav-item" v-for="(group, sectionKey) in (activeTopTab === 'hardware' ? hardwareSectionsComputed : behaviorSectionsComputed)" :key="sectionKey">
                                 <a class="nav-link" :class="{active: activeSection == sectionKey}" href="#" @click.prevent="activeSection = sectionKey">{{ sectionName(sectionKey) }}</a>
                             </li>
+                            <!-- Diags is not a parameter section. It shows live state
+                                 rather than settings, so it is added here by hand
+                                 instead of coming from the registry. -->
+                            <li class="nav-item" v-if="activeTopTab === 'hardware'">
+                                <a class="nav-link" :class="{active: activeSection == 'diag'}" href="#" @click.prevent="openDiag()">Diags</a>
+                            </li>
                         </ul>
                     </div>
 
@@ -203,7 +209,126 @@
                         </div>
                     </template>
 
-                    <div class="card-body clearfix">
+                    <!-- DIAGS. Live state, not settings. Nothing here saves, so
+                         every control is type="button" and the Save row below is
+                         hidden while this panel is showing. -->
+                    <div v-show="activeSection === 'diag'" class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="form-check form-switch me-3">
+                                <input class="form-check-input" type="checkbox" role="switch" id="diagSwitch"
+                                       :checked="diagEnabled" @change="toggleDiag($event.target.checked)">
+                                <label class="form-check-label" for="diagSwitch">Send diagnostics</label>
+                            </div>
+                            <span class="small text-muted">
+                                Off by default. The controller sends nothing until this is on,
+                                and goes quiet again on reboot.
+                            </span>
+                        </div>
+
+                        <div v-if="holdMessage" class="alert alert-warning py-2 small">{{ holdMessage }}</div>
+
+                        <div v-if="!diagEnabled" class="text-muted small">Diagnostics are off.</div>
+                        <div v-else-if="!diag" class="text-muted small">Waiting for the controller...</div>
+                        <div v-else-if="!diag.controllerSeen" class="alert alert-warning py-2 small mb-0">
+                            Switched on, but no diagnostics have arrived yet.
+                            <span v-if="!diag.linkOk">The link to the controller is down.</span>
+                        </div>
+
+                        <div v-else class="row g-3">
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Outputs</h6>
+                                <table class="table table-sm mb-3">
+                                    <tbody>
+                                        <tr v-for="(on, name) in diag.outputs" :key="name">
+                                            <td>{{ outputLabel(name) }}</td>
+                                            <td class="text-end">
+                                                <!-- Hold to test. No heater button, on purpose:
+                                                     the generic output switch does not check the
+                                                     dry-fire interlock. -->
+                                                <button v-if="holdChannel(name)" type="button"
+                                                        class="btn btn-sm btn-outline-danger me-2"
+                                                        @mousedown="startHold(name)" @mouseup="endHold()"
+                                                        @mouseleave="endHold()"
+                                                        @touchstart.prevent="startHold(name)"
+                                                        @touchend.prevent="endHold()">
+                                                    Hold to test
+                                                </button>
+                                                <span :class="on ? 'badge bg-danger' : 'badge bg-secondary'">
+                                                    {{ on ? 'ON' : 'off' }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+
+                                <h6 class="text-muted">Control</h6>
+                                <table class="table table-sm mb-0">
+                                    <tbody>
+                                        <tr><td>State</td><td class="text-end">{{ diag.control.status }}</td></tr>
+                                        <tr><td>Fault</td>
+                                            <td class="text-end" :class="diag.control.fault !== 'none' ? 'text-danger fw-bold' : ''">
+                                                {{ diag.control.fault }}
+                                            </td></tr>
+                                        <tr><td>Heater enabled</td><td class="text-end">{{ diag.control.heaterEnabled ? 'yes' : 'no' }}</td></tr>
+                                        <tr><td>Heater duty</td><td class="text-end">{{ diag.control.heaterDuty }} %</td></tr>
+                                        <tr><td>Setpoint</td><td class="text-end">{{ diag.control.setpointC }} C</td></tr>
+                                        <tr><td>Over-temp cutoff</td><td class="text-end">{{ diag.control.overTempLimitC }} C</td></tr>
+                                        <tr><td>Pump</td><td class="text-end">{{ diag.control.pumpPercent }} %</td></tr>
+                                        <tr><td>Pump last refusal</td><td class="text-end">{{ diag.control.pumpRefusal }}</td></tr>
+                                        <tr><td>Backflush armed</td><td class="text-end">{{ diag.control.backflushArmed ? 'ARMED' : 'no' }}</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="col-md-6">
+                                <h6 class="text-muted">Sensors</h6>
+                                <table class="table table-sm mb-3">
+                                    <tbody>
+                                        <tr><td>Boiler</td>
+                                            <td class="text-end">
+                                                {{ diag.sensors.boilerC === null ? '--' : diag.sensors.boilerC.toFixed(1) + ' C' }}
+                                                <span class="text-muted small">({{ diag.sensors.boilerAgeMs }} ms ago)</span>
+                                            </td></tr>
+                                        <tr><td>Group</td>
+                                            <td class="text-end">
+                                                {{ diag.sensors.groupC === null ? '--' : diag.sensors.groupC.toFixed(1) + ' C' }}
+                                                <span class="text-muted small">({{ diag.sensors.groupAgeMs }} ms ago)</span>
+                                            </td></tr>
+                                        <tr><td>Flow</td><td class="text-end">{{ diag.sensors.flowMlPerSec }} ml/s, {{ diag.sensors.volumeMl }} ml</td></tr>
+                                        <tr><td>Flow pulses</td><td class="text-end">{{ diag.sensors.flowPulses }} ({{ diag.sensors.flowRejected }} rejected)</td></tr>
+                                        <tr><td>Scale</td>
+                                            <td class="text-end">
+                                                <span v-if="!diag.sensors.weightOk">--</span>
+                                                <span v-else>{{ diag.sensors.weight }} {{ diag.sensors.weightCalibrated ? 'g' : 'raw counts' }}</span>
+                                            </td></tr>
+                                        <tr><td>Brew switch pin</td><td class="text-end">{{ diag.sensors.brewSwitchLevel ? 'high' : 'low' }}</td></tr>
+                                        <tr><td>Water probe pin</td><td class="text-end">{{ diag.sensors.waterPinLevel ? 'high' : 'low' }}</td></tr>
+                                        <tr><td>Encoder</td><td class="text-end">{{ diag.sensors.encoder }}</td></tr>
+                                    </tbody>
+                                </table>
+
+                                <h6 class="text-muted">Boards and link</h6>
+                                <table class="table table-sm mb-0">
+                                    <tbody>
+                                        <tr><td>Controller firmware</td><td class="text-end small">{{ diag.boards.controllerFirmware }}</td></tr>
+                                        <tr><td>Display firmware</td><td class="text-end small">{{ diag.boards.headFirmware }}</td></tr>
+                                        <tr><td>Controller uptime</td><td class="text-end">{{ diag.boards.controllerUptimeS }} s</td></tr>
+                                        <tr><td>Controller free RAM</td><td class="text-end">{{ diag.boards.controllerFreeHeap }} bytes</td></tr>
+                                        <tr><td>Display free RAM</td><td class="text-end">{{ diag.boards.headFreeHeap }} bytes</td></tr>
+                                        <tr><td>WiFi signal</td><td class="text-end">{{ diag.boards.rssi }} dBm</td></tr>
+                                        <tr><td>Frames received</td><td class="text-end">{{ diag.link.framesReceived }}</td></tr>
+                                        <tr><td>Bad checksums</td>
+                                            <td class="text-end" :class="diag.link.badChecksum > 0 ? 'text-warning fw-bold' : ''">
+                                                {{ diag.link.badChecksum }}
+                                            </td></tr>
+                                        <tr><td>Last frame</td><td class="text-end">{{ diag.link.msSinceFrame }} ms ago</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-body clearfix" v-show="activeSection !== 'diag'">
                         <div class="float-end me-2">
                             <button type="submit" class="btn btn-primary" :disabled="isPostingForm">
                                 <span v-show="showPostSucceeded" class="fa-solid fa-check me-1"></span>

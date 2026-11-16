@@ -219,6 +219,14 @@ namespace temps {
         return groupOk;
     }
 
+    uint32_t boilerAgeMs() {
+        return boilerSensor != nullptr ? boilerSensor->millisSinceLastGoodReading() : 0;
+    }
+
+    uint32_t groupAgeMs() {
+        return groupSensor != nullptr ? groupSensor->millisSinceLastGoodReading() : 0;
+    }
+
     void printStatus() {
         Serial.print("  boiler RTD (CS pin ");
         Serial.print(PIN_RTD_CS_BOILER);

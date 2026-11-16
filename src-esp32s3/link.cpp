@@ -80,6 +80,9 @@ namespace machinelink {
         }
         State current;
 
+        Diag currentDiag;
+        uint32_t lastDiagMs = 0;
+
         uint32_t lastFrameMs = 0;
         uint32_t frames = 0;
         uint32_t lastHeartbeatMs = 0;
@@ -140,6 +143,63 @@ namespace machinelink {
             parser.get("flt", current.fault, sizeof(current.fault));
         }
 
+        /**
+         * @brief Diagnostics frame. Display only - nothing here gates anything.
+         *
+         * Each field is only written when the frame actually carries it, so a
+         * future controller that drops a field leaves the last value rather
+         * than zeroing it, and an older controller that never sends any of
+         * this leaves everReceived false.
+         */
+        void applyDiag() {
+            char buf[24];
+
+            if (parser.get("o", buf, sizeof(buf))) {
+                currentDiag.outputs = static_cast<uint8_t>(atoi(buf));
+            }
+
+            if (parser.get("bsw", buf, sizeof(buf))) {
+                currentDiag.brewSwitchLevel = static_cast<uint8_t>(atoi(buf));
+            }
+
+            if (parser.get("wtr", buf, sizeof(buf))) {
+                currentDiag.waterPinLevel = static_cast<uint8_t>(atoi(buf));
+            }
+
+            if (parser.get("up", buf, sizeof(buf))) {
+                currentDiag.controllerUptimeS = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("ba", buf, sizeof(buf))) {
+                currentDiag.boilerAgeMs = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("ga", buf, sizeof(buf))) {
+                currentDiag.groupAgeMs = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("fp", buf, sizeof(buf))) {
+                currentDiag.flowPulses = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("fx", buf, sizeof(buf))) {
+                currentDiag.flowRejected = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("ram", buf, sizeof(buf))) {
+                currentDiag.freeHeap = strtoul(buf, nullptr, 10);
+            }
+
+            if (parser.get("ot", buf, sizeof(buf))) {
+                currentDiag.overTempLimitC = static_cast<float>(atof(buf));
+            }
+
+            parser.get("pmpr", currentDiag.pumpRefusal, sizeof(currentDiag.pumpRefusal));
+
+            currentDiag.everReceived = true;
+            lastDiagMs = millis();
+        }
+
     } // namespace
 
     void init() {
@@ -189,6 +249,10 @@ namespace machinelink {
                     applyTelemetry();
                     break;
 
+                case linkproto::FrameType::Diag:
+                    applyDiag();
+                    break;
+
                 case linkproto::FrameType::Ack:
                     handleAck();
                     break;
@@ -219,6 +283,14 @@ namespace machinelink {
 
     const char* controllerFirmware() {
         return controllerFw;
+    }
+
+    const Diag& diag() {
+        // Age is filled in on read rather than tracked, so a page showing it
+        // cannot display a stale frame as if it had just arrived.
+        currentDiag.ageMs = currentDiag.everReceived ? (millis() - lastDiagMs) : 0;
+
+        return currentDiag;
     }
 
     const State& state() {

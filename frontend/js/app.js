@@ -62,8 +62,26 @@ const vueApp = Vue.createApp({
             // I2C scan (Encoder section)
             i2cScanning: false,
             i2cScanHasRun: false,
-            i2cScanDevices: []
+            i2cScanDevices: [],
+
+            // Diags tab (Hardware). Polled only while the tab is open, and the
+            // controller sends nothing at all until the switch is turned on.
+            diag: null,
+            diagEnabled: false,
+            diagTimer: null,
+
+            // Momentary output test. While a button is held the browser keeps
+            // re-asserting it; the controller drops the output about a second
+            // after that stops, so letting go, closing the tab and losing WiFi
+            // all end the same way.
+            holdTimer: null,
+            holdMessage: ''
         }
+    },
+
+    unmounted() {
+        this.stopDiagPolling();
+        this.endHold();
     },
 
     async mounted() {
@@ -356,6 +374,125 @@ const vueApp = Vue.createApp({
         // Kick off an I2C bus scan on the device and poll briefly for the result. The scan
         // itself runs on the device's main loop (not instantly), so this isn't a single
         // request/response - start it, then check back a few times until it's done.
+        // Which outputs can be test-driven. The heater is absent deliberately:
+        // the controller's generic output switch does not check the dry-fire
+        // interlock, so it must not be reachable from a browser.
+        holdChannel(key) {
+            return { groupValve: 'valve', fill: 'fill', coldInlet: 'inlet' }[key] || null;
+        },
+
+        async sendHold(channel, on) {
+            try {
+                await fetch('/api/hold?ch=' + channel + '&on=' + (on ? '1' : '0'));
+            }
+            catch (err) {
+                console.error('Error sending output hold:', err);
+            }
+        },
+
+        startHold(key) {
+            const channel = this.holdChannel(key);
+
+            if (!channel) {
+                return;
+            }
+
+            this.holdMessage = '';
+            this.endHold();
+            this.sendHold(channel, true);
+
+            // Well inside the controller's one-second lapse, so normal network
+            // jitter cannot make a held button flicker.
+            this.holdTimer = setInterval(() => this.sendHold(channel, true), 250);
+
+            // If the controller refuses - a shot running, a latched fault - the
+            // output simply never shows ON. Say so rather than leaving someone
+            // holding a button that does nothing.
+            setTimeout(() => {
+                if (this.holdTimer && this.diag && !this.diag.outputs[key]) {
+                    this.holdMessage = 'The controller refused that. It will not test outputs while a shot or flush is running, or after a fault.';
+                }
+            }, 1500);
+        },
+
+        endHold() {
+            if (this.holdTimer) {
+                clearInterval(this.holdTimer);
+                this.holdTimer = null;
+            }
+
+            // Always send the release, even if no timer was running: a mouseup
+            // that arrives after some hiccup should still shut it off.
+            this.sendHold('valve', false);
+            this.sendHold('fill', false);
+            this.sendHold('inlet', false);
+        },
+
+        outputLabel(key) {
+            return {
+                heater: 'Heater SSR',
+                groupValve: 'Group valve',
+                fill: 'Boiler fill',
+                coldInlet: 'Cold water inlet'
+            }[key] || key;
+        },
+
+        // Opening the tab turns diagnostics ON, closing it turns them off again.
+        // The controller defaults to off and does not persist the setting, so
+        // nobody can leave it chattering by accident.
+        async openDiag() {
+            this.activeSection = 'diag';
+            await this.toggleDiag(true);
+        },
+
+        async toggleDiag(on) {
+            this.diagEnabled = !!on;
+
+            try {
+                const response = await fetch('/api/diag?on=' + (on ? '1' : '0'));
+                this.diag = await response.json();
+                this.diagEnabled = !!this.diag.enabled;
+            }
+            catch (err) {
+                console.error('Error switching diagnostics:', err);
+            }
+
+            if (on) {
+                this.startDiagPolling();
+            }
+            else {
+                this.stopDiagPolling();
+            }
+        },
+
+        startDiagPolling() {
+            this.stopDiagPolling();
+
+            this.diagTimer = setInterval(async () => {
+                // Stop on our own if the user navigated away without using the
+                // switch, so a forgotten tab is not polling the board forever.
+                if (this.activeSection !== 'diag') {
+                    this.stopDiagPolling();
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/api/diag');
+                    this.diag = await response.json();
+                }
+                catch (err) {
+                    console.error('Error fetching diagnostics:', err);
+                }
+            }, 1000);
+        },
+
+        stopDiagPolling() {
+            if (this.diagTimer) {
+                clearInterval(this.diagTimer);
+                this.diagTimer = null;
+            }
+        },
+
         async scanI2C() {
             this.i2cScanning = true;
 
@@ -670,9 +807,16 @@ const vueApp = Vue.createApp({
         // Auto-scan the I2C bus the first time the Encoder section (16) is opened, so its
         // address dropdown fills with live devices without the user pressing Scan. Guarded so
         // it runs once; the Scan button is still there for a manual re-scan.
-        activeSection(section) {
+        activeSection(section, previous) {
             if (Number(section) === 16 && !this.i2cScanHasRun && !this.i2cScanning) {
                 this.scanI2C();
+            }
+
+            // Leaving the Diags tab switches the controller's diagnostics back
+            // off. Without this, clicking another pill would leave it sending
+            // once a second to a page nobody is looking at.
+            if (previous === 'diag' && section !== 'diag' && this.diagEnabled) {
+                this.toggleDiag(false);
             }
         }
     }

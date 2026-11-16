@@ -131,6 +131,21 @@ namespace temps {
     bool groupHealthy();
 
     /**
+     * @brief Milliseconds since each sensor last produced a GOOD reading.
+     *
+     * Diagnostics only - nothing in the control path uses these, because
+     * staleness is already enforced inside this module. They exist so a
+     * person can see a sensor starting to miss reads before it crosses the
+     * limit and trips, which is the difference between a loose wire found at
+     * the bench and one found mid-shot.
+     *
+     * Measured from the last SUCCESSFUL read, so a failing sensor cannot
+     * refresh its own freshness.
+     */
+    uint32_t boilerAgeMs();
+    uint32_t groupAgeMs();
+
+    /**
      * @brief Print a human-readable line for each sensor, for the console.
      */
     void printStatus();

@@ -101,6 +101,17 @@ namespace net {
         bool listening = false;
         uint32_t requests = 0;
 
+        /**
+         * What we last asked the controller to do about diagnostics.
+         *
+         * The controller does not report whether its diagnostics are on, so
+         * this is a record of the request, not proof. The page shows it as
+         * the switch position; whether frames are actually arriving is
+         * answered separately by controllerSeen and diagAgeMs, which come
+         * from the frames themselves.
+         */
+        bool diagRequested = false;
+
         char addressBuf[24] = "-";
         char networkBuf[40] = "-";
 
@@ -872,6 +883,156 @@ namespace net {
                 String out;
                 serializeJson(doc, out);
                 request->send(200, "application/json", out);
+            });
+
+            /**
+             * Everything the Diags page shows, in one request.
+             *
+             * Deliberately one endpoint rather than three: the page polls it
+             * on a timer, and one request a second is cheaper for this board
+             * than three. It mixes controller data, which arrives over the
+             * link, with this board's own, which it knows directly.
+             *
+             * `controllerSeen` is false until the first diagnostics frame
+             * lands. The page must show that rather than a screen of zeroes,
+             * which is the same rule the panel follows for a dead sensor.
+             */
+            server.on("/api/diag", HTTP_GET, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                // ?on=1 / ?on=0 switches the controller's diagnostics frame.
+                // A query parameter on the GET rather than a second endpoint,
+                // because the page then has one thing to talk to and the
+                // reply always carries the resulting state.
+                //
+                // Off is the default on the controller and it does not
+                // persist, so closing the page and rebooting both end up
+                // quiet without anyone having to remember.
+                if (request->hasParam("on")) {
+                    const bool wanted = request->getParam("on")->value() != "0";
+
+                    machinelink::sendCommand(wanted ? "diag=1" : "diag=0");
+                    diagRequested = wanted;
+                }
+
+                const auto& d = machinelink::diag();
+                const auto& st = machinelink::state();
+                const bool live = machinelink::isConnected();
+
+                JsonDocument doc;
+
+                doc["enabled"] = diagRequested;
+                doc["linkOk"] = live;
+                doc["controllerSeen"] = d.everReceived;
+                doc["diagAgeMs"] = d.ageMs;
+
+                JsonObject out = doc["outputs"].to<JsonObject>();
+                out["heater"] = (d.outputs & 0x01) != 0;
+                out["groupValve"] = (d.outputs & 0x02) != 0;
+                out["fill"] = (d.outputs & 0x04) != 0;
+                out["coldInlet"] = (d.outputs & 0x08) != 0;
+
+                JsonObject s = doc["sensors"].to<JsonObject>();
+                // null, not a number, when the reading is not trustworthy -
+                // the same rule the charts and the panel follow.
+                if (live && st.boilerOk) {
+                    s["boilerC"] = st.boilerC;
+                }
+                else {
+                    s["boilerC"] = nullptr;
+                }
+
+                if (live && st.groupOk) {
+                    s["groupC"] = st.groupC;
+                }
+                else {
+                    s["groupC"] = nullptr;
+                }
+
+                s["boilerOk"] = st.boilerOk;
+                s["groupOk"] = st.groupOk;
+                s["boilerAgeMs"] = d.boilerAgeMs;
+                s["groupAgeMs"] = d.groupAgeMs;
+                s["flowMlPerSec"] = st.flowMlPerSec;
+                s["volumeMl"] = st.volumeMl;
+                s["flowPulses"] = d.flowPulses;
+                s["flowRejected"] = d.flowRejected;
+                s["weight"] = st.weightG;
+                s["weightOk"] = st.weightOk;
+                s["weightCalibrated"] = st.weightCalibrated;
+                s["brewSwitchLevel"] = d.brewSwitchLevel;
+                s["waterPinLevel"] = d.waterPinLevel;
+                s["encoder"] = st.encoder;
+
+                JsonObject c = doc["control"].to<JsonObject>();
+                c["status"] = st.status;
+                c["fault"] = st.fault;
+                c["setpointC"] = st.setpointC;
+                c["heaterDuty"] = st.heaterDuty;
+                c["heaterEnabled"] = st.heaterEnabled;
+                c["overTempLimitC"] = d.overTempLimitC;
+                c["pumpPercent"] = st.pumpPercent;
+                c["pumpRefusal"] = d.pumpRefusal;
+                c["backflushArmed"] = st.backflushArmed;
+
+                JsonObject b = doc["boards"].to<JsonObject>();
+                b["controllerUptimeS"] = d.controllerUptimeS;
+                b["controllerFreeHeap"] = d.freeHeap;
+                b["controllerFirmware"] = machinelink::controllerFirmware();
+                b["headFirmware"] = kHeadVersion;
+                b["headUptimeS"] = millis() / 1000UL;
+                b["headFreeHeap"] = ESP.getFreeHeap();
+                b["headFreePsram"] = ESP.getFreePsram();
+                b["rssi"] = WiFi.RSSI();
+
+                JsonObject l = doc["link"].to<JsonObject>();
+                l["framesReceived"] = machinelink::framesReceived();
+                l["badChecksum"] = machinelink::badChecksums();
+                l["msSinceFrame"] = machinelink::msSinceLastFrame();
+
+                String outStr;
+                serializeJson(doc, outStr);
+                request->send(200, "application/json", outStr);
+            });
+
+            /**
+             * Momentary output test, from the Diags page.
+             *
+             * `/api/hold?ch=valve|fill|inlet&on=1`, repeated by the browser
+             * while the button is held. The controller drops the output about
+             * a second after the requests stop, so a closed tab or a dropped
+             * network ends it exactly like letting go does.
+             *
+             * No heater channel, deliberately. See the note in the
+             * controller's command handler.
+             */
+            server.on("/api/hold", HTTP_GET, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                if (!request->hasParam("ch")) {
+                    request->send(400, "application/json", "{\"error\":\"no channel\"}");
+
+                    return;
+                }
+
+                const String ch = request->getParam("ch")->value();
+                const bool on = request->hasParam("on") && request->getParam("on")->value() != "0";
+
+                if (ch != "valve" && ch != "fill" && ch != "inlet") {
+                    request->send(400, "application/json", "{\"error\":\"unknown channel\"}");
+
+                    return;
+                }
+
+                char cmd[40];
+                snprintf(cmd, sizeof(cmd), "hold=%s,on=%d", ch.c_str(), on ? 1 : 0);
+                machinelink::sendCommand(cmd);
+
+                // Reports what was SENT, not what the controller did with it.
+                // The controller is free to refuse - it does while a shot is
+                // running - and the Diags page shows the real output states a
+                // moment later from the diagnostics frame itself.
+                request->send(200, "application/json", "{\"sent\":true}");
             });
 
             // Network and head diagnostics, so a browser can answer "is this

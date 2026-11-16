@@ -80,6 +80,42 @@ namespace machinelink {
         char fault[24] = "?";
     };
 
+    /**
+     * @brief Diagnostics, arriving once a second in their own frame.
+     *
+     * Everything here is for a person looking at the Diags page. Nothing in
+     * the control path or on the panel reads it, and losing every one of
+     * these frames changes nothing about how the machine runs.
+     *
+     * `everReceived` is false until the first one lands, so the page can say
+     * "no data yet" instead of showing a screenful of confident zeroes.
+     */
+    struct Diag {
+        bool everReceived = false;
+        uint32_t ageMs = 0; ///< since the last diag frame, filled in on read
+
+        /**
+         * Output states, bit per channel in outputs::Channel order:
+         * 0 heater, 1 group valve, 2 fill, 3 cold inlet.
+         */
+        uint8_t outputs = 0;
+
+        uint8_t brewSwitchLevel = 0; ///< raw pin level, before any gesture logic
+        uint8_t waterPinLevel = 0;   ///< raw probe pin; the circuit does not exist yet
+
+        uint32_t controllerUptimeS = 0;
+        uint32_t boilerAgeMs = 0; ///< since the boiler RTD last read successfully
+        uint32_t groupAgeMs = 0;
+        uint32_t flowPulses = 0;
+        uint32_t flowRejected = 0;
+        uint32_t freeHeap = 0;
+        float overTempLimitC = 0.0f;
+        char pumpRefusal[24] = "?"; ///< why the pump last refused, or "ok"
+    };
+
+    /** @brief Latest diagnostics. Check everReceived before trusting it. */
+    const Diag& diag();
+
     /** @brief Open the UART to the Teensy. */
     void init();
 

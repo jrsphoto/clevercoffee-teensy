@@ -9,6 +9,14 @@
 #include <Arduino.h>
 #include <linkProtocol.h>
 
+// Teensyduino's heap bounds, for the free-RAM figure in the diagnostics
+// frame. Must be at global scope: declared inside the anonymous namespace
+// below they become namespaced symbols and the link fails looking for them.
+extern "C" {
+    extern unsigned long _heap_end;
+    extern char* __brkval;
+}
+
 #include "encoderHandler.h"
 #include "flowHandler.h"
 #include "i2cHandler.h"
@@ -161,6 +169,114 @@ namespace comms {
             send(linkproto::FrameType::Hello, body);
         }
 
+        /**
+         * @brief Free heap, for the diagnostics frame.
+         *
+         * Teensyduino's allocator grows the heap upward from __brkval toward
+         * the top of RAM2, so the gap between them is what is left. There is
+         * no library call for this on Teensy 4.
+         *
+         * The two symbols are declared at file scope above, OUTSIDE this
+         * anonymous namespace. Declared in here they become
+         * `comms::{anonymous}::__brkval` and the link fails.
+         */
+        uint32_t freeHeapBytes() {
+            return static_cast<uint32_t>(
+                reinterpret_cast<char*>(&_heap_end) - __brkval);
+        }
+
+        uint32_t lastDiagMs = 0;
+
+        /**
+         * Diagnostics are OFF until someone asks for them.
+         *
+         * John's call, 2026-11-15. Nothing needs this frame to run the
+         * machine, so the wire stays quiet unless a person has the Diags page
+         * open. Not persisted either: a reboot goes back to quiet, because an
+         * unattended machine sending diagnostics to nobody is pure cost.
+         */
+        bool diagEnabled = false;
+
+        /**
+         * A diagnostics output HOLD, from the Diags page.
+         *
+         * One channel at a time, on only while the browser keeps saying so.
+         * `holdUntilMs` is refreshed by each request and the output drops the
+         * moment it lapses, so a closed tab, a dropped network or a crashed
+         * browser all end it. The same pattern as the heater permit and the
+         * pump's speed command: staying on requires continuous proof that
+         * somebody is still there.
+         *
+         * kHoldLapseMs is deliberately several times the browser's repeat
+         * interval, so ordinary jitter does not make a held button stutter.
+         */
+        constexpr uint32_t kHoldLapseMs = 1000;
+
+        bool holdActive = false;
+        outputs::Channel holdChannel = outputs::Channel::Valve;
+        uint32_t holdUntilMs = 0;
+
+        void releaseHold() {
+            if (!holdActive) {
+                return;
+            }
+
+            outputs::set(holdChannel, false);
+            holdActive = false;
+        }
+
+        /**
+         * @brief Is it safe to hand an output to the Diags page right now?
+         *
+         * No, if anything else is driving the machine. A shot owns the group
+         * valve and the pump, and a hold expiring mid-shot would shut the
+         * valve under it. Diagnostics are for an idle machine.
+         */
+        bool holdAllowed() {
+            return !safety::isFaulted() && !shot::isRunning() && !shot::isFlushing()
+                   && !shot::isBackflushing();
+        }
+
+        /**
+         * @brief Diagnostics, once a second. Read by a person, not by the loop.
+         *
+         * Everything here is either a state the live telemetry has no room
+         * for, or a counter that only matters when something is wrong. See
+         * the note on FrameType::Diag for why this is a separate frame.
+         *
+         * `o` is a bitmask rather than four fields purely to save wire: bit 0
+         * heater, 1 group valve, 2 fill, 3 cold inlet, matching
+         * outputs::Channel order.
+         */
+        void sendDiag() {
+            char body[linkproto::kMaxFrame];
+
+            uint8_t outs = 0;
+
+            for (uint8_t i = 0; i < outputs::kChannelCount; i++) {
+                if (outputs::isOn(static_cast<outputs::Channel>(i))) {
+                    outs |= static_cast<uint8_t>(1u << i);
+                }
+            }
+
+            snprintf(body, sizeof(body),
+                     "o=%u,bsw=%u,wtr=%u,up=%lu,ba=%lu,ga=%lu,fp=%lu,fx=%lu,"
+                     "ram=%lu,ot=%.0f,pmpr=%s",
+                     outs,
+                     switches::rawLevel(),
+                     static_cast<unsigned>(digitalReadFast(PIN_WATERTANKSENSOR)),
+                     static_cast<unsigned long>(millis() / 1000UL),
+                     static_cast<unsigned long>(temps::boilerAgeMs()),
+                     static_cast<unsigned long>(temps::groupAgeMs()),
+                     static_cast<unsigned long>(flow::pulseCount()),
+                     static_cast<unsigned long>(flow::rejectedCount()),
+                     static_cast<unsigned long>(freeHeapBytes()),
+                     temps::overTempLimitC(),
+                     pump::lastRefusal());
+
+            send(linkproto::FrameType::Diag, body);
+        }
+
         void sendTelemetry() {
             char body[linkproto::kMaxFrame];
 
@@ -251,6 +367,80 @@ namespace comms {
          */
         void handleCommand() {
             char value[48];
+
+            if (parser.get("hold", value, sizeof(value))) {
+                // Body is `hold=<channel>,on=<0|1>`. THE HEATER IS NOT
+                // AVAILABLE HERE and must not be added: outputs::set checks
+                // the fault latch and the boiler sensor, but not the dry-fire
+                // interlock, so a heater hold would energize the element
+                // without the water check. John's call, 2026-11-15.
+                outputs::Channel ch = outputs::Channel::Valve;
+                bool known = true;
+
+                if (strcmp(value, "valve") == 0) {
+                    ch = outputs::Channel::Valve;
+                }
+                else if (strcmp(value, "fill") == 0) {
+                    ch = outputs::Channel::Fill;
+                }
+                else if (strcmp(value, "inlet") == 0) {
+                    ch = outputs::Channel::Inlet;
+                }
+                else {
+                    known = false;
+                }
+
+                char on[8] = "0";
+                parser.get("on", on, sizeof(on));
+
+                if (!known) {
+                    ack("hold", false, "unknown channel");
+
+                    return;
+                }
+
+                if (atoi(on) == 0) {
+                    releaseHold();
+                    ack("hold", true, "released");
+
+                    return;
+                }
+
+                if (!holdAllowed()) {
+                    releaseHold();
+                    ack("hold", false, "machine busy or faulted");
+
+                    return;
+                }
+
+                // Switching channel mid-hold releases the old one first, so
+                // two outputs can never be held at once.
+                if (holdActive && ch != holdChannel) {
+                    releaseHold();
+                }
+
+                holdChannel = ch;
+                holdUntilMs = millis() + kHoldLapseMs;
+                holdActive = true;
+
+                ack("hold", outputs::set(ch, true), "held");
+
+                return;
+            }
+
+            if (parser.get("diag", value, sizeof(value))) {
+                diagEnabled = (atoi(value) != 0);
+
+                // Send one immediately on switch-on so the page fills in
+                // rather than sitting blank for up to a second.
+                if (diagEnabled) {
+                    sendDiag();
+                }
+
+                ack("diag", true, diagEnabled ? "on" : "off");
+
+                return;
+            }
 
             if (parser.get("flowreset", value, sizeof(value))) {
                 flow::reset();
@@ -577,6 +767,20 @@ namespace comms {
             lastSentEncoder = encoderNow;
             lastSentBrew = switches::brewRequested();
             sendTelemetry();
+        }
+
+        // Diagnostics, well after the telemetry above so the two do not
+        // collide in the same pass any more often than they have to.
+        // A hold that stopped being refreshed drops its output. Checked every
+        // pass rather than on a timer: this is the thing that makes the button
+        // momentary, so it must not wait for anything else.
+        if (holdActive && static_cast<int32_t>(now - holdUntilMs) >= 0) {
+            releaseHold();
+        }
+
+        if (diagEnabled && (now - lastDiagMs) >= 1000) {
+            lastDiagMs = now;
+            sendDiag();
         }
     }
 
