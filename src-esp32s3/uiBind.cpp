@@ -361,6 +361,21 @@ namespace uibind {
         constexpr char kPrefRotation[] = "rot";
         constexpr char kPrefBrightness[] = "bl";
         constexpr char kPrefVolume[] = "vol";
+        constexpr char kPrefSleep[] = "slp";
+
+        /**
+         * Screen sleep, in minutes. 0 means never.
+         *
+         * The steps are coarse on purpose: this is a two-button control on a
+         * panel, and nobody needs 7 minutes rather than 5.
+         */
+        constexpr uint8_t kSleepSteps[] = {0, 1, 2, 5, 10, 15, 30, 60};
+        constexpr uint8_t kSleepStepCount = sizeof(kSleepSteps) / sizeof(kSleepSteps[0]);
+
+        uint8_t sleepMinutes = 0;
+        uint32_t lastActivityMs = 0;
+
+
 
         constexpr uint8_t kRotNormal = 1;  // landscape
         constexpr uint8_t kRotFlipped = 3; // landscape, 180 round
@@ -447,6 +462,112 @@ namespace uibind {
             audio::setVolumePercent(next);
             saveByte(kPrefVolume, next);
             showVolume();
+        }
+
+        void showSleep() {
+            if (ui_SleepValue == nullptr) {
+                return;
+            }
+
+            if (sleepMinutes == 0) {
+                lv_label_set_text(ui_SleepValue, "never");
+
+                return;
+            }
+
+            char buf[12];
+            snprintf(buf, sizeof(buf), "%u min", static_cast<unsigned>(sleepMinutes));
+            lv_label_set_text(ui_SleepValue, buf);
+        }
+
+        void sleepClicked(lv_event_t* e) {
+            const bool up = lv_event_get_user_data(e) != nullptr;
+
+            uint8_t index = 0;
+
+            for (uint8_t i = 0; i < kSleepStepCount; i++) {
+                if (kSleepSteps[i] == sleepMinutes) {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (up && index + 1 < kSleepStepCount) {
+                index++;
+            }
+            else if (!up && index > 0) {
+                index--;
+            }
+
+            sleepMinutes = kSleepSteps[index];
+            saveByte(kPrefSleep, sleepMinutes);
+            showSleep();
+
+            // Changing it is itself activity, so the screen does not go dark
+            // a second after someone sets a one-minute timeout.
+            lastActivityMs = millis();
+        }
+
+        /**
+         * @brief Blank the screen when idle, and only when idle.
+         *
+         * NEVER sleeps while the machine is doing something. A dark panel
+         * during a shot would hide the shot timer, the weight and the STOP
+         * button, which is the opposite of useful. A latched fault keeps it
+         * awake too - that is the one message nobody should have to find by
+         * touching the screen.
+         *
+         * Waking is not handled here: the touch layer in uiLvgl does it, so
+         * that the touch which wakes the screen cannot also press whatever is
+         * underneath it.
+         */
+        void serviceSleep() {
+            const auto& st = machinelink::state();
+            const bool live = machinelink::isConnected();
+            const uint32_t now = millis();
+
+            // WAKING COUNTS AS ACTIVITY. The touch that wakes the screen is
+            // deliberately swallowed by the touch layer, so LVGL never sees
+            // it and its idle clock does not reset. Without this the screen
+            // woke, the timer was still expired, and it went dark again about
+            // a second later.
+            static bool wasAsleep = false;
+            const bool asleepNow = display::screenAsleep();
+
+            if (wasAsleep && !asleepNow) {
+                lastActivityMs = now;
+            }
+
+            wasAsleep = asleepNow;
+
+            // "Busy" is the machine DOING something, which a boiler holding
+            // temperature is not. The heater output cycles with the PID, so
+            // counting "heating" as busy would reset this timer every time
+            // the SSR came on and the screen would never sleep on a live
+            // machine. Only a shot, a flush, a backflush, the pump turning,
+            // or a fault keeps it awake.
+            const bool busy = live
+                              && (st.pumpPercent > 0.0f || strcmp(st.fault, "none") != 0
+                                  || (strcmp(st.status, "idle") != 0
+                                      && strcmp(st.status, "heating") != 0));
+
+            if (busy || sleepMinutes == 0) {
+                lastActivityMs = now;
+
+                if (display::screenAsleep()) {
+                    display::setScreenAsleep(false);
+                }
+
+                return;
+            }
+
+            if (display::screenAsleep()) {
+                return;
+            }
+
+            if ((now - lastActivityMs) >= (static_cast<uint32_t>(sleepMinutes) * 60000UL)) {
+                display::setScreenAsleep(true);
+            }
         }
 
         // --- Setup > BREW -------------------------------------------------
@@ -548,6 +669,7 @@ namespace uibind {
         void showDisplayPage(lv_event_t*) {
             showBrightness();
             showVolume();
+            showSleep();
             showFlipState();
 
             if (ui_ScreenDisplay != nullptr) {
@@ -645,6 +767,8 @@ namespace uibind {
             {ui_BrightnessUp, brightnessClicked, reinterpret_cast<void*>(1)},
             {ui_VolumeDown, volumeClicked, nullptr},
             {ui_VolumeUp, volumeClicked, reinterpret_cast<void*>(1)},
+            {ui_SleepDown, sleepClicked, nullptr},
+            {ui_SleepUp, sleepClicked, reinterpret_cast<void*>(1)},
         };
 
         for (const auto& b : buttons) {
@@ -700,6 +824,10 @@ namespace uibind {
             // The codec's own default is full volume, so that is the default
             // here too: a saved value is a deliberate change away from it.
             const uint8_t vol = prefs.getUChar(kPrefVolume, 100);
+
+            // Default never. A machine that blanks its screen unasked, the
+            // first time it is switched on, looks broken.
+            sleepMinutes = prefs.getUChar(kPrefSleep, 0);
             prefs.end();
 
             if (rot != display::rotation()) {
@@ -713,6 +841,9 @@ namespace uibind {
         showFlipState();
         showBrightness();
         showVolume();
+        showSleep();
+
+        lastActivityMs = millis();
 
         // The head's own version never changes while it is running, so it is
         // written once. The controller's is live - see update().
@@ -910,6 +1041,15 @@ namespace uibind {
         }
 
         sampleChart(st, live);
+
+        // Any touch counts as activity. lv_display_get_inactive_time is
+        // LVGL's own idle clock and already covers every widget, so there is
+        // no need to hook each button.
+        if (lv_display_get_inactive_time(nullptr) < 1000) {
+            lastActivityMs = millis();
+        }
+
+        serviceSleep();
     }
 
     void invalidate() {

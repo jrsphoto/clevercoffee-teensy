@@ -115,11 +115,54 @@ namespace display {
          * against a table of rectangles kept in step with the drawing by hand.
          * That table was two sources of truth for one button.
          */
+        /**
+         * Screen blanking state. `asleep` means the backlight is off;
+         * `wakeBrightness` is what to restore, captured when it went dark so
+         * a brightness change made while awake is not lost.
+         */
+        bool asleep = false;
+        uint8_t wakeBrightness = 200;
+
+        /**
+         * True from the moment a touch wakes the screen until the finger
+         * comes off. Without it, one long press would wake the screen and
+         * then land on whatever widget is underneath as soon as the next read
+         * happened - which on the home grid is a drink tile.
+         */
+        bool swallowTouch = false;
+
         void touchCb(lv_indev_t*, lv_indev_data_t* data) {
             uint16_t x = 0;
             uint16_t y = 0;
 
-            if (lcd.getTouch(&x, &y)) {
+            const bool touching = lcd.getTouch(&x, &y);
+
+            if (asleep) {
+                if (touching) {
+                    setScreenAsleep(false);
+                    swallowTouch = true;
+                }
+
+                // Nothing reaches LVGL while dark, including the touch that
+                // wakes it.
+                data->state = LV_INDEV_STATE_RELEASED;
+
+                return;
+            }
+
+            if (swallowTouch) {
+                // Still the same press that woke it. Keep eating it until the
+                // finger lifts.
+                if (!touching) {
+                    swallowTouch = false;
+                }
+
+                data->state = LV_INDEV_STATE_RELEASED;
+
+                return;
+            }
+
+            if (touching) {
                 data->point.x = x;
                 data->point.y = y;
                 data->state = LV_INDEV_STATE_PRESSED;
@@ -352,7 +395,26 @@ namespace display {
     }
 
     void setBrightness(const uint8_t level) {
-        lcd.setBrightness(level);
+        // Remember it even while dark, so waking restores the level the user
+        // last chose rather than whatever it was when it went to sleep.
+        wakeBrightness = level;
+
+        if (!asleep) {
+            lcd.setBrightness(level);
+        }
+    }
+
+    void setScreenAsleep(const bool sleep) {
+        if (sleep == asleep) {
+            return;
+        }
+
+        asleep = sleep;
+        lcd.setBrightness(sleep ? 0 : wakeBrightness);
+    }
+
+    bool screenAsleep() {
+        return asleep;
     }
 
     uint8_t rotation() {

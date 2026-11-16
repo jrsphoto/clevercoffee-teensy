@@ -181,6 +181,14 @@ extern "C" {
     /** Label on the Display page showing the sound volume, 0-100%. */
     extern lv_obj_t* ui_VolumeValue;
 
+    /**
+     * Label on the Display page: how long before the screen goes dark.
+     *
+     * Reads "never" at zero rather than "0 min", because a screen that never
+     * sleeps is a setting rather than a duration.
+     */
+    extern lv_obj_t* ui_SleepValue;
+
     /** Navigation and action buttons on the setup pages. */
     extern lv_obj_t* ui_SetupBack;
     extern lv_obj_t* ui_SetupDisplayBtn;
@@ -192,6 +200,8 @@ extern "C" {
     extern lv_obj_t* ui_BrightnessUp;
     extern lv_obj_t* ui_VolumeDown;
     extern lv_obj_t* ui_VolumeUp;
+    extern lv_obj_t* ui_SleepDown;
+    extern lv_obj_t* ui_SleepUp;
 
     /** FLIP 180. Rotates the panel and REMEMBERS it across a power cycle. */
     extern lv_obj_t* ui_FlipButton;

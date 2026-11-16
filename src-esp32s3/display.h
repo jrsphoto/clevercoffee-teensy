@@ -193,6 +193,24 @@ namespace display {
     uint8_t rotation();
 
     /**
+     * @brief Screen blanking, so an idle machine is not lit all night.
+     *
+     * Asleep means the backlight is off; nothing else stops. The UI keeps
+     * updating underneath, the link keeps running, and a shot started from
+     * the brew switch behaves exactly as it would awake.
+     *
+     * THE FIRST TOUCH ONLY WAKES. It is swallowed rather than passed to
+     * whatever widget happens to be under the finger, because reaching for a
+     * dark screen must never start a shot or arm a backflush.
+     *
+     * Deciding WHEN to sleep is not here - that needs to know whether the
+     * machine is busy, which is uiBind's business. This is only the
+     * mechanism.
+     */
+    void setScreenAsleep(bool asleep);
+    bool screenAsleep();
+
+    /**
      * @brief Poll touch and draw feedback. Call every loop pass.
      */
     void loop();

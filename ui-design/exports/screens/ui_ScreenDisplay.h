@@ -33,6 +33,12 @@ extern lv_obj_t * ui_VolumeDownLbl;
 extern lv_obj_t * ui_VolumeUp;
 extern lv_obj_t * ui_VolumeUpLbl;
 extern lv_obj_t * ui_VolumeValue;
+extern lv_obj_t * ui_CapSleep;
+extern lv_obj_t * ui_SleepDown;
+extern lv_obj_t * ui_SleepDownLbl;
+extern lv_obj_t * ui_SleepUp;
+extern lv_obj_t * ui_SleepUpLbl;
+extern lv_obj_t * ui_SleepValue;
 // CUSTOM VARIABLES
 
 #ifdef __cplusplus

@@ -81,6 +81,7 @@ extern "C" {
     lv_obj_t* ui_ScreenDisplay = nullptr;
     lv_obj_t* ui_BrightnessValue = nullptr;
     lv_obj_t* ui_VolumeValue = nullptr;
+    lv_obj_t* ui_SleepValue = nullptr;
     lv_obj_t* ui_FlipValue = nullptr;
     lv_obj_t* ui_SetupBack = nullptr;
     lv_obj_t* ui_SetupDisplayBtn = nullptr;
@@ -92,6 +93,8 @@ extern "C" {
     lv_obj_t* ui_BrightnessUp = nullptr;
     lv_obj_t* ui_VolumeDown = nullptr;
     lv_obj_t* ui_VolumeUp = nullptr;
+    lv_obj_t* ui_SleepDown = nullptr;
+    lv_obj_t* ui_SleepUp = nullptr;
     lv_obj_t* ui_FlipButton = nullptr;
     lv_obj_t* ui_ScreenBrew = nullptr;
     lv_obj_t* ui_BrewBack = nullptr;
@@ -369,77 +372,86 @@ namespace {
     }
 
     /**
-     * The DISPLAY sub-page: brightness, sound volume, and which way up the
-     * panel is.
+     * The DISPLAY sub-page, in TWO COLUMNS.
      *
-     * Three groups, each a caption with a pair of -/+ buttons and the value
-     * beside them, separated by rules. Occupied rows, so the next person
-     * adding something can see at a glance that there is no space left:
+     * John's layout, 2026-11-15: the left column is the three settings that
+     * were already here, the right column starts with screen sleep and has
+     * room for two more underneath. One column was full at three rows, and
+     * squeezing a fourth in is how the hand-drawn pages kept going wrong.
      *
-     *   0..32    header and its rule
-     *   56..116  BRIGHTNESS
-     *   124      rule
-     *   130..190 VOLUME
-     *   198      rule
-     *   204..264 ORIENTATION
+     * Each group is a caption, a pair of -/+ buttons and its value, inside a
+     * 230 wide column. Rows, per column:
      *
-     * A fourth group does not fit. Per the lesson that cost four attempts on
-     * the hand-drawn pages: add a SUB-PAGE, do not squeeze in another row.
+     *   56..112   group 1
+     *   124..180  group 2
+     *   192..248  group 3
+     *
+     * Left column starts at x=16, right at x=250.
      */
     void buildDisplayScreen() {
         ui_ScreenDisplay = makeScreen();
 
         ui_DisplayBack = pageHeader(ui_ScreenDisplay, "DISPLAY");
 
-        caption(ui_ScreenDisplay, 20, 56, "BRIGHTNESS");
+        constexpr int kColL = 16;
+        constexpr int kColR = 250;
+        constexpr int kRow1 = 56;
+        constexpr int kRow2 = 124;
+        constexpr int kRow3 = 192;
 
-        ui_BrightnessValue = lv_label_create(ui_ScreenDisplay);
-        lv_label_set_text(ui_BrightnessValue, "200");
-        lv_obj_set_style_text_font(ui_BrightnessValue, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(ui_BrightnessValue, kValue, 0);
-        lv_obj_set_pos(ui_BrightnessValue, 200, 76);
+        // Buttons sit 16 px below their caption; the value sits beside them.
+        constexpr int kBtnDrop = 16;
+        constexpr int kBtnW = 54;
+        constexpr int kBtnH = 40;
+        constexpr int kValDrop = 22;
 
-        ui_BrightnessDown = actionButton(ui_ScreenDisplay, 20, 72, 70, 44, "-", kValue);
-        ui_BrightnessUp = actionButton(ui_ScreenDisplay, 100, 72, 70, 44, "+", kValue);
+        // --- Left column -------------------------------------------------
+        caption(ui_ScreenDisplay, kColL, kRow1, "BRIGHTNESS");
+        ui_BrightnessDown = actionButton(ui_ScreenDisplay, kColL, kRow1 + kBtnDrop,
+                                         kBtnW, kBtnH, "-", kValue);
+        ui_BrightnessUp = actionButton(ui_ScreenDisplay, kColL + 62, kRow1 + kBtnDrop,
+                                       kBtnW, kBtnH, "+", kValue);
+        ui_BrightnessValue = settingValue(ui_ScreenDisplay, kColL + 134,
+                                          kRow1 + kValDrop, "200", kValue);
 
-        rule(ui_ScreenDisplay, 0, 124, kScreenW, 1);
+        caption(ui_ScreenDisplay, kColL, kRow2, "VOLUME");
+        ui_VolumeDown = actionButton(ui_ScreenDisplay, kColL, kRow2 + kBtnDrop,
+                                     kBtnW, kBtnH, "-", kValue);
+        ui_VolumeUp = actionButton(ui_ScreenDisplay, kColL + 62, kRow2 + kBtnDrop,
+                                   kBtnW, kBtnH, "+", kValue);
+        ui_VolumeValue = settingValue(ui_ScreenDisplay, kColL + 134,
+                                      kRow2 + kValDrop, "100%", kValue);
 
-        // SOUND VOLUME. The hand-drawn DISPLAY page carried this and the first
-        // LVGL version of the page dropped it, which was an oversight rather
-        // than a decision - the machine has a speaker and plays tones, and
-        // with no control the only volume available is whatever the codec
-        // comes up at.
-        caption(ui_ScreenDisplay, 20, 130, "VOLUME");
+        // SCREEN ORIENTATION. The panel can be mounted either way round, and
+        // it PERSISTS - see uiBind's flip handler. A flip that forgot itself
+        // on every power cycle would be worse than no button.
+        caption(ui_ScreenDisplay, kColL, kRow3, "ORIENTATION");
+        ui_FlipButton = actionButton(ui_ScreenDisplay, kColL, kRow3 + kBtnDrop,
+                                     116, kBtnH, "FLIP 180", kAccent);
+        ui_FlipValue = settingValue(ui_ScreenDisplay, kColL + 134,
+                                    kRow3 + kValDrop, "normal", kValue);
 
-        ui_VolumeValue = lv_label_create(ui_ScreenDisplay);
-        lv_label_set_text(ui_VolumeValue, "100%");
-        lv_obj_set_style_text_font(ui_VolumeValue, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(ui_VolumeValue, kValue, 0);
-        lv_obj_set_pos(ui_VolumeValue, 200, 150);
-
-        ui_VolumeDown = actionButton(ui_ScreenDisplay, 20, 146, 70, 44, "-", kValue);
-        ui_VolumeUp = actionButton(ui_ScreenDisplay, 100, 146, 70, 44, "+", kValue);
-
-        rule(ui_ScreenDisplay, 0, 198, kScreenW, 1);
-
-        // SCREEN ORIENTATION. John asked for this 2026-11-10: the panel can
-        // end up mounted either way round in the machine, and a screen that
-        // reads upside down is useless whatever else it does.
+        // --- Right column ------------------------------------------------
         //
-        // It PERSISTS - see uiBind's flip handler. A flip that forgets itself
-        // on every power cycle would have to be redone every time the machine
-        // is switched on, which is worse than not having the button.
-        caption(ui_ScreenDisplay, 20, 204, "ORIENTATION");
+        // SCREEN SLEEP. Backlight off after this long idle; a touch wakes it
+        // and does nothing else. It never sleeps while the machine is busy -
+        // that rule lives in uiBind, which is the half that knows.
+        // SCREEN SLEEP. Backlight off after this long idle; a touch wakes it
+        // and does nothing else. It never sleeps while the machine is busy -
+        // that rule lives in uiBind, which is the half that knows.
+        caption(ui_ScreenDisplay, kColR, kRow1, "SLEEP AFTER");
+        ui_SleepDown = actionButton(ui_ScreenDisplay, kColR, kRow1 + kBtnDrop,
+                                    kBtnW, kBtnH, "-", kValue);
+        ui_SleepUp = actionButton(ui_ScreenDisplay, kColR + 62, kRow1 + kBtnDrop,
+                                  kBtnW, kBtnH, "+", kValue);
+        ui_SleepValue = settingValue(ui_ScreenDisplay, kColR + 134,
+                                     kRow1 + kValDrop, "never", kValue);
 
-        ui_FlipValue = lv_label_create(ui_ScreenDisplay);
-        lv_label_set_text(ui_FlipValue, "normal");
-        lv_obj_set_style_text_font(ui_FlipValue, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(ui_FlipValue, kValue, 0);
-        lv_obj_set_pos(ui_FlipValue, 200, 224);
+        // Rows 2 and 3 of this column are free. The next display setting goes
+        // at (kColR, kRow2) and needs no re-layout.
 
-        ui_FlipButton = actionButton(ui_ScreenDisplay, 20, 220, 160, 44, "FLIP 180", kAccent);
+        rule(ui_ScreenDisplay, kColR - 10, 48, 1, 216);
     }
-
 
     /** @brief The label inside a button made by actionButton(). */
     lv_obj_t* buttonLabel(lv_obj_t* button) {

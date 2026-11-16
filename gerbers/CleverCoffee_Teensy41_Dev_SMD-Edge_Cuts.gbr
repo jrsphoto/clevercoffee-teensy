@@ -1,0 +1,23 @@
+%TF.GenerationSoftware,KiCad,Pcbnew,10.0.6*%
+%TF.CreationDate,2026-11-15T17:35:02-06:00*%
+%TF.ProjectId,CleverCoffee_Teensy41_Dev_SMD,436c6576-6572-4436-9f66-6665655f5465,1.6*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Profile,NP*%
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+G04 Created by KiCad (PCBNEW 10.0.6) date 2026-11-15 17:35:02*
+%MOMM*%
+%LPD*%
+G01*
+G04 APERTURE LIST*
+%TA.AperFunction,Profile*%
+%ADD10C,0.100000*%
+%TD*%
+G04 APERTURE END LIST*
+D10*
+X100000000Y-80000000D02*
+X200000000Y-80000000D01*
+X200000000Y-140000000D01*
+X100000000Y-140000000D01*
+X100000000Y-80000000D01*
+M02*
