@@ -23,9 +23,14 @@
  *   Teensy D2 -> net HEATER -> U2 I3 -> U2 O3 -> net HTR_RL  -> HEATER_RL1 (SSR)
  *   Teensy D3 -> net FILL   -> U2 I2 -> U2 O2 -> net FILL_RL -> BLR_FILL1  (fill)
  *   Teensy D5 -> net GROUP  -> U2 I1 -> U2 O1 -> net GRP_RL  -> GRP_SOL1   (group)
+ *   Teensy D4 -> net INLET  -> U2 I4 -> U2 O4 -> net WTR_RL  -> cold inlet valve
  *
- * Pulldowns: R17 on HEATER, R16 on FILL, R15 on GROUP. ULN channels 4-7 are
- * unused and marked no-connect at both ends.
+ * Pulldowns: R17 on HEATER, R16 on FILL, R15 on GROUP, R18 on INLET. ULN
+ * channels 5-7 are unused and marked no-connect at both ends.
+ *
+ * The inlet channel was added 2026-11-15, read out of relays.kicad_sch rather
+ * than assumed. It drives a Furon DVX2-144NCD2, a 24 VDC normally-closed valve
+ * on the regulated cold feed, so de-energized is water off.
  *
  * The pump is not on the ULN at all - see the Channel note below.
  */
@@ -57,7 +62,8 @@ namespace outputs {
     enum class Channel : uint8_t {
         Heater = 0, // D2 -> ULN I3/O3 -> heater SSR
         Valve,      // D5 -> ULN I1/O1 -> 3-way group solenoid
-        Fill,       // D3 -> ULN I2/O2 -> inlet fill solenoid
+        Fill,       // D3 -> ULN I2/O2 -> boiler fill solenoid
+        Inlet,      // D4 -> ULN I4/O4 -> cold water inlet shut-off
         Count
     };
 

@@ -97,6 +97,10 @@ inline void safetyHardOff() {
 
     pinMode(PIN_FILL, OUTPUT);
     digitalWriteFast(PIN_FILL, LOW);
+
+    // The cold inlet valve. Normally closed, so LOW shuts the water off.
+    pinMode(PIN_INLET, OUTPUT);
+    digitalWriteFast(PIN_INLET, LOW);
 }
 
 namespace safety {

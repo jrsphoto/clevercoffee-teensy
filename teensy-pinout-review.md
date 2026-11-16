@@ -20,10 +20,11 @@ Teensy digital pin numbers.
 
 | Function | Teensy pin | Peripheral used |
 |---|---|---|
-| Heater SSR (to ULN2003 I1) | 2 | GPIO out |
-| Fill valve (to ULN2003 I4) | 3 | GPIO out |
-| Group valve (to ULN2003 I3) | 5 | GPIO out |
-| Pump PWM (to driver board; AC mode via Pmode jumper to ULN2003 I2) | 9 | FlexPWM2_2_B |
+| Heater SSR (to ULN2003 I3) | 2 | GPIO out |
+| Boiler fill valve (to ULN2003 I2) | 3 | GPIO out |
+| Cold inlet valve (to ULN2003 I4) | 4 | GPIO out |
+| Group valve (to ULN2003 I1) | 5 | GPIO out |
+| Pump PWM (to the DRV8871 driver board) | 9 | FlexPWM2_2_B |
 | Flow sensor (DM60 pulse) | 10 | QuadTimer1_0 (interrupt / input-capture) |
 | SPI MOSI (both MAX31865 RTDs) | 11 | SPI (LPSPI4) MOSI |
 | SPI MISO (both RTDs) | 12 | SPI MISO |
@@ -243,11 +244,24 @@ file:
 | 1 | 1 (I1) | `GROUP` | 16 (O1) | `GRP_RL` | `GRP_SOL1` group valve |
 | 2 | 2 (I2) | `FILL` | 15 (O2) | `FILL_RL` | `BLR_FILL1` fill solenoid |
 | 3 | 3 (I3) | `HEATER` | 14 (O3) | `HTR_RL` | `HEATER_RL1` heater SSR |
+| 4 | 4 (I4) | `INLET` | 13 (O4) | `WTR_RL` | cold water inlet valve |
 
-Pulldowns confirmed on all three inputs: R15 on `GROUP`, R16 on `FILL`, R17 on
-`HEATER`, all to the GND rail. Channels 4-7 are marked no-connect at both ends.
-R18 no longer exists, which is correct now that the pump is PWM-only and only
-three channels are in use.
+Pulldowns confirmed on all four inputs: R15 on `GROUP`, R16 on `FILL`, R17 on
+`HEATER`, R18 on `INLET`, all to the GND rail. Channels 5-7 are marked
+no-connect at both ends.
+
+**Channel 4 added 2026-11-15**, read out of `relays.kicad_sch` after John drew
+it, not assumed. It drives a **Furon DVX2-144NCD2**, a 24 VDC two-way
+NORMALLY CLOSED valve on the regulated cold feed, so an unpowered or faulted
+board has the water shut off. Its 6.9 bar / 90 C limits keep it out of the
+brew circuit and away from anything past the heat exchanger.
+
+Firmware side is `PIN_INLET` (pad 4) and `outputs::Channel::Inlet`. It is
+forced low in `safetyHardOff()` with the other three. Nothing commands it yet;
+that belongs to the unwritten autofill handler.
+
+An earlier version of this file said R18 no longer existed. It does now, as
+that pulldown.
 
 **Why the earlier verification missed it.** The LA2016 test recorded further up
 this document probed **Teensy pins 2, 3, 5 and 9 directly**. It proved the

@@ -40,34 +40,39 @@ namespace outputs {
         GPIOPin heaterPin(PIN_HEATER, GPIOPin::OUT);
         GPIOPin valvePin(PIN_VALVE, GPIOPin::OUT);
         GPIOPin fillPin(PIN_FILL, GPIOPin::OUT);
+        GPIOPin inletPin(PIN_INLET, GPIOPin::OUT);
 
         Relay heaterRelay(heaterPin, Relay::HIGH_TRIGGER);
         Relay valveRelay(valvePin, Relay::HIGH_TRIGGER);
         Relay fillRelay(fillPin, Relay::HIGH_TRIGGER);
+        Relay inletRelay(inletPin, Relay::HIGH_TRIGGER);
 
         Relay* const relays[kChannelCount] = {
             &heaterRelay,
             &valveRelay,
             &fillRelay,
+            &inletRelay,
         };
 
         const char* const names[kChannelCount] = {
             "heater",
             "valve",
             "fill",
+            "inlet",
         };
 
         const uint8_t pins[kChannelCount] = {
             PIN_HEATER,
             PIN_VALVE,
             PIN_FILL,
+            PIN_INLET,
         };
 
         /**
          * Last commanded state. Not a reading - there is no feedback path from
          * the SSRs or solenoids, so this records intent only.
          */
-        bool commanded[kChannelCount] = {false, false, false};
+        bool commanded[kChannelCount] = {false, false, false, false};
 
         bool valid(const Channel channel) {
             return static_cast<uint8_t>(channel) < kChannelCount;

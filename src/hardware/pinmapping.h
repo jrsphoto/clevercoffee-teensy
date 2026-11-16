@@ -53,6 +53,12 @@
 #define PIN_HEATER 2 // -> HEATER -> ULN I3/O3 -> HTR_RL  -> heater SSR     (R17)
 #define PIN_FILL   3 // -> FILL   -> ULN I2/O2 -> FILL_RL -> fill solenoid  (R16)
 #define PIN_VALVE  5 // -> GROUP  -> ULN I1/O1 -> GRP_RL  -> group solenoid (R15)
+#define PIN_INLET  4 // -> INLET  -> ULN I4/O4 -> WTR_RL  -> cold inlet     (R18)
+                     // Furon DVX2-144NCD2, 24 VDC coil, 2-way NORMALLY CLOSED,
+                     // on the regulated cold feed. Added to the schematic
+                     // 2026-11-15; read from relays.kicad_sch, where the label
+                     // sits on the symbol pin whose name is 4_BCLK2, i.e. the
+                     // pad printed 4. Normally closed means no power, no water.
 
 // Pump speed. FlexPWM2_2_B, and it owns that submodule outright (the only other
 // pin on it, D6, was freed when the OLED came off this board), so the pump's PWM
