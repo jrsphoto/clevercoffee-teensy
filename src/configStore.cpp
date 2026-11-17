@@ -30,7 +30,14 @@ namespace configStore {
          *               to be too small, so it stays unused rather than being
          *               half-used.
          *   64  - 127   scale calibration (weightHandler, kEepromAddress 64)
-         *   128 - ...   this store
+         *   128 - 337   this store. 210 bytes: 8 header, 192 values,
+         *               6 presence bits, 4 checksum. IT IS NOT OPEN-ENDED,
+         *               whatever the earlier version of this comment implied
+         *               - on 2026-11-16 a flow calibration was put at 192 and
+         *               shot profiles at 256, and every config save quietly
+         *               erased both.
+         *   512 - 527   flow calibration (flowHandler)
+         *   576 - 663   shot profiles (shotHandler)
          *
          * Teensy 4.1 emulates EEPROM in flash, so all of it survives a
          * firmware upload - but NOT the full erase described in BENCH.md.

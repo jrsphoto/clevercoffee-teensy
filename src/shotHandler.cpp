@@ -7,6 +7,7 @@
 #include "shotHandler.h"
 
 #include <Arduino.h>
+#include <EEPROM.h>
 
 #include "encoderHandler.h"
 #include "flowHandler.h"
@@ -55,6 +56,134 @@ namespace shot {
         };
 
         uint8_t active = 0;
+
+        /**
+         * THE PROFILES BELONG TO THIS BOARD, and survive a reboot in EEPROM.
+         *
+         * Decided with John 2026-11-16, after the head's config push was
+         * caught flattening them. The head holds ONE set of brew values, so
+         * every handshake wrote the same numbers into whichever profile was
+         * active - a 60 ml lungo target was replaced by nothing at all, and
+         * the tile went on saying "by volume" while the shot actually ran to
+         * the 60 second backstop. A panel that labels a tile with a stop
+         * condition the machine will not honour is the worst kind of wrong.
+         *
+         * His reasoning for putting them here: the controller already owns
+         * the process, so it should own the settings that process needs. The
+         * head no longer pushes these six values (headConfig marks them
+         * controller-owned); a deliberate edit from the web page still
+         * arrives and still applies, because that is somebody asking rather
+         * than a default being re-asserted.
+         *
+         * THE TIME LIMIT IS NOT HERE. maxBrewMs stays a single global value
+         * the head may set, because it is a safety backstop rather than a
+         * brew setting - see setMaxBrewMs, which clamps it and refuses to
+         * disable it.
+         *
+         * Address 576, clear of the config store's 128-337 record and the
+         * flow calibration at 512. The first attempt put these at 256, inside
+         * the config store, where every save erased them. Same guards as those: magic, version,
+         * checksum, and a range check on every field, because a record that
+         * passes its checksum can still be nonsense written by an older
+         * build.
+         */
+        constexpr int kProfileEepromAddress = 576;
+        constexpr uint32_t kProfileMagic = 0x5401F001; // "SHOT PROF 001"
+        constexpr uint16_t kProfileVersion = 1;
+
+        struct StoredProfile {
+                uint32_t preInfuseMs;
+                uint32_t pauseMs;
+                float preInfusePercent;
+                float brewPercent;
+                float targetGrams;
+                float targetMl;
+        };
+
+        struct StoredProfiles {
+                uint32_t magic;
+                uint16_t version;
+                uint16_t count;
+                StoredProfile profile[kProfileCount];
+                uint32_t checksum;
+        };
+
+        uint32_t profileChecksum(const StoredProfiles& rec) {
+            uint32_t sum = 0;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&rec);
+
+            for (size_t i = 0; i < offsetof(StoredProfiles, checksum); ++i) {
+                sum = (sum << 1) ^ bytes[i];
+            }
+
+            return sum;
+        }
+
+        bool plausible(const StoredProfile& p) {
+            return p.preInfuseMs <= 60000 && p.pauseMs <= 60000
+                   && p.preInfusePercent >= 0.0f && p.preInfusePercent <= 100.0f
+                   && p.brewPercent >= 0.0f && p.brewPercent <= 100.0f
+                   && p.targetGrams >= 0.0f && p.targetGrams <= 500.0f
+                   && p.targetMl >= 0.0f && p.targetMl <= 2000.0f;
+        }
+
+        void saveProfiles() {
+            StoredProfiles rec{};
+
+            rec.magic = kProfileMagic;
+            rec.version = kProfileVersion;
+            rec.count = kProfileCount;
+
+            for (uint8_t i = 0; i < kProfileCount; i++) {
+                rec.profile[i].preInfuseMs = profiles[i].preInfuseMs;
+                rec.profile[i].pauseMs = profiles[i].pauseMs;
+                rec.profile[i].preInfusePercent = static_cast<float>(profiles[i].preInfusePercent);
+                rec.profile[i].brewPercent = static_cast<float>(profiles[i].brewPercent);
+                rec.profile[i].targetGrams = static_cast<float>(profiles[i].targetGrams);
+                rec.profile[i].targetMl = static_cast<float>(profiles[i].targetMl);
+            }
+
+            rec.checksum = profileChecksum(rec);
+            EEPROM.put(kProfileEepromAddress, rec);
+        }
+
+        /** @return true if a believable record was found and applied. */
+        bool loadProfiles() {
+            StoredProfiles rec{};
+            EEPROM.get(kProfileEepromAddress, rec);
+
+            if (rec.magic != kProfileMagic || rec.version != kProfileVersion
+                || rec.count != kProfileCount) {
+                return false;
+            }
+
+            if (rec.checksum != profileChecksum(rec)) {
+                Serial.println("shot: stored profiles failed their checksum - using the defaults");
+
+                return false;
+            }
+
+            for (uint8_t i = 0; i < kProfileCount; i++) {
+                if (!plausible(rec.profile[i])) {
+                    Serial.println("shot: a stored profile holds impossible values - using the defaults");
+
+                    return false;
+                }
+            }
+
+            // All or nothing. A half-applied set would be a mixture of stored
+            // and compiled values that matches nothing anybody chose.
+            for (uint8_t i = 0; i < kProfileCount; i++) {
+                profiles[i].preInfuseMs = rec.profile[i].preInfuseMs;
+                profiles[i].pauseMs = rec.profile[i].pauseMs;
+                profiles[i].preInfusePercent = rec.profile[i].preInfusePercent;
+                profiles[i].brewPercent = rec.profile[i].brewPercent;
+                profiles[i].targetGrams = rec.profile[i].targetGrams;
+                profiles[i].targetMl = rec.profile[i].targetMl;
+            }
+
+            return true;
+        }
 
         // The hard time limit is NOT per profile. It is a safety backstop, not
         // a brew setting, and giving each profile its own would make it look
@@ -396,6 +525,15 @@ namespace shot {
     } // namespace
 
     void init() {
+        // Before anything prints the settings, so the line below reports what
+        // will actually be used rather than the compiled defaults.
+        if (loadProfiles()) {
+            Serial.println("shot: profiles restored from EEPROM");
+        }
+        else {
+            Serial.println("shot: no stored profiles, using the compiled defaults");
+        }
+
         current = State::Idle;
         flush = FlushState::Idle;
         backflush = BackflushState::Idle;
@@ -1460,22 +1598,27 @@ namespace shot {
     void setPreInfuse(const uint32_t ms, const double percent) {
         P().preInfuseMs = ms;
         P().preInfusePercent = (percent < 0.0) ? 0.0 : ((percent > 100.0) ? 100.0 : percent);
+        saveProfiles();
     }
 
     void setPreinfusionPause(const uint32_t ms) {
         P().pauseMs = ms;
+        saveProfiles();
     }
 
     void setBrewPercent(const double percent) {
         P().brewPercent = (percent < 0.0) ? 0.0 : ((percent > 100.0) ? 100.0 : percent);
+        saveProfiles();
     }
 
     void setTargetGrams(const double grams) {
         P().targetGrams = (grams < 0.0) ? 0.0 : grams;
+        saveProfiles();
     }
 
     void setTargetMl(const double ml) {
         P().targetMl = (ml < 0.0) ? 0.0 : ml;
+        saveProfiles();
     }
 
     bool setMaxBrewMs(const uint32_t ms) {

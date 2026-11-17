@@ -68,6 +68,28 @@ namespace uibind {
         lv_chart_series_t* setpointSeries = nullptr;
 
         /**
+         * The flow trace, on the readout's second chart.
+         *
+         * Half a second a sample across 120 points is a sixty second window,
+         * which covers a long shot. The boiler chart's two seconds would be
+         * far too coarse here - the interesting part of a shot is the first
+         * fifteen seconds.
+         *
+         * Values are stored in TENTHS of a ml/s. lv_chart works in int32 and
+         * a range of 0 to 20 ml/s has only 20 integer steps across 100
+         * pixels, which would look like stairs.
+         */
+        constexpr uint32_t kFlowSampleMs = 500;
+        constexpr uint16_t kFlowPoints = 120;
+        constexpr int32_t kFlowTenths = 10;
+
+        /** Never scale tighter than this, so a trickle is not magnified. */
+        constexpr int32_t kFlowMinTop = 2 * kFlowTenths;
+
+        lv_chart_series_t* flowSeries = nullptr;
+        uint32_t lastFlowSampleMs = 0;
+
+        /**
          * The nine tiles and their sub-labels, gathered once.
          *
          * The widgets are nine separate globals because that is how SquareLine
@@ -93,6 +115,45 @@ namespace uibind {
         }
 
         uint32_t lastSampleMs = 0;
+
+        /**
+         * The last shot's result, held on the readout after it ends.
+         *
+         * The controller drops a finished shot to idle after three seconds
+         * (shotHandler's kFinishedLingerMs), which took the numbers off the
+         * screen before anyone had read them. John asked for them to stay up
+         * until he leaves the page, 2026-11-16.
+         *
+         * Held HERE rather than in the controller because it is a display
+         * decision and nothing in the control path cares. The controller is
+         * free to go idle, arm the next shot, or do anything else; this is
+         * just what the screen last had to say.
+         *
+         * Volume is the SHOT's own, worked out from a baseline taken when the
+         * shot started, because telemetry carries the running total since the
+         * last flow reset rather than a per-shot figure.
+         */
+        bool shotActive = false;
+        bool holdingResult = false;
+        float shotBaselineMl = 0.0f;
+        uint32_t shotStartedMs = 0;
+
+        float heldMl = 0.0f;
+        uint32_t heldSeconds = 0;
+        float heldWeight = 0.0f;
+        bool heldWeightUsable = false;
+
+        /** Status words that mean a shot is actually in progress. */
+        bool statusIsShot(const char* status) {
+            return strcmp(status, "brewing") == 0 || strcmp(status, "preinfuse") == 0
+                   || strcmp(status, "soak") == 0 || strcmp(status, "coolflush") == 0
+                   || strcmp(status, "recovery") == 0;
+        }
+
+        /** Called when the readout is left, and when a new shot starts. */
+        void clearHeldResult() {
+            holdingResult = false;
+        }
 
         /** @brief Set a label's text, skipping a null widget. */
         void setText(lv_obj_t* label, const char* text) {
@@ -228,6 +289,54 @@ namespace uibind {
         }
 
 
+        /**
+         * @brief Append a flow sample and rescale.
+         *
+         * FROZEN while a finished shot is being held on screen, so the trace
+         * you are looking at is the shot you just pulled rather than sixty
+         * seconds of nothing sliding in behind it. It resumes when the result
+         * is released - a new shot, or leaving the readout.
+         *
+         * No link means no reading, so the trace BREAKS rather than drawing a
+         * line along zero. Same rule as the boiler chart and the control
+         * firmware: a stale reading is not a reading.
+         */
+        void sampleFlowChart(const machinelink::State& st, const bool live) {
+            if (ui_FlowChart == nullptr || flowSeries == nullptr || holdingResult) {
+                return;
+            }
+
+            const uint32_t now = millis();
+
+            if ((now - lastFlowSampleMs) < kFlowSampleMs) {
+                return;
+            }
+
+            lastFlowSampleMs = now;
+
+            lv_chart_set_next_value(ui_FlowChart, flowSeries,
+                                    live ? static_cast<int32_t>(st.flowMlPerSec * kFlowTenths)
+                                         : LV_CHART_POINT_NONE);
+
+            const int32_t* ys = lv_chart_get_y_array(ui_FlowChart, flowSeries);
+            int32_t hi = 0;
+
+            for (uint16_t i = 0; i < kFlowPoints; i++) {
+                if (ys[i] != LV_CHART_POINT_NONE && ys[i] > hi) {
+                    hi = ys[i];
+                }
+            }
+
+            if (hi < kFlowMinTop) {
+                hi = kFlowMinTop;
+            }
+
+            // Always anchored at zero. Flow is a quantity, not a deviation,
+            // and a chart that floats its baseline makes a steady trickle
+            // look like a torrent.
+            lv_chart_set_range(ui_FlowChart, LV_CHART_AXIS_PRIMARY_Y, 0, hi + (hi / 10));
+        }
+
         // --- Tile actions ------------------------------------------------
         //
         // EVERY ONE OF THESE IS A REQUEST. The head cannot drive an output; it
@@ -257,6 +366,10 @@ namespace uibind {
         }
 
         void showHome() {
+            // Leaving the readout is what releases a held shot result. That is
+            // the whole rule: it stays until you look away.
+            clearHeldResult();
+
             if (ui_ScreenHome != nullptr) {
                 lv_screen_load(ui_ScreenHome);
             }
@@ -872,6 +985,24 @@ namespace uibind {
             lv_chart_set_value_by_id(ui_BoilerChart, traceSeries, i, LV_CHART_POINT_NONE);
             lv_chart_set_value_by_id(ui_BoilerChart, setpointSeries, i, LV_CHART_POINT_NONE);
         }
+
+        if (ui_FlowChart != nullptr) {
+            lv_chart_set_type(ui_FlowChart, LV_CHART_TYPE_LINE);
+            lv_chart_set_point_count(ui_FlowChart, kFlowPoints);
+            lv_chart_set_update_mode(ui_FlowChart, LV_CHART_UPDATE_MODE_SHIFT);
+
+            // No dots - at 120 points across 175 pixels they merge into a
+            // dotted band and hide the shape of the trace.
+            lv_obj_set_style_size(ui_FlowChart, 0, 0, LV_PART_INDICATOR);
+
+            flowSeries = lv_chart_add_series(ui_FlowChart, kTraceColour, LV_CHART_AXIS_PRIMARY_Y);
+
+            for (uint16_t i = 0; i < kFlowPoints; i++) {
+                lv_chart_set_value_by_id(ui_FlowChart, flowSeries, i, LV_CHART_POINT_NONE);
+            }
+
+            lastFlowSampleMs = millis();
+        }
     }
 
     void update() {
@@ -930,8 +1061,45 @@ namespace uibind {
         setText(ui_FlowValue, buf);
         setColour(ui_FlowValue, live ? kValue : kDim);
 
-        snprintf(buf, sizeof(buf), "ml/s   %.0f ml", live ? st.volumeMl : 0.0f);
+        // --- Shot tracking, for the held result ----------------------
+        const bool shotNow = live && statusIsShot(st.status);
+
+        if (shotNow && !shotActive) {
+            shotBaselineMl = st.volumeMl;
+            shotStartedMs = millis();
+            holdingResult = false;
+        }
+        else if (!shotNow && shotActive) {
+            // Just finished. Capture what it delivered before the controller
+            // goes idle and the live numbers move on.
+            heldMl = st.volumeMl - shotBaselineMl;
+            heldSeconds = (millis() - shotStartedMs) / 1000;
+            heldWeight = st.weightG;
+            heldWeightUsable = st.weightOk && st.weightCalibrated;
+            holdingResult = true;
+        }
+
+        shotActive = shotNow;
+
+        if (shotNow) {
+            // During the shot, show what THIS shot has delivered and how long
+            // it has been going, not the running total since the last reset.
+            snprintf(buf, sizeof(buf), "%.0fml  %lus", st.volumeMl - shotBaselineMl,
+                     static_cast<unsigned long>((millis() - shotStartedMs) / 1000));
+        }
+        else if (holdingResult) {
+            // Kept short on purpose: this label starts at x=184 and the flow
+            // chart's caption starts at 288, so there are 104 pixels. The
+            // first version read "last: 35 ml in 59s" and ran under the chart.
+            snprintf(buf, sizeof(buf), "last %.0fml %lus", heldMl,
+                     static_cast<unsigned long>(heldSeconds));
+        }
+        else {
+            snprintf(buf, sizeof(buf), "ml/s   %.0f ml", live ? st.volumeMl : 0.0f);
+        }
+
         setText(ui_FlowSub, buf);
+        setColour(ui_FlowSub, holdingResult && !shotNow ? kValue : kLabelGrey);
 
         snprintf(buf, sizeof(buf), "%.0f%%", live ? st.pumpPercent : 0.0f);
         setText(ui_PumpValue, buf);
@@ -1041,6 +1209,7 @@ namespace uibind {
         }
 
         sampleChart(st, live);
+        sampleFlowChart(st, live);
 
         // Any touch counts as activity. lv_display_get_inactive_time is
         // LVGL's own idle clock and already covers every widget, so there is

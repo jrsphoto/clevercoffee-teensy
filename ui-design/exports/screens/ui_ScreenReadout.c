@@ -32,6 +32,11 @@ lv_obj_t * ui_PumpValue = NULL;
 lv_obj_t * ui_StatusLabel = NULL;
 lv_obj_t * ui_StopButton = NULL;
 lv_obj_t * ui_StopButtonLbl = NULL;
+lv_obj_t * ui_FlowChart = NULL;
+lv_obj_t * ui_FlowChart_Xaxis = NULL;
+lv_obj_t * ui_FlowChart_Yaxis1 = NULL;
+lv_obj_t * ui_FlowChart_Yaxis2 = NULL;
+lv_obj_t * ui_CapFlowChart = NULL;
 // event funtions
 
 // build funtions
@@ -281,8 +286,8 @@ void ui_ScreenReadout_screen_init(void)
     ui_CapPump = lv_label_create(ui_ScreenReadout);
     lv_obj_set_width(ui_CapPump, LV_SIZE_CONTENT);   /// 1
     lv_obj_set_height(ui_CapPump, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_CapPump, 344);
-    lv_obj_set_y(ui_CapPump, 224);
+    lv_obj_set_x(ui_CapPump, 207);
+    lv_obj_set_y(ui_CapPump, 122);
     lv_label_set_text(ui_CapPump, "PUMP");
     lv_obj_set_style_text_color(ui_CapPump, lv_color_hex(0x808080), (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_CapPump, 255, (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -291,8 +296,8 @@ void ui_ScreenReadout_screen_init(void)
     ui_PumpValue = lv_label_create(ui_ScreenReadout);
     lv_obj_set_width(ui_PumpValue, LV_SIZE_CONTENT);   /// 1
     lv_obj_set_height(ui_PumpValue, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_PumpValue, 344);
-    lv_obj_set_y(ui_PumpValue, 240);
+    lv_obj_set_x(ui_PumpValue, 218);
+    lv_obj_set_y(ui_PumpValue, 153);
     lv_label_set_text(ui_PumpValue, "--");
     lv_obj_set_style_text_color(ui_PumpValue, lv_color_hex(0xE0E0E0), (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_PumpValue, 255, (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -329,6 +334,80 @@ void ui_ScreenReadout_screen_init(void)
     lv_obj_set_style_text_font(ui_StopButtonLbl, &lv_font_montserrat_14,
                                (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
 
+    ui_FlowChart = lv_chart_create(ui_ScreenReadout);
+    lv_obj_set_width(ui_FlowChart, 175);
+    lv_obj_set_height(ui_FlowChart, 100);
+    lv_obj_set_x(ui_FlowChart, 135);
+    lv_obj_set_y(ui_FlowChart, 75);
+    lv_obj_set_align(ui_FlowChart, LV_ALIGN_CENTER);
+    lv_obj_set_overflow_visible(ui_FlowChart, true);
+    lv_obj_set_scrollable(ui_FlowChart, false);
+    lv_obj_set_overflow_visible(ui_FlowChart, true);      //make scales visible - Should it be forced to True?
+    //lv_obj_set_scrollable( ui_FlowChart, false );    //no chart-zoom in LVGL9 - Shouldn't it be forced to False?
+    lv_chart_set_type(ui_FlowChart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(ui_FlowChart, 120);
+    lv_chart_set_div_line_count(ui_FlowChart, 3, 3);
+
+    ui_FlowChart_Xaxis = lv_scale_create(ui_FlowChart);
+    lv_scale_set_mode(ui_FlowChart_Xaxis, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
+    lv_obj_set_size(ui_FlowChart_Xaxis, lv_pct(100), 50);
+    lv_obj_set_align(ui_FlowChart_Xaxis, LV_ALIGN_BOTTOM_MID);
+    lv_obj_set_y(ui_FlowChart_Xaxis, 50 + lv_obj_get_style_pad_bottom(ui_FlowChart,
+                                                                      LV_PART_MAIN) + lv_obj_get_style_border_width(ui_FlowChart, LV_PART_MAIN));
+    lv_obj_set_style_line_width(ui_FlowChart_Xaxis, 0, LV_PART_MAIN);
+    lv_obj_set_style_line_width(ui_FlowChart_Xaxis, 1, LV_PART_ITEMS);   //LVGL-9.1 ticks are thicker by default
+    lv_obj_set_style_line_width(ui_FlowChart_Xaxis, 1, LV_PART_INDICATOR);
+    lv_obj_set_style_length(ui_FlowChart_Xaxis, 0, LV_PART_ITEMS);      //minor tick length
+    lv_obj_set_style_length(ui_FlowChart_Xaxis, 0, LV_PART_INDICATOR);      //major tick length
+    lv_scale_set_range(ui_FlowChart_Xaxis, 0, 0 > 0 ? 0 - 1 : 0);
+    lv_scale_set_total_tick_count(ui_FlowChart_Xaxis, (0 > 0 ? 0 - 1 : 0) * 0 + 1);
+    lv_scale_set_major_tick_every(ui_FlowChart_Xaxis, 0 >= 1 ? 0 : 1);
+    lv_scale_set_label_show(ui_FlowChart_Xaxis, false);
+    ui_FlowChart_Yaxis1 = lv_scale_create(ui_FlowChart);
+    lv_scale_set_mode(ui_FlowChart_Yaxis1, LV_SCALE_MODE_VERTICAL_LEFT);
+    lv_obj_set_size(ui_FlowChart_Yaxis1, 50, lv_pct(100));
+    lv_obj_set_align(ui_FlowChart_Yaxis1, LV_ALIGN_LEFT_MID);
+    lv_obj_set_x(ui_FlowChart_Yaxis1, -50 - lv_obj_get_style_pad_left(ui_FlowChart,
+                                                                      LV_PART_MAIN) - lv_obj_get_style_border_width(ui_FlowChart, LV_PART_MAIN) + 2);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis1, 0, LV_PART_MAIN);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis1, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis1, 1, LV_PART_INDICATOR);
+    lv_obj_set_style_length(ui_FlowChart_Yaxis1, 0, LV_PART_ITEMS);   //minor tick length
+    lv_obj_set_style_length(ui_FlowChart_Yaxis1, 0, LV_PART_INDICATOR);   //major tick length
+    lv_scale_set_total_tick_count(ui_FlowChart_Yaxis1, (0 > 0 ? 0 - 1 : 0) * 0 + 1);
+    lv_scale_set_major_tick_every(ui_FlowChart_Yaxis1, 0 >= 1 ? 0 : 1);
+    lv_scale_set_label_show(ui_FlowChart_Yaxis1, false);
+    ui_FlowChart_Yaxis2 = lv_scale_create(ui_FlowChart);
+    lv_scale_set_mode(ui_FlowChart_Yaxis2, LV_SCALE_MODE_VERTICAL_RIGHT);
+    lv_obj_set_size(ui_FlowChart_Yaxis2, 25, lv_pct(100));
+    lv_obj_set_align(ui_FlowChart_Yaxis2, LV_ALIGN_RIGHT_MID);
+    lv_obj_set_x(ui_FlowChart_Yaxis2, 25 + lv_obj_get_style_pad_right(ui_FlowChart,
+                                                                      LV_PART_MAIN) + lv_obj_get_style_border_width(ui_FlowChart, LV_PART_MAIN) + 1);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis2, 0, LV_PART_MAIN);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis2, 1, LV_PART_ITEMS);
+    lv_obj_set_style_line_width(ui_FlowChart_Yaxis2, 1, LV_PART_INDICATOR);
+    lv_obj_set_style_length(ui_FlowChart_Yaxis2, 0, LV_PART_ITEMS);   //minor tick length
+    lv_obj_set_style_length(ui_FlowChart_Yaxis2, 0, LV_PART_INDICATOR);   //major tick length
+    lv_scale_set_total_tick_count(ui_FlowChart_Yaxis2, (0 > 0 ? 0 - 1 : 0) * 0 + 1);
+    lv_scale_set_major_tick_every(ui_FlowChart_Yaxis2, 0 >= 1 ? 0 : 1);
+    lv_scale_set_label_show(ui_FlowChart_Yaxis2, false);
+
+    //This workaround (an invisible outline) is needed because without it chart overflow-visible doesn't work in LVGL-9.1
+    lv_obj_set_style_outline_pad(ui_FlowChart, LV_MAX3(50, 50, 25),
+                                 (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);   //workaround for ineffective 'overflow visible' flag
+    lv_obj_set_style_outline_width(ui_FlowChart, -1, (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_CapFlowChart = lv_label_create(ui_ScreenReadout);
+    lv_obj_set_width(ui_CapFlowChart, LV_SIZE_CONTENT);   /// 1
+    lv_obj_set_height(ui_CapFlowChart, LV_SIZE_CONTENT);    /// 1
+    lv_obj_set_x(ui_CapFlowChart, 288);
+    lv_obj_set_y(ui_CapFlowChart, 172);
+    lv_label_set_text(ui_CapFlowChart, "FLOW  ml/s");
+    lv_obj_set_style_text_color(ui_CapFlowChart, lv_color_hex(0x808080),
+                                (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui_CapFlowChart, 255, (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_CapFlowChart, &lv_font_montserrat_12,
+                               (lv_style_selector_t)LV_PART_MAIN | LV_STATE_DEFAULT);
+
 }
 
 void ui_ScreenReadout_screen_destroy(void)
@@ -360,5 +439,7 @@ void ui_ScreenReadout_screen_destroy(void)
     ui_StatusLabel = NULL;
     ui_StopButton = NULL;
     ui_StopButtonLbl = NULL;
+    ui_FlowChart = NULL;
+    ui_CapFlowChart = NULL;
 
 }

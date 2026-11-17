@@ -355,6 +355,39 @@ void ParameterRegistry::initialize(Config& config) {
               0.0, 500.0, "Stops the shot at this weight. Needs a working scale.");
     addLinked("brew.by_volume.target_volume", "Target Volume (ml)", kDouble, sBrewSection, 35,
               0.0, 500.0, "Stops the shot at this volume. 0 disables it.");
+
+    /**
+     * THE SIX ABOVE ARE NOT PUSHED AT A HANDSHAKE, and that is the fix for a
+     * real fault found on 2026-11-16.
+     *
+     * The controller keeps THREE profiles - ristretto, espresso, lungo - and
+     * each tile on the panel is labelled with the thing it stops on. This
+     * board holds only ONE set of brew values, so every handshake wrote the
+     * same numbers into whichever profile happened to be active. A lungo's
+     * 60 ml target was replaced by nothing at all, and its tile went on
+     * saying "by volume" while the shot really ran to the 60 second backstop.
+     *
+     * So the controller owns them now and persists them itself. Taking them
+     * out of the push stops this board re-asserting one profile's worth of
+     * settings over all three at every reconnect. A deliberate edit from the
+     * web page still goes through, because that is a person asking for a
+     * change rather than a default being restored behind their back.
+     *
+     * `brew.by_time.target_time` is deliberately NOT in this list. It is the
+     * hard time limit - a safety backstop rather than a brew setting, global
+     * rather than per profile - and this board may still set it, within the
+     * 5 to 180 second clamp the controller enforces anyway.
+     *
+     * What is still wrong, and is a separate job: the web page shows this
+     * board's copy, which is one value where the machine has three. Fixing
+     * that means either per-profile keys here or the active profile's values
+     * crossing the link so a reader can report them.
+     */
+    for (const char* owned : {"brew.pre_infusion.time", "brew.pre_infusion.pump_percent",
+                              "brew.pre_infusion.pause", "brew.pump_percent",
+                              "brew.by_weight.target_weight", "brew.by_volume.target_volume"}) {
+        controllerOwnedKeys().insert(owned);
+    }
     addLinked("brew.by_time.target_time", "Maximum Shot Time (s)", kDouble, sBrewSection, 36,
               5.0, 180.0,
               "The hard limit. Unlike upstream this cannot be switched off: it is the "

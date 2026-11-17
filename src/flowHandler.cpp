@@ -96,13 +96,15 @@ namespace flow {
          * confidence. Exactly the failure the scale's own EEPROM record exists
          * to prevent, so this follows that file's pattern deliberately.
          *
-         * Address 192, after the scale (64-127) and the config store (128+).
+         * Address 512. NOT 192, which is inside the config store's 128-337
+         * record - that was the first attempt and every config save wiped
+         * it, which looked exactly like the value never being saved at all.
          * Guarded by magic, version and checksum, and loaded ONLY if all three
          * agree plus the value is sane. Unprogrammed EEPROM reads as 0xFF
          * everywhere, which would otherwise look like a huge but plausible
          * calibration.
          */
-        constexpr int kEepromAddress = 192;
+        constexpr int kEepromAddress = 512;
         constexpr uint32_t kStoreMagic = 0xF10C0001; // "FLOC 0001"
         constexpr uint16_t kStoreVersion = 1;
 

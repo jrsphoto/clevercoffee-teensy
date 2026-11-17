@@ -52,6 +52,7 @@ extern "C" {
     lv_obj_t* ui_PumpValue = nullptr;
     lv_obj_t* ui_StatusLabel = nullptr;
     lv_obj_t* ui_BoilerChart = nullptr;
+    lv_obj_t* ui_FlowChart = nullptr;
 
     lv_obj_t* ui_ScreenHome = nullptr;
 

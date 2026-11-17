@@ -40,6 +40,11 @@ extern lv_obj_t * ui_PumpValue;
 extern lv_obj_t * ui_StatusLabel;
 extern lv_obj_t * ui_StopButton;
 extern lv_obj_t * ui_StopButtonLbl;
+extern lv_obj_t * ui_FlowChart;
+extern lv_obj_t * ui_FlowChart_Xaxis;
+extern lv_obj_t * ui_FlowChart_Yaxis1;
+extern lv_obj_t * ui_FlowChart_Yaxis2;
+extern lv_obj_t * ui_CapFlowChart;
 // CUSTOM VARIABLES
 
 #ifdef __cplusplus

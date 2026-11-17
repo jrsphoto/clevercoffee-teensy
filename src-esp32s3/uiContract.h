@@ -266,5 +266,17 @@ extern "C" {
      */
     extern lv_obj_t* ui_BoilerChart;
 
+    /**
+     * The flow trace, on the readout's lower right. John added it in
+     * SquareLine on 2026-11-16.
+     *
+     * Same rules as the boiler chart: the firmware owns the series, the point
+     * count and the scaling, and a sample taken with no link is a GAP rather
+     * than a zero. Its axes carry no tick marks on purpose - at 175x100 the
+     * numbers are unreadable and the live figure is in the FLOW readout
+     * beside it, so the caption `CapFlowChart` says what the trace is instead.
+     */
+    extern lv_obj_t* ui_FlowChart;
+
 } // extern "C"
 #endif

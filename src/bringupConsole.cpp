@@ -659,12 +659,19 @@ namespace {
                 Serial.println("  maxms <ms>    hard time limit, 5000-180000, cannot be disabled");
                 Serial.println("  switch <0|1>  let the brew switch start and stop shots");
             }
+            // Each of these changes ONE of the pair and keeps the other.
+            // They used to pass 0 for the one they were not setting, so
+            // `shotset pre 4000` silently zeroed the pump percent and
+            // `shotset preamt 25` silently zeroed the time - whichever was
+            // typed last won and the other was lost. Found 2026-11-16 while
+            // restoring a profile by hand.
             else if (strcasecmp(argument, "pre") == 0) {
-                shot::setPreInfuse(static_cast<uint32_t>(atol(a2)), 0.0);
-                Serial.println("set - re-issue 'shotset preamt <%>' to set its speed");
+                shot::setPreInfuse(static_cast<uint32_t>(atol(a2)),
+                                   shot::profile().preInfusePercent);
+                Serial.println("set");
             }
             else if (strcasecmp(argument, "preamt") == 0) {
-                shot::setPreInfuse(0, atof(a2));
+                shot::setPreInfuse(shot::profile().preInfuseMs, atof(a2));
                 Serial.println("set");
             }
             else if (strcasecmp(argument, "soak") == 0) {
