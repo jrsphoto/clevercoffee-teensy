@@ -72,8 +72,21 @@ bool Logger::update() {
 #endif
 }
 
+/**
+ * @brief The port this logger was initialised with.
+ *
+ * WAS INFINITE RECURSION, and the compiler said so on every build:
+ * `getPort()` is static, so `getInstance().getPort()` resolved to this same
+ * function rather than to anything on the instance. Calling it would have
+ * recursed until the stack ran out and taken the machine down with it.
+ *
+ * It survived because nothing calls it - it is declared in the header and
+ * used nowhere - so the warning sat in the build output being ignored.
+ * Returns the instance's own `port_` now, which is what it always meant to
+ * do. Carried over from upstream; fixed here 2026-11-17.
+ */
 uint16_t Logger::getPort() {
-    return Logger::getInstance().getPort();
+    return getInstance().port_;
 }
 
 void Logger::log(const Level level, const String& file, const __FlashStringHelper* function, uint32_t line, const char* logmsg) {

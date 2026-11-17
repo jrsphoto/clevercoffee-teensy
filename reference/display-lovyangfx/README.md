@@ -14,12 +14,12 @@ plainly frozen. It is here to be read.
 | `display.h` | the interface as it stood then, including the parts only this UI used |
 
 Last built as part of the firmware at commit `c90b82b`, 2026-11-08. The full
-history is in git under `src-esp32s3/display.cpp` if a particular version is
+history is in git under `src-display/display.cpp` if a particular version is
 ever wanted.
 
 ## What replaced it, and why
 
-`src-esp32s3/uiLvgl.cpp` implements the same `display::` interface, so nothing
+`src-display/uiLvgl.cpp` implements the same `display::` interface, so nothing
 else in the head changed when it was swapped in. The screens live in
 `uiScreens.cpp` and the behaviour in `uiBind.cpp`.
 

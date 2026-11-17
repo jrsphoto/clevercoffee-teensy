@@ -1,0 +1,309 @@
+/**
+ * @file heaterHandler.h
+ *
+ * @brief Boiler PID and the heater SSR drive (Teensy pin 2, via ULN2003)
+ *
+ * PHASE 3, STAGE 1. The PID runs and computes a duty cycle; the output stays
+ * DISABLED IN SOFTWARE until deliberately enabled. That is not caution theatre
+ * - it lets every interlock be proven before the element is ever connected,
+ * which is the only order that makes sense for the one actuator on this machine
+ * that can destroy a boiler.
+ *
+ * STRUCTURE, kept as upstream CleverCoffee has it
+ *
+ * Time-proportioning, not fast PWM: a mains SSR switches at zero crossings, so
+ * the only sensible control is what fraction of a window it conducts for.
+ * Upstream uses a 1000 ms window driven by a 10 ms timer tick, giving 100
+ * steps, with the PID output scaled 0-1000 so it can be compared directly
+ * against the tick counter. All of that is preserved - the ESP32 hardware timer
+ * becomes an IntervalTimer and nothing else about the scheme changes.
+ *
+ * Tunings default to upstream's: Kp 62, Tn 52, Tv 11.5, integrator clamp 55,
+ * input smoothing 0.6, setpoint 95 C. Ki and Kd are derived the way upstream
+ * derives them (Ki = Kp/Tn, Kd = Kp*Tv) so the numbers in the web UI keep
+ * meaning the same thing on both processors.
+ *
+ * HOW THE HEATER IS GATED
+ *
+ * Every pass of the main loop recomputes whether heating is permitted. The ISR
+ * does NOT re-evaluate those conditions - it would have to call into half the
+ * firmware from interrupt context to do so - but neither does it simply trust a
+ * flag, because a flag set by a loop that has since hung is a lie.
+ *
+ * Instead the permit EXPIRES. The loop stamps it; the ISR refuses to energise
+ * if the stamp is older than kPermitTimeoutMs. A hung main loop therefore drops
+ * the heater within half a second, without the ISR needing to know why. This is
+ * the same shape as the pump's command expiry, deliberately: the safe state is
+ * what you get by DOING NOTHING, and staying on requires continuous proof of
+ * life.
+ *
+ * The gates, all of which must hold:
+ *
+ *   1. the software master enable is on (default OFF, never persisted)
+ *   2. no latched fault
+ *   3. safety::boilerSensorHealthy - the independent gate that already exists
+ *   4. the boiler RTD is healthy and its reading is fresh
+ *   5. the boiler is below the over-temperature limit
+ *   6. WATER IS PRESENT - the dry-fire interlock
+ *   7. the permit is fresh (ISR-side, as above)
+ *
+ * There is NO load-shed gate. It was removed 2026-11-09 on John's decision: a
+ * 1000 W element (8.3 A) and a 24 V DC pump together stay well inside a 120 V
+ * outlet, so the interlock had nothing to protect. See pumpHandler.h.
+ *
+ * ON GATE 6, WHICH IS CURRENTLY ALWAYS FALSE
+ *
+ * The water-level probe's opto-isolated circuit is not built, so there is no
+ * way to know whether the boiler has water. The firmware therefore REFUSES TO
+ * HEAT. That is the correct behaviour and must not be "fixed" by defaulting it
+ * to true - running a 1500 W element on an unknown water level is precisely how
+ * a boiler is destroyed, and an unbuilt sensor is an unknown level.
+ *
+ * There is a bench override for stage 2 (verifying the SSR drive electrically
+ * with no element attached). It is deliberately awkward: it must be set every
+ * boot, it is never persisted, and it says so loudly. See setBenchOverride().
+ */
+
+#pragma once
+
+#include <stdint.h>
+
+namespace heater {
+
+    /**
+     * Time-proportioning window, as upstream. One second is long enough that a
+     * zero-crossing SSR has many cycles to work with and short enough that the
+     * boiler's thermal mass does not notice the quantisation.
+     */
+    constexpr uint32_t kWindowMs = 1000;
+
+    /** Timer tick. 10 ms into a 1000 ms window gives 100 steps of resolution. */
+    constexpr uint32_t kTickMs = 10;
+
+    /**
+     * How long a permit stays valid without being refreshed.
+     *
+     * Must be comfortably longer than a main-loop pass and comfortably shorter
+     * than the watchdog's bite, so a stalled loop drops the heater BEFORE the
+     * watchdog resets the board rather than after.
+     */
+    constexpr uint32_t kPermitTimeoutMs = 500;
+
+    // --- Upstream's default tunings, unchanged -------------------------
+    constexpr double kDefaultSetpointC = 95.0;
+    constexpr double kDefaultKp = 62.0;
+    constexpr double kDefaultTn = 52.0;
+    constexpr double kDefaultTv = 11.5;
+    /**
+     * Anti-windup clamp on the integral term, in the PID's 0-1000 output
+     * units (per mille of the 1000 ms window).
+     *
+     * 200, NOT upstream's 55, and the difference is a bug rather than taste.
+     *
+     * At setpoint the error is zero, so the proportional term contributes
+     * nothing and the INTEGRATOR ALONE must supply the whole holding power.
+     * This boiler needs about 86 per mille insulated, or 144 bare, to sit at
+     * 95 C in a 20 C room. Clamped at 55 it cannot, so the loop settles
+     * wherever P makes up the shortfall - a permanent droop with no overshoot
+     * to hint at the cause.
+     *
+     * Measured on the thermal model with 55: settled at 93.4 C and stopped,
+     * against 93.61 predicted from Kp*err + 55 == loss. See brief 9.12.
+     *
+     * The clamp still earns its keep - it stops the integrator saturating
+     * during the eight-minute climb from cold, which would overshoot badly -
+     * so this is raised to cover the holding duty with margin for a cold
+     * room, not removed.
+     */
+    constexpr double kDefaultIntegratorMax = 200.0;
+    constexpr double kDefaultEmaFactor = 0.6;
+
+    /**
+     * @brief Set up the PID and start the window timer. Output stays off.
+     *
+     * Call after temps::init(), outputs::init() and safetyInitOutputs().
+     */
+    void init();
+
+    /**
+     * @brief Run the PID and refresh the permit. Call every main-loop pass.
+     *
+     * Refreshing the permit is the proof-of-life the ISR depends on, so this
+     * MUST be called unconditionally - not skipped when the heater happens to
+     * be disabled, or the expiry logic goes untested until the day it matters.
+     */
+    void loop();
+
+    /**
+     * @brief The software master enable.
+     *
+     * Defaults OFF and is never persisted, so every boot starts with the
+     * heater incapable of running. Enabling is a deliberate act, and it still
+     * only means the OTHER gates get a say.
+     *
+     * @return false if refused, with the reason available from blockedBy()
+     */
+    bool setEnabled(bool on);
+
+    /** @brief Is the software master enable on? */
+    bool enabled();
+
+    /**
+     * @brief Is the machine visibly HEATING, as a person would mean it?
+     *
+     * Enabled AND asking for enough duty to be worth saying so. Below that
+     * the PID is trimming and the machine is effectively at temperature.
+     *
+     * ONE DEFINITION, used by the panel's state word and by the encoder's
+     * status colour, so the screen and the knob cannot disagree about what
+     * the machine is doing.
+     *
+     * DO NOT use `outputs::isOn(Channel::Heater)` for this. The heater is
+     * driven straight at the pin by the ISR and never goes through the
+     * outputs module, so that call is false even at full power. It was being
+     * used in three places - the update safety gate, the state word and the
+     * boiler simulation - and in two of them it silently never fired.
+     */
+    bool isHeating();
+
+    /**
+     * @brief Allow heating with no water-level probe fitted. BENCH ONLY.
+     *
+     * For stage 2: confirming the SSR drive switches correctly with NO HEATING
+     * ELEMENT CONNECTED. Never persisted, must be re-set every boot, and
+     * announced loudly when used.
+     *
+     * This exists because the alternative is worse. Without it, the only way to
+     * test the drive would be to temporarily weaken the dry-fire interlock in
+     * the source - an edit that works, gets forgotten, and ships.
+     */
+    void setBenchOverride(bool on);
+
+    /** @brief Is the dry-fire interlock currently overridden for bench work? */
+    bool benchOverride();
+
+    /** @brief Duty the PID is asking for, 0-100%. Computed even when disabled. */
+    double dutyPercent();
+
+    /** @brief Raw PID output, 0-1000, as upstream scales it. */
+    double rawOutput();
+
+    /** @brief Target temperature in Celsius. */
+    double setpointC();
+
+    /** @brief Set the target temperature. Clamped to something sane. */
+    void setSetpointC(double celsius);
+
+    /** @brief Set PID tunings in upstream's Kp/Tn/Tv form. */
+    void setTunings(double kp, double tn, double tv);
+
+    /** @brief Current tunings, in the same form. */
+    void tunings(double* kp, double* tn, double* tv);
+
+    /** @brief Are all gates currently satisfied? */
+    bool permitted();
+
+    /** @brief The first gate that is failing, or "ok". */
+    const char* blockedBy();
+
+    /** @brief Timer ticks since boot. Proves the ISR is actually running. */
+    uint32_t tickCount();
+
+    /** @brief Ticks during which the output was actually energised. */
+    uint32_t onTickCount();
+
+    /** @brief Print PID and gate state for the bring-up console. */
+    void printStatus();
+
+    /**
+     * Bench pin watching the heater's ULN2003 output, so the firmware can
+     * verify its own output stage rather than assume it.
+     *
+     * **WIRE THIS TO THE `HTR_RL` NET.**
+     *
+     * Named by NET, not by channel number, deliberately. The Teensy drives
+     * `HEATER` into the ULN and the ULN drives `HTR_RL` out to the heater
+     * SSR; those two are the same Darlington. Verified from the schematic
+     * (`relays.kicad_sch`): inputs sit at x~102.87 and outputs at x~142.24,
+     * and `HEATER` / `HTR_RL` share row y=161.29. `FILL` / `FILL_RL` and
+     * `GROUP` / `GRP_RL` are the other two.
+     *
+     * This was previously described by channel number and got written down
+     * two different ways within a few lines - "output 1" and "input 3" - for
+     * the same connection. Channel numbers are ambiguous and the nets are
+     * not. Do not reintroduce them here.
+     *
+     * The ULN output is open collector: it sinks when its input is high and
+     * floats otherwise. Configured INPUT_PULLUP, this pin supplies the load
+     * that makes "floating" read as a clean high, so the chip can be checked
+     * with no external components at all - the inverse of the heater pin is
+     * what a working buffer produces.
+     *
+     * An UNCONNECTED pin also reads a clean high both ways, which looks
+     * identical to "output never sinks". If the test reports that, check the
+     * jumper exists before suspecting the chip. Measured 2026-11-12 with the
+     * ULN off the board: exactly that reading, chip entirely innocent.
+     *
+     * ONLY VALID WHILE NOTHING ELSE IS ON `HTR_RL`. Once that net drives a
+     * real SSR it is pulled up to the SSR's control rail, and this pin must
+     * be disconnected first - 24 V into a 3.3 V input destroys it, and a
+     * Teensy 4.1 is not 5 V tolerant either.
+     */
+    constexpr int kPinHtrRlMonitor = 14;
+
+    /**
+     * @brief Verify the ULN2003 actually inverts, by driving it and reading back.
+     *
+     * Drives the heater pin both ways and checks O1 follows inverted. Catches a
+     * dead channel, a missing chip, an unpowered chip and a miswired input -
+     * none of which are visible from the Teensy side alone, where the pin
+     * toggles perfectly whether or not anything downstream is listening.
+     *
+     * Safe to run: both states are held for a few milliseconds, far too briefly
+     * to matter even if an element were attached, and it finishes with the
+     * output off.
+     *
+     * @return true if the output inverted correctly in both directions.
+     */
+    bool testOutputStage();
+
+    /**
+     * @brief Measure the duty actually appearing at the ULN2003 output.
+     *
+     * Non-blocking by necessity: a blocking sample long enough to cover whole
+     * 1000 ms windows would stop the loop refreshing the permit, and the ISR
+     * would correctly drop the heater mid-measurement. So this samples the
+     * monitor pin once per main-loop pass and accumulates, which at normal
+     * loop rates is many thousands of samples per second.
+     *
+     * Reports the measured duty against what the PID asked for. That is the
+     * end-to-end check: PID -> ISR -> Teensy pin -> ULN input -> ULN output.
+     * Everything before the SSR.
+     *
+     * @param seconds how long to measure for; several windows is best
+     */
+    void startOutputDutyMeasurement(uint32_t seconds);
+
+    /** @brief Service a running duty measurement. Call every main-loop pass. */
+    void serviceOutputDutyMeasurement();
+
+    /**
+     * @brief Deliberately stall the main loop and prove the heater drops.
+     *
+     * The permit expiry is the mechanism that protects against a hung control
+     * loop, and it is the one piece of this that cannot be verified by reading
+     * the code - an ISR that quietly keeps energising a stale permit looks
+     * identical from outside until the day it matters.
+     *
+     * So this blocks for longer than kPermitTimeoutMs without refreshing the
+     * permit, exactly as a hung loop would, and reports whether the ISR
+     * actually stopped driving the output. Bounded well inside the watchdog's
+     * bite, and only useful with the heater already running.
+     *
+     * Test code, deliberately kept in the firmware rather than done once by
+     * hand: a safety mechanism that is only ever tested once is a safety
+     * mechanism nobody will notice breaking.
+     */
+    void testPermitExpiry();
+
+} // namespace heater

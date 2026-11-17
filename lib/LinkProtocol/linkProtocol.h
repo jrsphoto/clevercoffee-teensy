@@ -64,6 +64,56 @@ namespace linkproto {
     constexpr size_t kMaxFrame = 192;
 
     /**
+     * Longest BODY that will actually be sent. Use this, not kMaxFrame.
+     *
+     * The 192 limit is applied TWICE on the way out and the wrapping is not
+     * free, which is easy to get wrong by eye. buildFrame() first writes
+     * "<type>:<body>" into a kMaxFrame buffer, then wraps that as
+     * "$<payload>*<2 hex><newline>" into another one. So the body carries
+     * seven bytes of overhead - '$', the type character, ':', '*', two
+     * checksum digits and '\n' - and snprintf needs room for its terminating
+     * zero on top, which is what the `< kMaxFrame` tests enforce.
+     *
+     * A body of this length or shorter is sent. ONE BYTE LONGER AND THE WHOLE
+     * FRAME IS DISCARDED, not truncated - see sendFailures() on the controller
+     * for why that matters.
+     *
+     * Measured 2026-11-17: telemetry's worst case was 183 against this 184,
+     * one byte from silently disappearing, and a note recording it as "185 of
+     * 192" had missed both wrappings. Do not re-derive this by hand.
+     */
+    constexpr size_t kMaxBody = kMaxFrame - 8;
+
+    /** @brief Will a body of this length actually be sent? */
+    inline constexpr bool bodyFits(const size_t bodyLength) {
+        return bodyLength <= kMaxBody;
+    }
+
+    /**
+     * Telemetry's boolean flags, packed into one hex field `ok=`.
+     *
+     * SHARED so the two firmwares cannot disagree about which bit is which.
+     * Sending these as six separate `key=value` pairs cost 37 bytes to carry
+     * six bits, which was a fifth of the whole frame; as one hex byte it is
+     * six bytes. Everything else in the frame stays readable, because the
+     * fields a person actually reads in a terminal - the state word and the
+     * fault name - are the ones worth their length.
+     *
+     * APPEND NEW FLAGS AT THE TOP BIT AND NEVER RENUMBER. An older head
+     * reading a newer controller simply will not look at the bits it does not
+     * know about, which is the whole reason this is a bitfield in a readable
+     * field rather than a packed binary struct.
+     */
+    enum TelemetryFlag : uint8_t {
+        kFlagBoilerOk = 1u << 0,    ///< boiler RTD healthy
+        kFlagGroupOk = 1u << 1,     ///< group RTD healthy
+        kFlagHeaterEnabled = 1u << 2, ///< heater software master enable
+        kFlagWeightOk = 1u << 3,    ///< scale reading usable
+        kFlagWeightCal = 1u << 4,   ///< scale calibrated, so weight is GRAMS
+        kFlagBackflushArmed = 1u << 5, ///< backflush armed, next brew press runs it
+    };
+
+    /**
      * Frame types. One character so a frame can be classified before parsing.
      */
     enum class FrameType : char {

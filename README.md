@@ -28,8 +28,8 @@ The Teensy 4.1 handles the dense real-time polling requirements:
 
 ## Firmware Division of Labor
 
-* **`src/` (Teensy 4.1)**: Contains the deterministic control loop, safety state machine, sensor filtering, and actuator drivers.
-* **`src-esp32s3/` (ESP32-S3)**: Houses the LCDwiki 4.0-inch (ST7796S capacitive touch) interface code, drawn directly with LovyanGFX, plus the web server and network services.
+* **`src-controller/` (Teensy 4.1)**: Contains the deterministic control loop, safety state machine, sensor filtering, and actuator drivers.
+* **`src-display/` (ESP32-S3)**: Houses the LCDwiki 4.0-inch (ST7796S capacitive touch) interface code, drawn directly with LovyanGFX, plus the web server and network services.
 * **Serial Protocol**: A lightweight, checksum-verified ASCII protocol running over UART at 115200 baud. The link is non-blocking; missing heartbeat frames trigger UI stale-state warnings but never impact PID timing.
 
 ## Reset Behavior and Power Isolation
@@ -89,12 +89,14 @@ The cooling flush computes its duration from the group probe, but the two coeffi
 Managed via PlatformIO with three defined environments:
 
 ```ini
-pio run -e teensy41     # Control firmware (Teensy 4.1)
-pio run -e esp32s3      # Display head firmware (ESP32-S3)
-pio run -e esp32_usb    # Upstream reference target
+pio run -e teensy41      # Control firmware (Teensy 4.1)
+pio run -e teensy41_sim  # Control firmware plus a boiler model, for desk work
+pio run -e esp32s3       # Display head firmware (ESP32-S3)
 ```
 
-The `build_src_filter` rules in `platformio.ini` separate target source paths to prevent cross-contamination between the Teensy real-time codebase and upstream ESP32 components.
+The `build_src_filter` rules in `platformio.ini` separate target source paths to prevent cross-contamination between the Teensy real-time codebase and the display head.
+
+The upstream all-ESP32 reference target was removed once the port no longer needed it. Upstream CleverCoffee remains the reference and is tracked by the `upstream` remote.
 
 The display head's web interface is a separate filesystem image and therefore a second upload:
 
