@@ -7,6 +7,7 @@
 #include "flowHandler.h"
 
 #include <Arduino.h>
+#include <EEPROM.h>
 
 #include "hardware/pinmapping.h"
 
@@ -83,6 +84,94 @@ namespace flow {
 
     } // namespace
 
+    namespace {
+
+        /**
+         * The calibration survives a reboot, in EEPROM.
+         *
+         * Without this it reverted to the compiled default on every reset,
+         * which on 2026-11-16 meant a measured 1899 pulses/litre was silently
+         * replaced by the DM60's 49162 when the board was power-cycled during
+         * wiring - a 25x error in delivered volume, reported with total
+         * confidence. Exactly the failure the scale's own EEPROM record exists
+         * to prevent, so this follows that file's pattern deliberately.
+         *
+         * Address 192, after the scale (64-127) and the config store (128+).
+         * Guarded by magic, version and checksum, and loaded ONLY if all three
+         * agree plus the value is sane. Unprogrammed EEPROM reads as 0xFF
+         * everywhere, which would otherwise look like a huge but plausible
+         * calibration.
+         */
+        constexpr int kEepromAddress = 192;
+        constexpr uint32_t kStoreMagic = 0xF10C0001; // "FLOC 0001"
+        constexpr uint16_t kStoreVersion = 1;
+
+        /** Outside this, a stored record is treated as corrupt. */
+        constexpr uint32_t kMinPulsesPerLitre = 100;
+        constexpr uint32_t kMaxPulsesPerLitre = 200000;
+
+        struct StoredCalibration {
+                uint32_t magic;
+                uint16_t version;
+                uint16_t reserved;
+                uint32_t pulsesPerLitre;
+                uint32_t checksum;
+        };
+
+        uint32_t storeChecksum(const StoredCalibration& rec) {
+            uint32_t sum = 0;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&rec);
+
+            for (size_t i = 0; i < offsetof(StoredCalibration, checksum); ++i) {
+                sum = (sum << 1) ^ bytes[i];
+            }
+
+            return sum;
+        }
+
+        void saveCalibration() {
+            StoredCalibration rec{};
+
+            rec.magic = kStoreMagic;
+            rec.version = kStoreVersion;
+            rec.pulsesPerLitre = calibrationPulsesPerLitre;
+            rec.checksum = storeChecksum(rec);
+
+            EEPROM.put(kEepromAddress, rec);
+
+            Serial.print("flow: calibration saved (");
+            Serial.print(calibrationPulsesPerLitre);
+            Serial.println(" pulses/litre) - it will survive a reboot and a reflash");
+        }
+
+        /** @return true if a believable record was found and applied. */
+        bool loadCalibration() {
+            StoredCalibration rec{};
+            EEPROM.get(kEepromAddress, rec);
+
+            if (rec.magic != kStoreMagic || rec.version != kStoreVersion) {
+                return false;
+            }
+
+            if (rec.checksum != storeChecksum(rec)) {
+                Serial.println("flow: stored calibration failed its checksum - ignoring it");
+
+                return false;
+            }
+
+            if (rec.pulsesPerLitre < kMinPulsesPerLitre || rec.pulsesPerLitre > kMaxPulsesPerLitre) {
+                Serial.println("flow: stored calibration is out of range - ignoring it");
+
+                return false;
+            }
+
+            calibrationPulsesPerLitre = rec.pulsesPerLitre;
+
+            return true;
+        }
+
+    } // namespace
+
     void init() {
         // INPUT_PULLUP covers both cases: the real board carries an external
         // pull-up to 3.3 V for the open-collector sensor, and on a bare Teensy
@@ -91,6 +180,17 @@ namespace flow {
         pinMode(PIN_FLOW, INPUT_PULLUP);
 
         attachInterrupt(digitalPinToInterrupt(PIN_FLOW), onPulse, FALLING);
+
+        if (loadCalibration()) {
+            Serial.print("flow: calibration restored, ");
+            Serial.print(calibrationPulsesPerLitre);
+            Serial.println(" pulses/litre");
+        }
+        else {
+            Serial.print("flow: no stored calibration, using the compiled ");
+            Serial.print(calibrationPulsesPerLitre);
+            Serial.println(" pulses/litre - run 'flowcal' against a measured volume");
+        }
 
         reset();
     }
@@ -167,6 +267,7 @@ namespace flow {
     void setPulsesPerLitre(const uint32_t pulsesPerL) {
         if (pulsesPerL > 0) {
             calibrationPulsesPerLitre = pulsesPerL;
+            saveCalibration();
         }
     }
 
@@ -181,6 +282,7 @@ namespace flow {
         }
 
         calibrationPulsesPerLitre = static_cast<uint32_t>((static_cast<double>(counted) * 1000.0) / actualMl);
+        saveCalibration();
 
         return true;
     }

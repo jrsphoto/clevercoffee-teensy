@@ -83,14 +83,20 @@ inline void safetyHardOff() {
     digitalWriteFast(PIN_HEATER, LOW);
 
     // The pinMode here is LOAD-BEARING for the pump specifically, and it looks
-    // redundant. Pin 9 is driven by hardware PWM in normal operation, and on
+    // redundant. IN2 is driven by hardware PWM in normal operation, and on
     // Teensy 4 pinMode unconditionally re-points the pad mux at GPIO
     // (digital.c: `*(p->mux) = 5 | 0x10`), which is what tears down the FlexPWM
     // routing. A bare digitalWriteFast would leave the pad driven by the PWM
     // peripheral and the GPIO register ignored - the pump would keep running
     // through an emergency stop. Do not remove it.
-    pinMode(PIN_PUMP, OUTPUT);
-    digitalWriteFast(PIN_PUMP, LOW);
+    // BOTH bridge inputs, IN2 first. IN1 low with IN2 still high is REVERSE
+    // on the DRV8871, so taking them down the other way round would kick the
+    // pump backwards on the way to stopping it.
+    pinMode(PIN_PUMP_IN2, OUTPUT);
+    digitalWriteFast(PIN_PUMP_IN2, LOW);
+
+    pinMode(PIN_PUMP_IN1, OUTPUT);
+    digitalWriteFast(PIN_PUMP_IN1, LOW);
 
     pinMode(PIN_VALVE, OUTPUT);
     digitalWriteFast(PIN_VALVE, LOW);

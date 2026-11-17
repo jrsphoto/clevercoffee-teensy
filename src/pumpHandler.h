@@ -60,7 +60,7 @@
  * nobody will notice breaking.
  *
  * safetyHardOff() stops a PWM-driven pump correctly, which is not obvious and
- * was verified rather than assumed: it calls pinMode(PIN_PUMP, OUTPUT), and on
+ * was verified rather than assumed: it calls pinMode on both bridge inputs, and on
  * Teensy 4 pinMode unconditionally re-points the pad mux at GPIO
  * (digital.c: `*(p->mux) = 5 | 0x10`), tearing down the FlexPWM routing. A bare
  * digitalWrite would NOT have been enough - the pad would still be driven by

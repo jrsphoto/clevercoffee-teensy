@@ -21,7 +21,7 @@
  *    and QSPI flash use dedicated pads that do not collide with anything here.
  *  - Teensy pins power up as floating inputs. Outputs are only guaranteed safe at
  *    power-on by the board's bias resistors: pulldowns R15-R18 on the ULN2003
- *    inputs, plus the pulldown on PMP_PWM added during the pinout review. That
+ *    inputs, plus the pulldowns on PMP_IN1 and PMP_IN2. That
  *    hardware bias is part of the safety story, not an optional extra.
  */
 
@@ -60,13 +60,23 @@
                      // sits on the symbol pin whose name is 4_BCLK2, i.e. the
                      // pad printed 4. Normally closed means no power, no water.
 
-// Pump speed. FlexPWM2_2_B, and it owns that submodule outright (the only other
-// pin on it, D6, was freed when the OLED came off this board), so the pump's PWM
-// frequency is independent of everything else.
-// Goes only to PUMP_PWM1, now a 2-pin JST XH header - the Pmode jumper and the
-// on/off ULN path are gone, and so is the 5 V pin that used to sit next to this
-// not-5V-tolerant signal. R19 pulls the net low at reset.
-#define PIN_PUMP 9
+// --- Pump, a DRV8871 H-bridge: BOTH inputs are driven -------------------
+//
+// IN1 is held HIGH while running and IN2 carries the PWM, so the bridge
+// alternates between DRIVING and BRAKING rather than driving and coasting.
+// That is slow-decay drive, and it is what the DRV8871 datasheet asks for
+// when the point is speed control: coasting between pulses gives poor torque
+// at low duty, which on the bench meant nothing moved below about 56%.
+//
+// The duty on IN2 is INVERTED - it is the braking fraction, so 0 on IN2 is
+// full speed. pumpHandler does that conversion.
+//
+// ORDER MATTERS. IN1 low with IN2 high is REVERSE on this chip, so IN2 is
+// always taken down before IN1, and IN1 is always raised before IN2 is
+// pulsed. Both low is coast, which is the safe state and what the board's
+// pulldowns give while the Teensy pins float at reset.
+#define PIN_PUMP_IN1 9 // -> PMP_IN1 -> DRV8871 IN1, held high while running
+#define PIN_PUMP_IN2 6 // -> PMP_IN2 -> DRV8871 IN2, carries the 20 kHz PWM
 
 // --- Shared SPI: both MAX31865 RTD boards -------------------------------
 // The Teensy core's own pins_arduino.h already defines these three, with exactly
@@ -125,8 +135,9 @@
  */
 #define LINK_SERIAL Serial1
 
-// Spare after the review: D4, D6, D7, D8 (D7/D8 = Serial2 if a second UART is
-// ever wanted), plus D14, D17, D20-D23, D27-D37, D41 and the analog-only pins.
+// Spare: D7, D8 (= Serial2 if a second UART is ever wanted), D14, D17,
+// D20-D23, D27-D37, D41 and the analog-only pins. D4 went to the cold inlet
+// valve and D6 to the pump's second bridge input.
 
 #else
 

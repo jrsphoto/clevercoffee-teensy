@@ -35,39 +35,69 @@ namespace pump {
         bool expiryReported = false;
 
         /**
-         * @brief Put the duty on the pin.
+         * @brief Put the duty on the bridge. SLOW DECAY - see pinmapping.h.
          *
-         * Zero is written as a plain GPIO low rather than a 0% PWM. A 0% duty
-         * should be a steady low, but "should" is not good enough for the pin
-         * that runs the pump: taking the pad back to GPIO makes off mean off at
-         * the hardware level, independent of the PWM peripheral's state.
+         * IN1 is held high and IN2 carries the PWM, so each cycle alternates
+         * between driving and BRAKING rather than driving and coasting. The
+         * DRV8871 datasheet asks for this when the point is speed control, and
+         * the bench showed why: coasting between pulses gave so little
+         * low-speed torque that nothing moved below about 56% duty.
+         *
+         * So the duty written to IN2 is INVERTED. It is the braking fraction:
+         * 0 on IN2 is full speed, and a high IN2 brakes.
+         *
+         * THE ORDER OF THE TWO PINS IS A SAFETY DETAIL, not tidiness. IN1 low
+         * with IN2 high is REVERSE on this chip. Stopping therefore takes IN2
+         * down first and starting raises IN1 first, so the pair never passes
+         * through the reverse combination.
+         *
+         * Zero is written as plain GPIO lows rather than a 0% PWM. A 0% duty
+         * should be a steady low, but "should" is not good enough for the pins
+         * that run the pump: taking the pads back to GPIO makes off mean off at
+         * the hardware level, independent of the PWM peripheral's state. Both
+         * low is coast, which is also what the board's pulldowns give while the
+         * Teensy pins float at reset.
          */
         void writeDuty(const float percent) {
             if (percent <= 0.0f) {
-                pinMode(PIN_PUMP, OUTPUT);
-                digitalWriteFast(PIN_PUMP, LOW);
+                // IN2 first. The reverse of this order would briefly drive the
+                // motor backwards.
+                pinMode(PIN_PUMP_IN2, OUTPUT);
+                digitalWriteFast(PIN_PUMP_IN2, LOW);
+
+                pinMode(PIN_PUMP_IN1, OUTPUT);
+                digitalWriteFast(PIN_PUMP_IN1, LOW);
 
                 return;
             }
 
-            const float clamped = percent > 100.0f ? 100.0f : percent;
-            const auto duty = static_cast<uint32_t>((clamped / 100.0f) * static_cast<float>(kDutyMax) + 0.5f);
+            // Drive side high before anything is pulsed, for the same reason.
+            pinMode(PIN_PUMP_IN1, OUTPUT);
+            digitalWriteFast(PIN_PUMP_IN1, HIGH);
 
-            analogWrite(PIN_PUMP, static_cast<int>(duty > kDutyMax ? kDutyMax : duty));
+            const float clamped = percent > 100.0f ? 100.0f : percent;
+            const float braking = 100.0f - clamped;
+            const auto duty = static_cast<uint32_t>((braking / 100.0f) * static_cast<float>(kDutyMax) + 0.5f);
+
+            analogWrite(PIN_PUMP_IN2, static_cast<int>(duty > kDutyMax ? kDutyMax : duty));
         }
 
     } // namespace
 
     void init() {
-        // Off first, and by the same route safetyHardOff() uses.
-        pinMode(PIN_PUMP, OUTPUT);
-        digitalWriteFast(PIN_PUMP, LOW);
+        // Off first, and by the same route safetyHardOff() uses. Both pins,
+        // IN2 before IN1.
+        pinMode(PIN_PUMP_IN2, OUTPUT);
+        digitalWriteFast(PIN_PUMP_IN2, LOW);
+        pinMode(PIN_PUMP_IN1, OUTPUT);
+        digitalWriteFast(PIN_PUMP_IN1, LOW);
 
         // Configure the PWM peripheral but do NOT mux the pin to it yet - that
         // happens on the first non-zero duty. Setting frequency and resolution
-        // here is harmless and keeps the first real command cheap.
+        // here is harmless and keeps the first real command cheap. The PWM now
+        // lives on IN2, not IN1.
         analogWriteResolution(kPwmResolutionBits);
-        analogWriteFrequency(PIN_PUMP, static_cast<float>(kPwmFrequencyHz));
+        analogWriteFrequency(PIN_PUMP_IN2, static_cast<float>(kPwmFrequencyHz));
 
         requested = 0.0f;
         applied = 0.0f;
@@ -76,8 +106,10 @@ namespace pump {
         initialised = true;
         refusal = "ok";
 
-        Serial.print("pump: PWM on pin ");
-        Serial.print(PIN_PUMP);
+        Serial.print("pump: slow-decay PWM on IN2 pin ");
+        Serial.print(PIN_PUMP_IN2);
+        Serial.print(", IN1 pin ");
+        Serial.print(PIN_PUMP_IN1);
         Serial.print(" at ");
         Serial.print(kPwmFrequencyHz);
         Serial.print(" Hz, ");
@@ -220,7 +252,7 @@ namespace pump {
         Serial.print(", ");
         Serial.print(kPwmFrequencyHz);
         Serial.print(" Hz on pin ");
-        Serial.print(PIN_PUMP);
+        Serial.print(PIN_PUMP_IN2);
 
         if (requested > 0.0f) {
             Serial.print(", command age ");

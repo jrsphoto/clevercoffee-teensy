@@ -135,7 +135,7 @@ namespace {
         Serial.print("Safe state asserted on pins: heater=");
         Serial.print(PIN_HEATER);
         Serial.print(" pump=");
-        Serial.print(PIN_PUMP);
+        Serial.print(PIN_PUMP_IN2);
         Serial.print(" valve=");
         Serial.print(PIN_VALVE);
         Serial.print(" fill=");
