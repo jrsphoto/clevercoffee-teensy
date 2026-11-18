@@ -134,6 +134,7 @@ namespace uibind {
          * last flow reset rather than a per-shot figure.
          */
         bool shotActive = false;
+        bool extracting = false;
         bool holdingResult = false;
         float shotBaselineMl = 0.0f;
         uint32_t shotStartedMs = 0;
@@ -143,11 +144,36 @@ namespace uibind {
         float heldWeight = 0.0f;
         bool heldWeightUsable = false;
 
-        /** Status words that mean a shot is actually in progress. */
-        bool statusIsShot(const char* status) {
+        /**
+         * Status words that mean COFFEE IS BEING MADE - the part of a shot
+         * whose water and whose seconds belong to the drink.
+         *
+         * Deliberately excludes "coolflush" and "recovery". The controller
+         * takes its own volume and time baselines in beginExtraction(), which
+         * runs after both of those, so counting them here would have the
+         * panel reporting a bigger shot than the machine thinks it poured.
+         */
+        bool statusIsExtracting(const char* status) {
             return strcmp(status, "brewing") == 0 || strcmp(status, "preinfuse") == 0
-                   || strcmp(status, "soak") == 0 || strcmp(status, "coolflush") == 0
+                   || strcmp(status, "soak") == 0;
+        }
+
+        /** Status words that mean a shot is in progress, flush stages included. */
+        bool statusIsShot(const char* status) {
+            return statusIsExtracting(status) || strcmp(status, "coolflush") == 0
                    || strcmp(status, "recovery") == 0;
+        }
+
+        /**
+         * Status words that mean a sequence the STOP button can actually stop
+         * is running.
+         *
+         * The controller's `stop=1` stops a shot, a manual flush OR a
+         * backflush, whichever is going, so all three belong here.
+         */
+        bool statusIsSequence(const char* status) {
+            return statusIsShot(status) || strcmp(status, "flushing") == 0
+                   || strcmp(status, "backflush") == 0;
         }
 
         /** Called when the readout is left, and when a new shot starts. */
@@ -721,41 +747,86 @@ namespace uibind {
         // --- Setup > WIFI ---------------------------------------------------
 
         /**
-         * FORGET is armed by the first tap and acts on the second, and the
-         * arming LAPSES.
+         * BOTH WIFI BUTTONS ASK BEFORE THEY ACT. John's call, 2026-11-17.
          *
-         * Same shape as BACKFLUSH. Dropping the stored network reboots the
-         * machine into a setup portal, which is a long way back from a mis-tap,
-         * and an arming that waited for ever would leave a loaded gun on the
-         * page for the next person who touched it.
+         * Both of these restart the board, so a mis-tap costs the web page for
+         * a minute at best and the stored network at worst, and neither used
+         * to say so. SET UP WIFI acted on a single tap with nothing in the way
+         * at all; FORGET used the two-tap "TAP AGAIN" arming that BACKFLUSH
+         * uses, which is fine for a tile you are standing in front of but does
+         * not tell anyone WHAT is about to happen.
+         *
+         * A popup does, so the arming is gone from FORGET and both now put the
+         * consequence on the screen in words.
+         *
+         * BUILT AT RUNTIME, which CLAUDE.md otherwise warns against. The rule
+         * there is about controls placed on a SCREEN at coordinates SquareLine
+         * does not know about, where a later layout change can land on top of
+         * them. This is a modal on LVGL's top layer: it belongs to no screen,
+         * it centres itself, and it is gone again a moment later, so there is
+         * no layout for it to collide with and no export needed.
          */
-        constexpr uint32_t kForgetArmedMs = 5000;
+        void confirmDialog(const char* title, const char* text, const char* confirmLabel,
+                           const lv_event_cb_t onConfirm) {
+            // Parent nullptr makes it modal on the top layer: the rest of the
+            // page cannot be tapped while it is up, which is the whole point.
+            lv_obj_t* box = lv_msgbox_create(nullptr);
 
-        bool forgetArmed = false;
-        uint32_t forgetArmedAtMs = 0;
-
-        void showForgetState() {
-            if (ui_WifiForgetLbl != nullptr) {
-                lv_label_set_text(ui_WifiForgetLbl, forgetArmed ? "TAP AGAIN" : "FORGET");
-            }
-        }
-
-        void wifiSetupClicked(lv_event_t*) {
-            net::forgetNetworkAndRestart();
-        }
-
-        void wifiForgetClicked(lv_event_t*) {
-            if (forgetArmed) {
-                forgetArmed = false;
-                showForgetState();
-                net::forgetNetworkAndRestart();
-
+            if (box == nullptr) {
                 return;
             }
 
-            forgetArmed = true;
-            forgetArmedAtMs = millis();
-            showForgetState();
+            lv_msgbox_add_title(box, title);
+            lv_msgbox_add_text(box, text);
+            lv_obj_set_width(box, 360);
+
+            // CANCEL first and on the left, so the harmless choice is the one
+            // under a thumb that has already started moving.
+            lv_obj_t* cancel = lv_msgbox_add_footer_button(box, "CANCEL");
+            lv_obj_t* confirm = lv_msgbox_add_footer_button(box, confirmLabel);
+
+            lv_obj_add_event_cb(
+                cancel,
+                [](lv_event_t* e) {
+                    lv_msgbox_close(static_cast<lv_obj_t*>(lv_event_get_user_data(e)));
+                },
+                LV_EVENT_CLICKED, box);
+
+            lv_obj_add_event_cb(confirm, onConfirm, LV_EVENT_CLICKED, box);
+        }
+
+        /**
+         * SET UP WIFI KEEPS THE STORED NETWORK. It is not a reset.
+         *
+         * This called forgetNetworkAndRestart() until 2026-11-17, so one tap
+         * - no arming, no confirmation - threw away the saved credentials.
+         * That is more destructive than the FORGET button beside it, and it is
+         * the exact fault net.h's comment on requestPortalOnNextBoot() says had
+         * already happened once. The safe function was written for this button
+         * and then never wired to it.
+         */
+        void wifiSetupClicked(lv_event_t*) {
+            confirmDialog("Set up WiFi?",
+                          "The machine restarts into its setup screen.\n\n"
+                          "Your saved network is kept - cancel the setup screen, "
+                          "or leave it, and it rejoins on its own.",
+                          "RESTART",
+                          [](lv_event_t* e) {
+                              lv_msgbox_close(static_cast<lv_obj_t*>(lv_event_get_user_data(e)));
+                              net::requestPortalOnNextBoot();
+                          });
+        }
+
+        void wifiForgetClicked(lv_event_t*) {
+            confirmDialog("Forget this network?",
+                          "The saved WiFi name and password are ERASED and the "
+                          "machine restarts into its setup screen.\n\n"
+                          "You will have to enter them again. Coffee is unaffected.",
+                          "ERASE",
+                          [](lv_event_t* e) {
+                              lv_msgbox_close(static_cast<lv_obj_t*>(lv_event_get_user_data(e)));
+                              net::forgetNetworkAndRestart();
+                          });
         }
 
         void showBrewPage(lv_event_t*) {
@@ -765,9 +836,6 @@ namespace uibind {
         }
 
         void showWifiPage(lv_event_t*) {
-            forgetArmed = false;
-            showForgetState();
-
             if (ui_ScreenWifi != nullptr) {
                 lv_screen_load(ui_ScreenWifi);
             }
@@ -1063,6 +1131,7 @@ namespace uibind {
 
         // --- Shot tracking, for the held result ----------------------
         const bool shotNow = live && statusIsShot(st.status);
+        const bool extractingNow = live && statusIsExtracting(st.status);
 
         if (shotNow && !shotActive) {
             shotBaselineMl = st.volumeMl;
@@ -1079,7 +1148,27 @@ namespace uibind {
             holdingResult = true;
         }
 
+        // RE-BASELINE THE MOMENT EXTRACTION ACTUALLY STARTS, so a cooling
+        // flush's water and its recovery pause are not counted as espresso.
+        //
+        // The block above starts counting when the sequence does, which is
+        // right for the cooling flush itself: something is happening and the
+        // readout should show it rather than sit at zero. But the figure the
+        // operator reads as "the shot" has to mean the same thing the
+        // controller means, and shotHandler.cpp takes its own baselines in
+        // beginExtraction(), after both of those stages. Without this the
+        // panel would report a larger volume and a longer time than the
+        // machine thinks it poured.
+        //
+        // With no cooling flush configured both blocks fire on the same pass
+        // and write the same values, which costs nothing.
+        if (extractingNow && !extracting) {
+            shotBaselineMl = st.volumeMl;
+            shotStartedMs = millis();
+        }
+
         shotActive = shotNow;
+        extracting = extractingNow;
 
         if (shotNow) {
             // During the shot, show what THIS shot has delivered and how long
@@ -1146,11 +1235,25 @@ namespace uibind {
         // STOP appears only while something is actually running, because a
         // STOP that does nothing teaches people the button does nothing.
         //
-        // "Running" is taken from the PUMP, not from what the head last asked
-        // for: the pump turning is the machine doing something, and it is
-        // reported rather than assumed.
+        // THE PUMP ALONE IS NOT THE TEST, and using it was a real fault.
+        // Every sequence here has stages where the pump is deliberately
+        // stopped while the sequence is very much still running: the soak
+        // (pump::setSpeed(0.0)), the cooling flush's recovery pause
+        // (allOff()), and the drain phase of every backflush cycle
+        // (allOff()), which is five to twenty seconds each. Through all of
+        // those the button vanished, so the machine looked finished moments
+        // before it drove the pump again.
+        //
+        // Worse than invisible: the readout's background is clickable and
+        // returns to the home grid, so a finger reaching for STOP as it
+        // disappeared landed on the background and navigated away while the
+        // sequence carried on. For a backflush that removed the only way to
+        // stop it from the panel.
+        //
+        // So the status word decides, and the pump is kept as well - that
+        // covers a bare pump run, which no sequence word describes.
         if (ui_StopButton != nullptr) {
-            const bool running = live && st.pumpPercent > 0.0f;
+            const bool running = live && (statusIsSequence(st.status) || st.pumpPercent > 0.0f);
 
             if (running) {
                 lv_obj_remove_flag(ui_StopButton, LV_OBJ_FLAG_HIDDEN);
@@ -1201,12 +1304,6 @@ namespace uibind {
         // true when it was built.
         setText(ui_AboutControllerVersion, controllerVersionText());
         setColour(ui_AboutControllerVersion, live ? kValue : kDim);
-
-        // Let an armed FORGET lapse rather than sit waiting indefinitely.
-        if (forgetArmed && (millis() - forgetArmedAtMs) > kForgetArmedMs) {
-            forgetArmed = false;
-            showForgetState();
-        }
 
         sampleChart(st, live);
         sampleFlowChart(st, live);

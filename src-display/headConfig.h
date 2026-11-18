@@ -12,11 +12,57 @@
 
 #pragma once
 
+#include <mutex>
 #include <stdint.h>
 
 class Config;
 
 namespace headconfig {
+
+    /**
+     * @brief The lock around the config store and the pending-ack list.
+     *
+     * THERE ARE TWO THREADS ON THIS BOARD AND ONLY ONE OF THEM IS loop().
+     *
+     * ESPAsyncWebServer does not run its request handlers from loop(). AsyncTCP
+     * starts its own FreeRTOS task, "async_tcp", at priority 10 against the
+     * Arduino loop task's 1, and unpinned (CONFIG_ASYNC_TCP_RUNNING_CORE is -1),
+     * so on this dual-core S3 a web handler both interrupts the main loop AND
+     * can genuinely run beside it on the other core.
+     *
+     * Three things are therefore touched from both sides at once:
+     *
+     *   - pendingPrevious, the std::map of values waiting for the controller's
+     *     answer. A browser save fills it from the web task while the acks come
+     *     back and erase from it on the loop task, typically a couple of
+     *     milliseconds later - well before a form of twenty-odd fields has
+     *     finished being applied. Two tasks rebalancing one red-black tree
+     *     corrupts the heap.
+     *
+     *   - the Config store's JsonDocument. A browser save edits it from the web
+     *     task while processPeriodicSave() on the loop task is walking the same
+     *     document to serialise it to the filesystem.
+     *
+     *   - the I2C scan state in net.cpp, which the web handler writes and the
+     *     controller's ack handler writes back from the loop task. Harmless by
+     *     comparison - it is a few plain integers - but it is the same mistake
+     *     and it is guarded by the same lock rather than left as an exception
+     *     somebody has to re-derive.
+     *
+     * Deliberately NOT covering the link's UART. Frames cannot interleave:
+     * HardwareSerial::write(buffer, size) passes the whole buffer to
+     * uartWriteBuf(), which holds the core's UART mutex for the entire call,
+     * and every frame in link.cpp goes out in a single write. Adding a second
+     * lock there would suggest a hazard that does not exist.
+     *
+     * RECURSIVE so that a caller holding it can go through a parameter setter,
+     * which takes it again. Hold it for the shortest stretch that is correct:
+     * never across a serial write, never across a delay().
+     */
+    std::recursive_mutex& mutex();
+
+    /** Shorthand for the guard. `const headconfig::Guard g(headconfig::mutex());` */
+    using Guard = std::lock_guard<std::recursive_mutex>;
 
     /**
      * @brief Load the stored configuration and register the parameters.

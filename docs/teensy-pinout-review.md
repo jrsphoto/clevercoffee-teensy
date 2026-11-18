@@ -24,7 +24,8 @@ Teensy digital pin numbers.
 | Boiler fill valve (to ULN2003 I2) | 3 | GPIO out |
 | Cold inlet valve (to ULN2003 I4) | 4 | GPIO out |
 | Group valve (to ULN2003 I1) | 5 | GPIO out |
-| Pump PWM (to the DRV8871 driver board) | 9 | FlexPWM2_2_B |
+| Pump IN1 (`PMP_IN1`, to DRV8871 IN1) | 9 | FlexPWM2_2_B, held HIGH while running |
+| Pump IN2 (`PMP_IN2`, to DRV8871 IN2) | 6 | FlexPWM2_2_A, carries the 20 kHz PWM |
 | Flow sensor (DM60 pulse) | 10 | QuadTimer1_0 (interrupt / input-capture) |
 | SPI MOSI (both MAX31865 RTDs) | 11 | SPI (LPSPI4) MOSI |
 | SPI MISO (both RTDs) | 12 | SPI MISO |
@@ -42,8 +43,21 @@ Teensy digital pin numbers.
 | ESP32-S3 link RX (Serial1 RX1) | 0 | UART |
 | ESP32-S3 link TX (Serial1 TX1) | 1 | UART |
 
-Spare pins: D4, D6, D7, D8 (freed by removing the OLED; D7/D8 = Serial2 if a second UART
+Spare pins: D4, D7, D8 (freed by removing the OLED; D7/D8 = Serial2 if a second UART
 is ever wanted), plus D14, D17, D20-D23, D27-D37, D41, and the analog-only A-pins.
+
+**D6 IS NOT SPARE ANY MORE** and this table said it was until 2026-11-17. It
+carries `PMP_IN2`. The pump went from one driven input to two on 2026-11-16, so
+the bridge drives and brakes rather than driving and coasting - start-from-rest
+went from 56% duty to about 10%. IN1 low with IN2 high is REVERSE on a DRV8871,
+which is why `safetyHardOff()` takes IN2 down first. `pinmapping.h` is the
+authority; this table had drifted behind it, which matters because the table is
+what gets read before probing.
+
+**Both pump inputs need their own 10k pull-down**, for the same reason the
+ULN2003 inputs have R15-R18: the Teensy's pins are floating inputs until
+firmware runs, and a floating bridge input is not a defined "off". Confirm
+`PMP_IN1` and `PMP_IN2` both have one before the board is fabricated.
 
 ## Why these are correct
 

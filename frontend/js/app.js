@@ -408,11 +408,19 @@ const vueApp = Vue.createApp({
             // If the controller refuses - a shot running, a latched fault - the
             // output simply never shows ON. Say so rather than leaving someone
             // holding a button that does nothing.
+            //
+            // 2200 ms, not 1500. The state has to come back through two
+            // one-second cycles that are not in step: the controller emits a
+            // diag frame once a second, and this page polls /api/diag once a
+            // second. Worst case that is about 1.9 s for a perfectly accepted
+            // hold to show up, so a 1500 ms deadline flashed a false "the
+            // controller refused that" a moment before the indicator went
+            // green.
             setTimeout(() => {
                 if (this.holdTimer && this.diag && !this.diag.outputs[key]) {
                     this.holdMessage = 'The controller refused that. It will not test outputs while a shot or flush is running, or after a fault.';
                 }
-            }, 1500);
+            }, 2200);
         },
 
         endHold() {

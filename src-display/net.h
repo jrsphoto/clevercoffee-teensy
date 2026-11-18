@@ -127,6 +127,12 @@ namespace net {
      * flag, skips autoConnect and raises the portal directly, with the stored
      * credentials still in place. Cancel or let it time out and the machine
      * reconnects to the network it was already on.
+     *
+     * THAT LAST SENTENCE WAS NOT TRUE UNTIL 2026-11-17. Nothing retried the
+     * saved credentials after the portal closed, so a timeout left the head
+     * offline until the next power cycle - the comment described the intent
+     * and the code did something else. begin() now has the fallback that makes
+     * it true, and the reasoning is written there.
      */
     void requestPortalOnNextBoot();
 

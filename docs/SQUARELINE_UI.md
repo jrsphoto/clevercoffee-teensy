@@ -168,10 +168,22 @@ positions, all guids unique, all names unique. **Names must be unique because
 the export makes one global per name**; two widgets sharing one would collide
 at link time.
 
-**Verified in step, mechanically:** every one of the 73 `ui_*` names declared
-in `uiContract.h` now exists in the project, arrays expanded (`ui_HomeTiles[9]`
+**Verified in step, mechanically:** every one of the `ui_*` names declared in
+`uiContract.h` exists in the project, arrays expanded (`ui_HomeTiles[9]`
 against `HomeTile0`..`HomeTile8`). Re-run that check after changing either
 side.
+
+**THE COUNT IS 78, NOT 73.** It was 73 when this was written on 2026-11-13 and
+the number was left behind by the work that followed: `ui_SleepDown`,
+`ui_SleepUp` and `ui_SleepValue` arrived with screen sleep on 2026-11-15, and
+`ui_FlowChart` on 2026-11-16. All four are in the project and in the contract -
+only this document was stale, which matters because the figure is what a
+re-run of the check gets compared against. Count it rather than trusting a
+number written down here:
+
+```bash
+grep -oE "ui_[A-Za-z0-9_]+" src-display/uiContract.h | sort -u | wc -l
+```
 
 **A leftover `ImgButton5` on `ScreenSetup` was removed by John in the editor**
 the same day, once it was pointed out: an IMGBUTTON with no image that would
@@ -186,8 +198,9 @@ because the editor is a GUI.
 
 Measured after his save: seven screens still there, `ScreenAbout` still
 carrying its 12 widgets, every position the firmware draws unchanged, all 73
-`ui_*` names from `uiContract.h` still present, and 134 nodes where there had
-been 135 - exactly the one he deleted.
+`ui_*` names from `uiContract.h` then present, and 134 nodes where there had
+been 135 - exactly the one he deleted. (73 was the count on that date; it is
+78 now - see above.)
 
 So generating widget nodes by script is safe in both directions: the editor
 accepts what a script writes, and a script can read what the editor writes.

@@ -184,6 +184,17 @@ namespace linkproto {
     constexpr uint32_t kBaud = 115200;
 
     /**
+     * @brief Is this character a hex digit?
+     *
+     * Spelled out rather than using <ctype.h>'s isxdigit, which is
+     * locale-aware and takes an int that must not be a negative char - an
+     * easy thing to get subtly wrong on a line carrying arbitrary bytes.
+     */
+    inline bool isHexDigit(const char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    /**
      * @brief XOR checksum of the bytes between $ and *.
      */
     inline uint8_t checksum(const char* body, const size_t length) {
@@ -348,6 +359,20 @@ namespace linkproto {
                 char* star = strrchr(raw_, kChecksumSep);
 
                 if (star == nullptr || (raw_ + length_ - star) != 3) {
+                    malformed_++;
+
+                    return false;
+                }
+
+                // Both checksum characters must BE hex digits.
+                //
+                // strtoul does not report failure here - it returns 0 for text
+                // it cannot parse - so "T:body*zz" would be read as a checksum
+                // of 0 and accepted by any frame whose real checksum happened
+                // to be 0. That is one payload in 256 on a line carrying
+                // noise. Counted as malformed, which is what it is: the frame
+                // is not merely wrong, it is not the right shape.
+                if (!isHexDigit(star[1]) || !isHexDigit(star[2])) {
                     malformed_++;
 
                     return false;

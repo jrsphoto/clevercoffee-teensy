@@ -37,8 +37,10 @@
  */
 
 #include <Arduino.h>
+#include <cmath>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 
@@ -95,15 +97,48 @@ namespace {
     uint32_t refusedCount = 0;
 
     /**
-     * @brief Send one value to the controller.
+     * @brief Format one config value as the text that crosses the link.
      *
-     * Formatted with %g so a whole number travels as "5" rather than
-     * "5.000000", which keeps frames short and keeps the Teensy's console
-     * readable when it echoes them back.
+     * NOT "%g", WHICH SILENTLY CORRUPTED THE ENCODER'S COLOURS.
+     *
+     * "%g" was chosen so a whole number travels as "5" rather than "5.000000",
+     * keeping frames short and the controller's console readable. That part was
+     * right. What it also does is round to six significant digits and switch to
+     * scientific notation above a million, and a 24-bit colour needs eight.
+     *
+     * Measured on the two boards, 2026-11-17:
+     *
+     *   heating  0xFF4000 = 16728064  ->  "1.67281e+07"  ->  16728100 = 0xFF4024
+     *   error    0xFF0000 = 16711680  ->  "1.67117e+07"  ->  16711700 = 0xFF0074
+     *
+     * So the fault colour - the one thing on that knob that must never look
+     * ordinary - was lighting pinkish-magenta rather than red, and nothing
+     * anywhere reported a problem because the mangled number still passed the
+     * controller's 0 to 0xFFFFFF range check.
+     *
+     * Whole numbers now print as integers, which keeps the original intent and
+     * is exact to the full 24 bits. Everything else falls back to "%.9g", which
+     * carries a float without rounding and without turning 0.1 into noise.
+     *
+     * A non-finite value lands in the "%.9g" branch and travels as "nan", which
+     * the controller's range check refuses. That is the honest outcome and it is
+     * also unreachable today: every value here comes from the browser or from
+     * the JSON config, and neither can produce one.
      */
+    void formatValue(char* out, const size_t len, const double value) {
+        if (std::isfinite(value) && value == std::trunc(value) && std::fabs(value) < 1e15) {
+            snprintf(out, len, "%lld", static_cast<long long>(value));
+
+            return;
+        }
+
+        snprintf(out, len, "%.9g", value);
+    }
+
+    /** @brief Send one value to the controller. */
     void pushToController(const char* key, const double value) {
         char text[24];
-        snprintf(text, sizeof(text), "%g", value);
+        formatValue(text, sizeof(text), value);
         machinelink::sendConfig(key, text);
     }
 
@@ -122,6 +157,10 @@ namespace {
      * Those keep their value here, which is where they belong.
      */
     void onConfigAck(const char* key, const bool ok, const char* why) {
+        // Runs on the loop task; the web task writes this same map and the same
+        // config store. See headconfig::mutex().
+        const headconfig::Guard guard(headconfig::mutex());
+
         const auto it = pendingPrevious.find(key);
 
         if (it == pendingPrevious.end()) {
@@ -142,6 +181,14 @@ namespace {
         // second write it never asked for.
         auto& store = headconfig::config();
         store.set<double>(key, previous);
+
+        // Mark it changed again, even though the write being undone already
+        // did. Saves are debounced by two seconds, so that earlier mark would
+        // normally carry this revert to the filesystem with it - but only while
+        // the controller answers inside the window. If it ever takes longer the
+        // refused value is already saved, and without this the revert would
+        // live in RAM until the next boot quietly restored the refused one.
+        ParameterRegistry::getInstance().markChanged();
 
         Serial.printf("config: controller REFUSED %s (%s) - reverted to %g\n", key, why, previous);
     }
@@ -203,11 +250,27 @@ void ParameterRegistry::initialize(Config& config) {
         };
 
         const std::function<void(double)> setter = [this, path](const double v) {
-            // Remembered BEFORE the write, so a refusal can undo it.
-            pendingPrevious[path] = _config->get<double>(path);
+            {
+                // Runs on the web task. See headconfig::mutex().
+                const headconfig::Guard guard(headconfig::mutex());
 
-            _config->set<double>(path, v);
-            markChanged();
+                // Remembered BEFORE the write, so a refusal can undo it.
+                //
+                // try_emplace, NOT operator[]. An entry already here means an
+                // earlier edit of this same key has not been answered yet, and
+                // the value worth keeping is the last one the controller
+                // actually accepted - not the unacknowledged one in between.
+                // operator[] overwrote it, so a refusal rolled back to a value
+                // the machine may never have had.
+                pendingPrevious.try_emplace(path, _config->get<double>(path));
+
+                _config->set<double>(path, v);
+                markChanged();
+            }
+
+            // Outside the lock: this writes to the UART, which blocks until
+            // the bytes are accepted, and the loop task must not be held off
+            // for that.
             pushToController(path, v);
         };
 
@@ -234,10 +297,15 @@ void ParameterRegistry::initialize(Config& config) {
         };
 
         const std::function<void(bool)> setter = [this, path](const bool v) {
-            pendingPrevious[path] = _config->get<bool>(path) ? 1.0 : 0.0;
+            {
+                const headconfig::Guard guard(headconfig::mutex());
 
-            _config->set<bool>(path, v);
-            markChanged();
+                pendingPrevious.try_emplace(path, _config->get<bool>(path) ? 1.0 : 0.0);
+
+                _config->set<bool>(path, v);
+                markChanged();
+            }
+
             pushToController(path, v ? 1.0 : 0.0);
         };
 
@@ -279,9 +347,10 @@ void ParameterRegistry::initialize(Config& config) {
             // Straight to the controller. Nothing is stored or remembered for
             // reversion here, because this board holds no opinion about the
             // value - the next telemetry frame says what the machine did with
-            // it, which is a better answer than our own echo.
+            // it, which is a better answer than our own echo. No lock for the
+            // same reason: this touches neither the store nor pendingPrevious.
             char text[24];
-            snprintf(text, sizeof(text), "%g", v);
+            formatValue(text, sizeof(text), v);
             machinelink::sendConfig(path, text);
         };
 
@@ -314,10 +383,15 @@ void ParameterRegistry::initialize(Config& config) {
         };
 
         const std::function<void(double)> setter = [this, path](const double v) {
-            pendingPrevious[path] = _config->get<int>(path);
+            {
+                const headconfig::Guard guard(headconfig::mutex());
 
-            _config->set<int>(path, static_cast<int>(v));
-            markChanged();
+                pendingPrevious.try_emplace(path, _config->get<int>(path));
+
+                _config->set<int>(path, static_cast<int>(v));
+                markChanged();
+            }
+
             pushToController(path, v);
         };
 
@@ -628,7 +702,13 @@ namespace headconfig {
         Config store;
         bool started = false;
 
+        std::recursive_mutex storeMutex;
+
     } // namespace
+
+    std::recursive_mutex& mutex() {
+        return storeMutex;
+    }
 
     bool begin() {
         // THE ENCODER'S ADDRESS IS BOARD-SPECIFIC, and getting this wrong does
@@ -677,6 +757,13 @@ namespace headconfig {
 
     void loop() {
         if (started) {
+            // Held across the whole save. processPeriodicSave() serialises the
+            // JsonDocument straight into a file, and a browser save editing
+            // that document halfway through the walk is the worst of the three
+            // hazards in mutex()'s note. A web request blocking for the length
+            // of a LittleFS write is the correct price.
+            const Guard guard(mutex());
+
             // Upstream's debounce: a burst of edits becomes one write.
             ParameterRegistry::getInstance().processPeriodicSave();
         }
@@ -699,6 +786,8 @@ namespace headconfig {
     }
 
     bool hasPendingAcks() {
+        const Guard guard(mutex());
+
         return !pendingPrevious.empty();
     }
 
@@ -733,8 +822,17 @@ namespace headconfig {
             // a refusal here means the two sides disagree about a DEFAULT,
             // which onConfigAck reports and leaves alone rather than
             // papering over.
+            //
+            // The lock covers only the read of the store, not the send and
+            // certainly not the delay() below.
             char text[24];
-            snprintf(text, sizeof(text), "%g", param->getValue());
+
+            {
+                const Guard guard(mutex());
+
+                formatValue(text, sizeof(text), param->getValue());
+            }
+
             machinelink::sendConfig(param->getId(), text);
             sent++;
 

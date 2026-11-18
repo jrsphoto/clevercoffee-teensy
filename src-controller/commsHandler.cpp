@@ -394,6 +394,21 @@ namespace comms {
                 }
             }
 
+            // BIT 0 COMES FROM heater::, NOT FROM outputs::.
+            //
+            // The same trap as stateWord() and the update gate, in the one
+            // place left that still had it. The heater is driven straight at
+            // the pin by the ISR and never passes through the outputs module,
+            // so outputs::isOn(Channel::Heater) reads false at full power -
+            // and the Diags page's heater indicator could therefore never
+            // light, whatever the element was doing. Same definition the panel
+            // and the encoder colour use, so the three cannot disagree.
+            outs &= static_cast<uint8_t>(~(1u << static_cast<uint8_t>(outputs::Channel::Heater)));
+
+            if (heater::isHeating()) {
+                outs |= static_cast<uint8_t>(1u << static_cast<uint8_t>(outputs::Channel::Heater));
+            }
+
             // enc lives HERE rather than in telemetry. Its only two consumers
             // on the head are /api/status and the Diags page, both
             // diagnostics, and printed at full int32 width it cost up to 16
@@ -864,9 +879,28 @@ namespace comms {
          */
         uint8_t rxBuffer[1024];
 
+        /**
+         * The TRANSMIT buffer, and it matters for loop timing rather than for
+         * dropped data.
+         *
+         * Serial1's default transmit buffer on a Teensy 4 is 64 bytes
+         * (SERIAL1_TX_BUFFER_SIZE in the core's HardwareSerial1.cpp), and
+         * HardwareSerialIMXRT::write9bit() spins in
+         * `while (tx_buffer_tail_ == head)` once it is full. A telemetry frame
+         * is up to 137 bytes and the diag frame up to 151, so every frame past
+         * the first 63 bytes waited for the wire: at 115200 baud that is
+         * 86.8 us a byte, several milliseconds once a second, inside the main
+         * loop.
+         *
+         * 1 kB, matching the receive side, so a whole frame is handed over and
+         * the loop carries on while the ISR drains it.
+         */
+        uint8_t txBuffer[1024];
+
         void beginLink() {
             LINK_SERIAL.begin(linkproto::kBaud);
             LINK_SERIAL.addMemoryForRead(rxBuffer, sizeof(rxBuffer));
+            LINK_SERIAL.addMemoryForWrite(txBuffer, sizeof(txBuffer));
         }
 
     } // namespace
@@ -968,6 +1002,19 @@ namespace comms {
         // pass rather than on a timer: this is the thing that makes the button
         // momentary, so it must not wait for anything else.
         if (holdActive && static_cast<int32_t>(now - holdUntilMs) >= 0) {
+            releaseHold();
+        }
+
+        // A SEQUENCE STARTING TAKES THE OUTPUT BACK IMMEDIATELY.
+        //
+        // holdAllowed() refuses a hold REQUEST while something is running, but
+        // a hold already in progress when a shot begins was only cleared on
+        // the browser's next re-assertion or when its one-second lapse ran
+        // out - so the output could be dropped at an arbitrary moment during
+        // the shot, which is exactly the hazard holdAllowed()'s own comment
+        // describes. The console path has the same guard in
+        // bringupConsole.cpp's serviceAutoOff().
+        if (holdActive && shot::isBusy()) {
             releaseHold();
         }
 

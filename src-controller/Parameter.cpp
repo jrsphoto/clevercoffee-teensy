@@ -241,6 +241,11 @@ String Parameter::getFormattedValue() const {
             return String(getValueAs<double>());
 
         case kInteger:
+        case kColor:
+            // A colour is a plain 0x000000-0xFFFFFF int; only the web UI's
+            // renderer treats it specially. Nothing calls this function today,
+            // so the missing case was never visible - it would simply have
+            // returned "Unknown type" for a colour the first time anything did.
             return String(getValueAs<int>());
 
         case kUInt8:
@@ -292,6 +297,11 @@ void Parameter::syncToGlobalVariable(const double value) const {
 
     switch (_type) {
         case kInteger:
+        case kColor:
+            // Unreachable today - every colour parameter is registered with a
+            // null globalVar, so the early return above catches it. Listed so
+            // the switch stays exhaustive over EditableKind rather than
+            // depending on that.
             *static_cast<int*>(_globalVariablePointer) = static_cast<int>(value);
             break;
 

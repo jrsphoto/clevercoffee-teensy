@@ -75,6 +75,31 @@ namespace machinelink {
          */
         bool backflushArmed = false;
 
+        /**
+         * These two are the only strings here, and they are the only fields
+         * in this struct where a concurrent read is more than cosmetic.
+         *
+         * Everything else is a float or a bool: the web task reading one
+         * while the loop task writes it gets a value from one frame or the
+         * next, which is indistinguishable from sampling a millisecond later.
+         * A string is different. The parser memcpy's the characters and only
+         * then writes the terminator, and ArduinoJson measures a char* with
+         * strlen(), so a reader landing mid-write could in principle scan past
+         * the end of the buffer looking for a terminator not yet written.
+         *
+         * IT CANNOT HAPPEN AS THE FIRMWARE STANDS, and that is worth writing
+         * down rather than re-deriving. It needs the buffer to hold no zero
+         * byte at all, which needs a string filling it completely: 15
+         * characters of status or 23 of fault. The longest state word the
+         * controller can send is "backflush", 9, and commsHandler.cpp names
+         * them all in one list with a self-check over it.
+         *
+         * So the thing to watch is not this file. If a state word or fault
+         * name ever grows to fill one of these buffers, make the copy bound
+         * itself - parse into a local and copy with the last byte held back,
+         * so it stays NUL permanently - rather than assuming the slack is
+         * still there.
+         */
         char status[16] = "?";
         char fault[24] = "?";
     };

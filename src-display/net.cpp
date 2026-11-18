@@ -97,7 +97,11 @@ namespace net {
         AsyncEventSource events("/events");
 
         State current = State::Idle;
+        /** Are the web PAGES on the filesystem? See mountFilesystem(). */
         bool fsMounted = false;
+
+        /** Did LittleFS mount at all? True with config.json and no pages. */
+        bool fsPresent = false;
         bool listening = false;
         uint32_t requests = 0;
 
@@ -136,7 +140,15 @@ namespace net {
         // follows: a stale reading is NO reading, never the last good value.
         // -------------------------------------------------------------------
 
-        constexpr int kHistoryLength = 600;    ///< 20 minutes at one record / 2 s
+        // THE CADENCE IS ONE RECORD EVERY THREE SECONDS, NOT TWO, so 600
+        // records is half an hour of history rather than the twenty minutes
+        // the comment here used to claim. sampleAndPublish() is called once a
+        // second and records when `skippedValues % kSecondsToSkip == 0` with
+        // skippedValues starting at zero, which skips two seconds and keeps
+        // the third. frontend/js/temp.js spaces its x-axis by `3*i` seconds to
+        // match, so the charts have always been drawn correctly - only the
+        // comment was wrong. Upstream counts the same way.
+        constexpr int kHistoryLength = 600;    ///< 30 minutes at one record / 3 s
         constexpr int kSecondsToSkip = 2;      ///< upstream's decimation
         constexpr int16_t kNoReading = INT16_MIN;
 
@@ -243,6 +255,12 @@ namespace net {
                 tempHistory[2][historyCurrentIndex] = duty;
 
                 historyCurrentIndex = (historyCurrentIndex + 1) % kHistoryLength;
+
+                // Caps at 599, not 600, so one of the stored records is never
+                // served. That is upstream's code and it is REQUIRED by the
+                // loop in printHistorySeries(): at a count of 600 its start
+                // index equals its end index and it would emit nothing at all.
+                // Leave it.
                 historyValueCount = min(kHistoryLength - 1, historyValueCount + 1);
                 skippedValues = 0;
             }
@@ -460,6 +478,10 @@ namespace net {
                 return;
             }
 
+            // Runs on the loop task; the /api/i2cscan handler writes the same
+            // five variables from the web task. See headconfig::mutex().
+            const headconfig::Guard guard(headconfig::mutex());
+
             scanDeviceCount = 0;
 
             if (ok && strcmp(why, "none") != 0) {
@@ -570,6 +592,14 @@ namespace net {
             AsyncResponseStream* response = request->beginResponseStream("application/json");
             response->print("{\"parameters\":[");
 
+            // Runs on the web task. Every shouldShow() and getValue() below
+            // reads the config store, which the loop task may be serialising
+            // to the filesystem right now, and which a concurrent save may be
+            // editing. See headconfig::mutex(). Held to the end of the
+            // function: the response is buffered in memory, so nothing in
+            // here waits on the network.
+            const headconfig::Guard guard(headconfig::mutex());
+
             bool first = true;
             int matched = 0;
             int sent = 0;
@@ -652,9 +682,35 @@ namespace net {
                         response->print("\"");
                         break;
 
-                    default:
-                        response->print(round2(param->getValue()), 2);
+                    default: {
+                        // NEVER hand a raw double to print() here.
+                        //
+                        // Print::printFloat() in the ESP32 core emits the bare
+                        // word `nan` for a NaN and `inf` for an infinity.
+                        // Neither is valid JSON, so the browser's JSON.parse()
+                        // throws on the WHOLE response and every settings page
+                        // renders empty - the same symptom as the four defects
+                        // in the comment above, from a completely different
+                        // cause.
+                        //
+                        // It is reachable. The two scale calibration factors
+                        // are controller-owned (see headConfig.cpp) and read
+                        // NaN until the first telemetry frame carries them, so
+                        // an unplugged Teensy, or one sitting in update mode,
+                        // takes the entire web UI down with it.
+                        // telemetryJson() already guards the same two values
+                        // for /api/status; this is that guard, here.
+                        const double v = param->getValue();
+
+                        if (std::isnan(v) || std::isinf(v)) {
+                            response->print("null");
+                        }
+                        else {
+                            response->print(round2(v), 2);
+                        }
+
                         break;
+                    }
                 }
 
                 // Enum choices, as paramToJson() in src/embeddedWebserver.h
@@ -752,6 +808,42 @@ namespace net {
             request->send(unknown > 0 ? 207 : 200, "text/plain", body);
         }
 
+        /**
+         * A reboot asked for by a browser, carried out from loop().
+         *
+         * Not done inside the handler: the reply has to reach the browser
+         * first, and the web task is the wrong place to stop the world from.
+         * The front end shows an alert off the response, so restarting before
+         * it is flushed looks like the request failed.
+         */
+        enum class PendingAction : uint8_t {
+            None,
+            Restart,
+            ForgetNetwork,
+        };
+
+        PendingAction pendingAction = PendingAction::None;
+        uint32_t pendingActionAtMs = 0;
+
+        /** Long enough for the response to be written out and acknowledged. */
+        constexpr uint32_t kPendingActionDelayMs = 600;
+
+        /**
+         * POST, spelled as the literal 2.
+         *
+         * NOT the name HTTP_POST. Everything in the include-order note at the
+         * top of this file applies to the route table as well: with
+         * http_parser's enum winning, HTTP_POST is 3, and as an
+         * ESPAsyncWebServer method bitmask 3 means GET|POST. Registering a
+         * destructive route under that name would make a plain GET fire it -
+         * a browser prefetch, a link checker or somebody pasting the URL could
+         * reboot the board or erase its WiFi credentials.
+         *
+         * This is also why /parameters works: it is registered twice, and the
+         * HTTP_GET line is matched first.
+         */
+        constexpr WebRequestMethodComposite kPostOnly = 2;
+
         void registerRoutes() {
             // The event stream the home page lives on. Registered as a handler
             // rather than a route, which is how ESPAsyncWebServer does SSE.
@@ -833,20 +925,36 @@ namespace net {
                 // comment, so upstream met this too.
                 constexpr int kMethodPost = 2;
 
-                if (request->method() == kMethodPost && !scanInProgress) {
-                    scanInProgress = true;
-                    scanStartedMs = millis();
+                // The scan state is written from the loop task too, by
+                // onCommandAck. See headconfig::mutex(). Claiming the scan and
+                // sending the request are split so the lock is not held across
+                // the UART write.
+                bool startScan = false;
+
+                {
+                    const headconfig::Guard guard(headconfig::mutex());
+
+                    if (request->method() == kMethodPost && !scanInProgress) {
+                        scanInProgress = true;
+                        scanStartedMs = millis();
+                        startScan = true;
+                    }
+
+                    // Give up rather than poll forever if the controller never
+                    // answers - with the link down, that is the normal case,
+                    // and a spinner that never stops says nothing useful.
+                    if (scanInProgress && (millis() - scanStartedMs) > kScanTimeoutMs) {
+                        scanInProgress = false;
+                        scanHasRun = true;
+                        scanDeviceCount = 0;
+                    }
+                }
+
+                if (startScan) {
                     machinelink::sendCommand("i2cscan=1");
                 }
 
-                // Give up rather than poll forever if the controller never
-                // answers - with the link down, that is the normal case, and
-                // a spinner that never stops says nothing useful.
-                if (scanInProgress && (millis() - scanStartedMs) > kScanTimeoutMs) {
-                    scanInProgress = false;
-                    scanHasRun = true;
-                    scanDeviceCount = 0;
-                }
+                const headconfig::Guard guard(headconfig::mutex());
 
                 AsyncResponseStream* response = request->beginResponseStream("application/json");
 
@@ -1066,6 +1174,128 @@ namespace net {
                 request->send(200, "application/json", out);
             });
 
+            /**
+             * The help popovers.
+             *
+             * Every setting on every page is drawn with a "?" beside it, and
+             * every one of them called an endpoint that did not exist. Each
+             * click was a 404 and an empty popover.
+             *
+             * Upstream's shape (src/embeddedWebserver.h), and the front end
+             * asks for "/parameterHelp/?param=NAME" with a trailing slash -
+             * which matches because ESPAsyncWebServer also accepts a URL that
+             * starts with the registered path plus "/".
+             */
+            server.on("/parameterHelp", HTTP_GET, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                if (!request->hasParam("param")) {
+                    request->send(422, "text/plain", "parameter is missing");
+
+                    return;
+                }
+
+                const String name = request->getParam("param")->value();
+
+                const headconfig::Guard guard(headconfig::mutex());
+
+                const std::shared_ptr<Parameter> param =
+                    ParameterRegistry::getInstance().getParameterById(name.c_str());
+
+                if (param == nullptr) {
+                    request->send(404, "application/json", "parameter not found");
+
+                    return;
+                }
+
+                JsonDocument doc;
+                doc["name"] = name;
+                doc["helpText"] = param->getHelpText();
+
+                String out;
+                serializeJson(doc, out);
+                request->send(200, "application/json", out);
+            });
+
+            /**
+             * Restart - THIS BOARD ONLY.
+             *
+             * The System page's button says "restart your machine", which on
+             * an upstream single-board machine is what it did. Here it is not:
+             * the display head cannot reset the controller, deliberately and
+             * by design (see the reset-separation note in README). So this
+             * reboots the head, the Teensy carries on running the machine
+             * throughout, and the reply says so rather than letting someone
+             * believe the machine was restarted.
+             */
+            server.on("/restart", kPostOnly, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                pendingAction = PendingAction::Restart;
+                pendingActionAtMs = millis();
+
+                request->send(200, "text/plain",
+                              "Restarting the display head. The controller keeps running "
+                              "the machine - this does not restart the machine itself.\n");
+            });
+
+            /**
+             * Forget the stored network and come back up in the setup portal.
+             *
+             * The same thing the `wifireset` console command does. Destructive
+             * only to the WiFi credentials; the machine is unaffected, and the
+             * front end asks the operator to confirm before calling it.
+             */
+            server.on("/wifireset", kPostOnly, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                pendingAction = PendingAction::ForgetNetwork;
+                pendingActionAtMs = millis();
+
+                request->send(200, "text/plain",
+                              "WiFi credentials erased. The head is restarting into its "
+                              "setup portal - join the 'clevercoffee' network to set it up "
+                              "again. The machine is unaffected.\n");
+            });
+
+            /**
+             * Download the configuration as a file. Read-only.
+             *
+             * A plain link on the System page, so it was a 404 with no error
+             * handling at all behind it - the browser simply showed its own
+             * "not found" page.
+             *
+             * Served straight off the filesystem rather than re-serialised,
+             * so what is downloaded is byte for byte what the head would load
+             * at its next boot. Taken under the lock because the loop task
+             * writes that same file.
+             */
+            server.on("/download/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+                requests++;
+
+                const headconfig::Guard guard(headconfig::mutex());
+
+                // fsPresent, not fsMounted: the config file is worth
+                // downloading even from a board whose web pages were never
+                // uploaded - which is exactly the board someone is most
+                // likely to be rescuing a configuration from.
+                if (!fsPresent || !LittleFS.exists("/config.json")) {
+                    request->send(404, "text/plain", "no saved configuration on this board");
+
+                    return;
+                }
+
+                request->send(LittleFS, "/config.json", "application/json", true);
+            });
+
+            // DELIBERATELY NOT REGISTERED: /factoryreset, /upload/config and
+            // /toggleScaleCalibration. John's call, 2026-11-17 - wire the safe
+            // ones only. The first two overwrite the whole configuration from
+            // a browser, and the third starts a scale calibration, which is
+            // the one measurement on this machine that has already been
+            // destroyed once by software writing over it. Their buttons are
+            // still on the System and Hardware pages and still do nothing.
+
             if (fsMounted) {
                 // Upstream's frontend/ served as-is from LittleFS.
                 server.serveStatic("/", LittleFS, "/html/")
@@ -1104,12 +1334,38 @@ namespace net {
         // false = do not format on failure. Formatting would turn "you forgot
         // the second upload" into "your web UI has been erased", and the
         // difference matters when the fix is one command.
-        fsMounted = LittleFS.begin(false);
+        fsPresent = LittleFS.begin(false);
+
+        // MOUNTED IS NOT THE SAME AS "THE PAGES ARE THERE", and treating them
+        // as one thing quietly destroyed the message below.
+        //
+        // Config::begin() runs moments after this and calls LittleFS.begin
+        // with format-on-failure TRUE, because the config store has to have
+        // somewhere to keep config.json and a head with no settings at all is
+        // worse than a formatted partition. Nothing here can refuse that, and
+        // it should not try.
+        //
+        // The consequence is the trap: a board flashed without `uploadfs`
+        // fails to mount on its first boot, gets formatted by the config
+        // store, and from the second boot onward mounts perfectly while
+        // holding one JSON file and no pages. This flag used to read true in
+        // that state, so the operator got a bare "Not found" instead of the
+        // one message that tells them which command they forgot.
+        //
+        // So the flag now means what its three consumers actually ask of it -
+        // the static routes, the not-found message and the status print - and
+        // that is "are the PAGES here", not "did the chip mount".
+        fsMounted = fsPresent && LittleFS.exists("/html/index.html");
 
         if (fsMounted) {
             Serial.printf("fs: LittleFS mounted, %u of %u bytes used\n",
                           static_cast<unsigned>(LittleFS.usedBytes()),
                           static_cast<unsigned>(LittleFS.totalBytes()));
+        }
+        else if (fsPresent) {
+            Serial.println("fs: LittleFS mounted but there are no web pages on it");
+            Serial.println("    run: pio run -e esp32s3 -t uploadfs");
+            Serial.println("    (a config-only filesystem looks like this - see mountFilesystem)");
         }
         else {
             Serial.println("fs: no LittleFS image - the web UI was never uploaded");
@@ -1199,6 +1455,35 @@ namespace net {
             connected = wm.startConfigPortal(kHostname, kApPassword);
         }
 
+        // A CANCELLED OR TIMED-OUT SETUP SCREEN MUST NOT COST THE NETWORK.
+        //
+        // On a portal-requested boot - somebody pressing SET UP WIFI on the
+        // panel - autoConnect() above is skipped deliberately, so that the
+        // portal appears instead of the machine silently reconnecting. The
+        // catch was that nothing tried the saved credentials afterwards: the
+        // portal timed out, `connected` stayed false, and the head sat offline
+        // until the next power cycle with perfectly good credentials in NVS it
+        // never looked at.
+        //
+        // That made SET UP WIFI a trap even after it stopped erasing anything,
+        // and it contradicted what requestPortalOnNextBoot()'s own comment in
+        // net.h promises. Found 2026-11-17 when John pressed the button.
+        //
+        // Only on the requested path. A normal boot has already tried
+        // autoConnect() and failed, and retrying it here would just double
+        // every cold start with no network in range.
+        if (!connected && portalRequested) {
+            Serial.println("wifi: setup screen closed without a new network - rejoining the saved one");
+
+            current = State::Connecting;
+            display::showMessage("WiFi", "reconnecting...", kHostname);
+
+            // The portal leaves the radio in AP mode; autoConnect needs STA.
+            WiFi.mode(WIFI_STA);
+
+            connected = wm.autoConnect(kHostname, kApPassword);
+        }
+
         if (connected) {
             current = State::Online;
             setAddress(WiFi.localIP());
@@ -1236,6 +1521,22 @@ namespace net {
         // Deliberately NOT reconnecting aggressively: a head that keeps
         // retrying WiFi spends its time in the radio stack instead of drawing
         // the screen, and the screen is this board's actual job.
+
+        // A reboot a browser asked for, now that its reply has gone out.
+        if (pendingAction != PendingAction::None
+            && (millis() - pendingActionAtMs) >= kPendingActionDelayMs) {
+            const PendingAction action = pendingAction;
+            pendingAction = PendingAction::None;
+
+            if (action == PendingAction::ForgetNetwork) {
+                forgetNetworkAndRestart();
+            }
+            else {
+                Serial.println("web: restart requested from a browser");
+                Serial.flush();
+                ESP.restart();
+            }
+        }
 
         // Sampling for the charts and the live readout. Once a second, as
         // upstream does it. Runs whether or not a browser is attached, so the
