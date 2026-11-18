@@ -1,23 +1,57 @@
 /**
  * @file flowHandler.h
  *
- * @brief Digmesa DM60 Nano flow sensor: pulse counting, volume and flow rate
+ * @brief Flow sensing on TWO inputs: pulse counting, volume and flow rate
  *
  * NET-NEW CODE. CleverCoffee has no flow-sensor support anywhere - not in this
  * fork, not upstream master or develop. Its only shot-stop methods are by time
  * and by weight. So there is nothing to port here and nothing to cross-reference
  * against; this is written from the sensor's behaviour outwards.
  *
- * The sensor is an NPN open-collector turbine: it pulls the line to ground once
- * per fixed small volume. Pulled up to 3.3 V, never 5 V - neither chip here is
- * 5 V tolerant.
+ * TWO INPUTS, NAMED AFTER THE NETS ON THE SCHEMATIC so the code and the KiCad
+ * sheet use one vocabulary:
  *
- * Resolution is 49,162 pulses per litre (datasheet, 93N-6211-1100x), and the
- * sensor's own ceiling is 3.0 l/min, so the pulse rate tops out around 2,460 Hz.
- * That is slow enough that a plain interrupt is ample and no hardware counter is
- * needed, though pin 10 is on QuadTimer1_0 and could use input capture later if
- * it ever proves necessary. The 200 us debounce below permits 5 kHz, leaving
- * roughly 2x headroom over the sensor's maximum.
+ *   Channel::Flow1   net FLOW1, 7_RX2_OUT1A,  connector FLOW_SENS1 (Gicar)
+ *   Channel::Flow2   net FLOW2, 10_CS_MQSR,   connector DIGMESA1   (DM60 Nano)
+ *
+ * Each has its own 4k7 pull-up and filter cap on the board, its own interrupt,
+ * its own counters and its own stored calibration. They share nothing but this
+ * file.
+ *
+ * ONE OF THEM IS THE ACTIVE ONE and it is Flow2, because that is PIN_FLOW - see
+ * kActiveChannel below. Every function here that takes no Channel addresses the
+ * active one, so brew-by-volume, telemetry and the console all behave exactly as
+ * they did when this module knew about a single sensor. Pass a Channel only when
+ * you specifically mean the other input.
+ *
+ * WHY THE SECOND ONE IS NOT CONNECTED TO ANYTHING YET. The board carries both
+ * connectors deliberately, but no PCB has been fabricated and the bench is
+ * hand-wired with the Gicar on pin 10 - physically the active channel. So Flow1
+ * counts nothing today. Its pin sits at the internal pull-up with no sensor on
+ * it, which produces no edges and costs nothing; if it ever starts counting on
+ * an empty connector, something is driving that pin and that is worth knowing.
+ *
+ * THE CALIBRATIONS ARE 25x APART AND THAT IS THE REAL TRAP, not the pins. The
+ * Gicar measures 1965 pulses/litre and the DM60 is 49162. Reading one sensor
+ * through the other's constant gives a confident, plausible, completely wrong
+ * volume - which is exactly what happened on 2026-11-16 and cost a session
+ * chasing switching noise. Each channel therefore carries its OWN compiled
+ * default and its OWN EEPROM record.
+ *
+ * BOTH sensors are NPN open-collector turbines: they pull the line to ground
+ * once per fixed small volume. Pulled up to 3.3 V, never 5 V - neither chip here
+ * is 5 V tolerant. Everything below about pull-ups, direction and mounting
+ * applies to both, and the DM60 specifics are called out where they differ.
+ *
+ * The DM60's resolution is 49,162 pulses per litre (datasheet, 93N-6211-1100x)
+ * and its ceiling is 3.0 l/min, so its pulse rate tops out around 2,460 Hz. The
+ * Gicar is far coarser at 1,965 and was measured at 28.0 Hz with the pump at
+ * 80%. Both are slow enough that a plain interrupt is ample and NEITHER channel
+ * uses hardware counting today. Flow2 is on QuadTimer1_0 and could take input
+ * capture later if per-pulse timing ever matters for a control loop; Flow1 is on
+ * FlexPWM1_3_B and has no capture at all, which is why the high-resolution
+ * sensor got Flow2. The 200 us debounce below permits 5 kHz, leaving roughly 2x
+ * headroom over the faster sensor's maximum.
  *
  * THE SIGNAL PIN NEEDS A REAL PULL-UP. The datasheet's own reference circuit
  * uses 4k7 to the supply plus 10 nF to ground, and the sensor does not work
@@ -63,19 +97,58 @@
 namespace flow {
 
     /**
-     * Pulses per litre, from the sensor's own datasheet.
+     * The two inputs, named after the nets on the schematic.
+     *
+     * Deliberately NOT named "primary"/"secondary" or after the sensors. The
+     * net name is the one thing that is true in the firmware, the KiCad sheet
+     * and the conversation at the bench all at once, and which sensor hangs off
+     * which connector has already changed once.
+     */
+    enum class Channel : uint8_t {
+        Flow1 = 0, ///< net FLOW1, 7_RX2_OUT1A,  FLOW_SENS1 (Gicar)
+        Flow2 = 1, ///< net FLOW2, 10_CS_MQSR,   DIGMESA1   (DM60 Nano)
+    };
+
+    constexpr uint8_t kChannelCount = 2;
+
+    /**
+     * The channel every no-argument function below addresses.
+     *
+     * Flow2, because that is PIN_FLOW. On the finished board that is the
+     * Digmesa, and on today's hand-wired bench it is where the Gicar is
+     * physically plugged in - so it is the right answer in both worlds and
+     * nothing that stops a shot has to know which board it is running on.
+     */
+    constexpr Channel kActiveChannel = Channel::Flow2;
+
+    /**
+     * Pulses per litre for Flow2, from the sensor's own datasheet.
      *
      * 49,162 is the stated resolution of the Digmesa Nano DM60, part number
-     * 93N-6211-1100x, which is the sensor fitted to this machine. The previous
-     * default of 42,000 was the middle of the range across DM60 variants - a
-     * guess, and 15% low for this one.
+     * 93N-6211-1100x. The previous default of 42,000 was the middle of the
+     * range across DM60 variants - a guess, and 15% low for this one.
      *
      * Quoted accuracy is +/-2.0% across the linear range of 0.05-3.0 l/min, so
      * the factory figure is good enough to use directly. A gravimetric
      * calibration with 'flowcal' against a weighed volume would still beat it
      * and should be done once the machine can dispense onto a working scale.
+     *
+     * CAUTION ON TODAY'S BENCH. The Gicar, not a DM60, is what is physically on
+     * Flow2 right now, and its real figure is 1,965. The stored record carries
+     * that, so a reboot is safe - but a full EEPROM erase falls back to this
+     * constant and silently over-reads by 25x. Recover with 'flowk 1965'.
      */
     constexpr uint32_t kDefaultPulsesPerLitre = 49162;
+
+    /**
+     * Pulses per litre for Flow1, MEASURED rather than from a datasheet.
+     *
+     * The Gicar 1/4" three-wire open collector, 1.15 mm jet, nominal 2,000.
+     * 1,965 came from a 583 ml catch, the largest of three runs spanning 1,893
+     * to 1,965 - the biggest catch is the one to trust, because the few
+     * millilitres lost to splashing and hose are a smaller share of it.
+     */
+    constexpr uint32_t kGicarPulsesPerLitre = 1965;
 
     /**
      * How long without a pulse before flow is reported as zero.
@@ -105,17 +178,46 @@ namespace flow {
     constexpr uint32_t kMinPulseIntervalUs = 200;
 
     /**
-     * @brief Configure the input pin and attach the pulse interrupt.
+     * @brief Configure BOTH input pins and attach both pulse interrupts.
      */
     void init();
 
     /**
-     * @brief Update the derived rate. Call every pass of the main loop.
+     * @brief Update the derived rates on both channels. Call every main-loop pass.
      *
-     * Counting happens in the interrupt; this only turns counts into a rate and
+     * Counting happens in the interrupts; this only turns counts into a rate and
      * decides when flow has stopped.
      */
     void loop();
+
+    /** @brief The net name of a channel, for console output and diagnostics. */
+    const char* channelName(Channel channel);
+
+    /** @brief The Teensy pin a channel counts on. */
+    uint8_t channelPin(Channel channel);
+
+    //
+    // Per-channel accessors. Use these only when you specifically mean the
+    // other input; everything in the control path wants the no-argument
+    // versions below.
+    //
+
+    void reset(Channel channel);
+    double totalMl(Channel channel);
+    double rateMlPerSec(Channel channel);
+    uint32_t pulseCount(Channel channel);
+    uint32_t rejectedCount(Channel channel);
+    bool isFlowing(Channel channel);
+    uint32_t pulsesPerLitre(Channel channel);
+    void setPulsesPerLitre(Channel channel, uint32_t pulses);
+    bool calibrateTo(Channel channel, double actualMl);
+    void printStatus(Channel channel);
+
+    //
+    // The active channel (kActiveChannel). These are what brew-by-volume,
+    // telemetry and the console use, and they behave exactly as they did when
+    // this module knew about one sensor.
+    //
 
     /**
      * @brief Zero the volume accumulator. Call at the start of a shot.
@@ -158,7 +260,12 @@ namespace flow {
     bool calibrateTo(double actualMl);
 
     /**
-     * @brief Print pulses, volume, rate and calibration for the console.
+     * @brief Print pulses, volume, rate and calibration for BOTH channels.
+     *
+     * Both, deliberately. A console that showed only the active input would let
+     * a sensor plugged into the wrong connector look like a dead sensor, which
+     * is the single most likely mistake once two identical-looking three-pin
+     * JST headers sit next to each other on the board.
      */
     void printStatus();
 
@@ -181,7 +288,16 @@ namespace flow {
      */
     void startWatch(uint32_t durationMs);
 
-    /** @brief Service an active watch. Call every main-loop pass. */
+    /** @brief As above, on a named channel. */
+    void startWatch(Channel channel, uint32_t durationMs);
+
+    /**
+     * @brief Service an active watch. Call every main-loop pass.
+     *
+     * ONE watch runs at a time, on whichever channel started it. Two at once
+     * would need two sets of state to answer a question nobody asks - the
+     * point of a watch is to chase one suspect wire.
+     */
     void serviceWatch();
 
     /**
@@ -203,5 +319,8 @@ namespace flow {
      * @param windowMs how long to sample for; kept short, it blocks
      */
     void sampleFast(uint32_t windowMs);
+
+    /** @brief As above, on a named channel. */
+    void sampleFast(Channel channel, uint32_t windowMs);
 
 } // namespace flow

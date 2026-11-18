@@ -40,8 +40,50 @@
 #define PIN_WATERTANKSENSOR 26 // single boiler-level probe (AC-excited, opto-isolated),
                                // NOT an external reservoir float switch.
                                // See documents/boiler-level-probe-sensing.md
-#define PIN_FLOW            10 // Digmesa DM60 Nano pulse. QuadTimer1_0: supports hardware
-                               // input capture, not just attachInterrupt
+// --- Flow: TWO sensors on the board, ONE counter in firmware so far -----
+//
+// Schematic 2026-11-17, read from a fresh kicad-cli netlist export:
+//
+//   FLOW1  FLOW_SENS1 (Gicar, 1/4" 3-wire open collector) -> 7_RX2_OUT1A
+//          own pull-up R10 4k7, own filter C14
+//   FLOW2  DIGMESA1   (Digmesa DM60 Nano, high resolution) -> 10_CS_MQSR
+//          own pull-up R21 4k7, own filter C15
+//
+// Both connectors stay on the board deliberately - John, 2026-11-17. They
+// were briefly on one shared net while the Digmesa was being added; they are
+// not any more, and each sensor now has its own front end.
+//
+// WHY THE DIGMESA GOT 10_CS_MQSR. It is one of only eight Teensy 4.1 pins
+// with QuadTimer hardware input capture - 10, 11, 12, 13, 14, 15, 18, 19,
+// verified against the core's own pwm.c and FreqMeasureMulti tables - and
+// seven of those eight are already committed on this board (SPI 11/12/13,
+// boiler RTD CS 15, I2C 18/19, and 14 held for the heater monitor wire). The
+// 25x-higher-resolution sensor is the one that benefits from it.
+// 7_RX2_OUT1A is FlexPWM1_3_B and has no capture at all.
+//
+// NOTHING USES THE CAPTURE HARDWARE YET. flowHandler counts PIN_FLOW with
+// attachInterrupt, which is ample for either sensor: the DM60 is about 98 Hz
+// at espresso flow and 740 Hz at a 15 ml/s flush, and the Gicar measured
+// 28.0 Hz at 80% pump on the analyser. Capture would buy jitter-free
+// per-pulse timing, which only matters if flow ever drives a control loop
+// instead of totalising.
+#define PIN_FLOW_GICAR    7 // FLOW1
+#define PIN_FLOW_DIGMESA 10 // FLOW2, the capture-capable one
+
+// The single input the firmware actually counts today.
+//
+// IT STAYS ON 10 AND THAT IS DELIBERATE. No PCB has been fabricated, so the
+// bench is hand-wired and the GICAR is physically on 10 right now - pointing
+// this at 7 would silently kill flow on the only hardware that exists. On the
+// finished board 10 is the Digmesa, so this define is right in both worlds
+// and only the calibration changes with the sensor.
+//
+// THE CALIBRATION IS THE TRAP, NOT THE PIN. Gicar 1965 pulses/litre against
+// the DM60's 49162, 25x apart, and kDefaultPulsesPerLitre in flowHandler.h is
+// still the DM60's - so a full EEPROM erase on today's bench silently
+// restores a 25x error. That exact bug already cost a session; see
+// NOTES-HISTORY.md, the flow entry.
+#define PIN_FLOW            10
 #define PIN_ENC_INT         25 // Duppa encoder INT, open-drain, R13 pull-up on board
 
 // --- Outputs ------------------------------------------------------------
@@ -135,9 +177,20 @@
  */
 #define LINK_SERIAL Serial1
 
-// Spare: D7, D8 (= Serial2 if a second UART is ever wanted), D14, D17,
-// D20-D23, D27-D37, D41 and the analog-only pins. D4 went to the cold inlet
-// valve and D6 to the pump's second bridge input.
+// Spare, re-checked against the schematic 2026-11-17: D17, D20-D23, D27-D37,
+// D41 and the analog-only pins.
+//
+// Three corrections from that check, all of which this list previously got
+// wrong:
+//   D7  is NOT spare - it is FLOW1, the Gicar, as of 2026-11-17.
+//   D8  is NOT spare - 8_TX2_IN1 carries net LED into the 74AHCT1G125 (U1)
+//       and on to the LED1 connector. Serial2 is therefore NOT free either,
+//       since D7/D8 are its pair.
+//   D14 is free on the board but SPOKEN FOR in firmware as kPinHtrRlMonitor,
+//       the wire fitted by hand for ulntest and the heater duty measurement.
+//       Taking it costs that test. See BENCH.md.
+//
+// D4 went to the cold inlet valve and D6 to the pump's second bridge input.
 
 #else
 

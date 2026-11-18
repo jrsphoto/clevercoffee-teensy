@@ -48,7 +48,15 @@ namespace {
      */
     constexpr uint32_t kAutoOffWarningMs = 3000;
 
-    constexpr size_t kLineMax = 48;
+    // 160, to match kConsoleLineMax on the display head.
+    //
+    // Was 48, which is shorter than some of the commands this console offers:
+    // "config set hardware.encoder.color_effects.enabled 1" is 51 characters
+    // and came back "line too long, ignored". Rejecting rather than acting on
+    // half a command is the right behaviour and stays; the limit was simply
+    // too small for the key names the config table actually uses. The head hit
+    // the same wall at 32 and went to 160, so these now agree.
+    constexpr size_t kLineMax = 160;
 
     char line[kLineMax];
     size_t lineLen = 0;
@@ -69,10 +77,12 @@ namespace {
         Serial.println("  temp              read both RTD temperature sensors");
         Serial.println("  rtd               raw RTD resistance, for diagnosing wiring");
         Serial.println("  failsensor        toggle a simulated boiler sensor failure (safety test)");
-        Serial.println("  flow              flow sensor: volume, rate, pulses, calibration");
-        Serial.println("  flowreset         zero the flow volume accumulator");
-        Serial.println("  flowcal <ml>      calibrate from a measured volume");
-        Serial.println("  flowk [n]         show or set calibration directly, pulses/litre");
+        Serial.println("  flow              BOTH flow inputs: volume, rate, pulses, calibration");
+        Serial.println("  flowreset [ch]    zero the flow volume accumulator");
+        Serial.println("  flowcal <ml> [ch] calibrate from a measured volume");
+        Serial.println("  flowk [n] [ch]    show or set calibration directly, pulses/litre");
+        Serial.println("    [ch] is flow1 (Gicar, pin 7) or flow2 (Digmesa, pin 10).");
+        Serial.println("    Omit it and you get flow2, which is the active input.");
         Serial.println("  heater            PID state, duty, and which gate is blocking");
         Serial.println("  heater on|off     software master enable (default off, never saved)");
         Serial.println("  setpoint <C>      target boiler temperature");
@@ -118,8 +128,8 @@ namespace {
         Serial.println("  scalediag         probe the HX711 data line directly, bypassing the lib");
         Serial.println("  scalefactor <n>   set the calibration factor directly (1 = raw counts)");
         Serial.println("  scaledual <0|1>   read one load cell or two (two share one plate here)");
-        Serial.println("  flowwatch         watch the flow signal line directly (wiring test)");
-        Serial.println("  flowfast          tight-loop sample the flow pin (catches fast edges)");
+        Serial.println("  flowwatch [ch]    watch the flow signal line directly (wiring test)");
+        Serial.println("  flowfast [ch]     tight-loop sample the flow pin (catches fast edges)");
         Serial.println("  i2c               scan the I2C bus and name what is found");
         Serial.println("  enc               encoder counter, rotation and LED state");
         Serial.println("  link              display-head link state and frame counters");
@@ -228,6 +238,28 @@ namespace {
             return;
         }
 
+        // NOT WHILE A SEQUENCE OWNS THE MACHINE.
+        //
+        // The Diags page's hold has refused this since it was written - see
+        // holdAllowed() in commsHandler.cpp, whose comment spells out that a
+        // hold expiring mid-shot would shut the valve underneath it. This
+        // console does the same job through a different door and had no check
+        // at all.
+        //
+        // The group valve is the forgiving case: a shot re-asserts it every
+        // pass, so it would be taken back within a few milliseconds. FILL is
+        // the one that matters. Nothing in a shot touches that channel, so a
+        // console hold keeps the boiler fill open for its full ten seconds
+        // mid-extraction - and on this machine the fill is fed from the pump
+        // output, so that water is both taken from the puck and counted by the
+        // flow meter as delivered volume. See brief 9.17.
+        if (shot::isBusy()) {
+            Serial.println("REFUSED: a shot, flush or backflush is running - it owns the outputs.");
+            Serial.println("         'shot stop', 'flush stop' or 'backflush stop' first.");
+
+            return;
+        }
+
         // Re-issuing the same channel just restarts the auto-off timer, so a
         // measurement that needs longer does not require turning it off and on.
         if (haveActive && activeChannel == channel) {
@@ -247,6 +279,25 @@ namespace {
             Serial.print("REFUSED: ");
             Serial.print(outputs::name(activeChannel));
             Serial.println(" is still on - one channel at a time. 'off' first.");
+
+            return;
+        }
+
+        // 'on heater' CANNOT WORK, so it says so instead of appearing to.
+        //
+        // outputs::set() would raise the pin, and the heater ISR drives it
+        // back LOW on its very next 10 ms tick because no permit is granted -
+        // see onTick() in heaterHandler.cpp. So the command produces at most
+        // ten milliseconds of output and then reports success, which is the
+        // console lying about the one channel where that matters most.
+        //
+        // docs/teensy-pinout-review.md still carries a capture showing
+        // 'on heater' holding pin 2 high for 2.002 s. That was taken before
+        // the heater ISR existed and cannot be reproduced now.
+        if (channel == outputs::Channel::Heater) {
+            Serial.println("REFUSED: the heater is not driven through this command.");
+            Serial.println("         Its ISR owns the pin and would pull it back low within 10 ms.");
+            Serial.println("         'ulntest' exercises the output stage; 'heater on' runs the PID.");
 
             return;
         }
@@ -279,6 +330,22 @@ namespace {
 
     void commandOff(const char* token) {
         if (token == nullptr || *token == '\0') {
+            // Bare 'off' during a sequence is refused rather than obeyed,
+            // because obeying it would be a lie. allOff() drops the four
+            // relay channels but NOT the pump, which is a separate module -
+            // so it would leave the pump running against a group valve the
+            // shot re-opens a few milliseconds later, and report "all
+            // channels off" about a machine still extracting. The command
+            // that actually stops things is named here instead.
+            if (shot::isBusy()) {
+                Serial.println("REFUSED: a shot, flush or backflush is running.");
+                Serial.println("         'off' would not stop it - it does not touch the pump, and the");
+                Serial.println("         sequence re-opens its valve on the next pass. Use 'shot stop',");
+                Serial.println("         'flush stop' or 'backflush stop'.");
+
+                return;
+            }
+
             outputs::allOff();
             haveActive = false;
             warned = false;
@@ -307,6 +374,45 @@ namespace {
 
         Serial.print("off: ");
         Serial.println(outputs::name(channel));
+    }
+
+    /**
+     * @brief Parse an optional flow-channel token, defaulting to the active one.
+     *
+     * The token is the NET NAME - "flow1" or "flow2" - deliberately not a bare
+     * 1 or 2. A bare number beside 'flowk <pulses per litre>' is ambiguous, and
+     * guessing wrong there would set a calibration of 1 and silently report
+     * thousands of millilitres. The net name also matches what is printed on
+     * the schematic, so there is one vocabulary at the bench.
+     *
+     * @return false if the token is present but not a channel name.
+     */
+    bool parseFlowChannel(const char* token, flow::Channel& out) {
+        if (token == nullptr) {
+            out = flow::kActiveChannel;
+
+            return true;
+        }
+
+        if (strcasecmp(token, "flow1") == 0) {
+            out = flow::Channel::Flow1;
+
+            return true;
+        }
+
+        if (strcasecmp(token, "flow2") == 0) {
+            out = flow::Channel::Flow2;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    void printUnknownFlowChannel(const char* token) {
+        Serial.print("unknown flow channel '");
+        Serial.print(token);
+        Serial.println("' - use flow1 (Gicar) or flow2 (Digmesa), or omit it for the active one");
     }
 
     void handleLine(char* text) {
@@ -867,16 +973,30 @@ namespace {
             flow::printStatus();
         }
         else if (strcasecmp(command, "flowreset") == 0) {
-            flow::reset();
-            Serial.println("flow volume zeroed");
+            if (flow::Channel channel; !parseFlowChannel(argument, channel)) {
+                printUnknownFlowChannel(argument);
+            }
+            else {
+                flow::reset(channel);
+                Serial.print("flow volume zeroed on ");
+                Serial.println(flow::channelName(channel));
+            }
         }
         else if (strcasecmp(command, "flowcal") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+            flow::Channel channel = flow::kActiveChannel;
+
             if (argument == nullptr) {
-                Serial.println("usage: flowcal <millilitres actually dispensed>");
+                Serial.println("usage: flowcal <millilitres actually dispensed> [flow1|flow2]");
             }
-            else if (const double ml = atof(argument); flow::calibrateTo(ml)) {
-                Serial.print("calibrated: ");
-                Serial.print(flow::pulsesPerLitre());
+            else if (!parseFlowChannel(a2, channel)) {
+                printUnknownFlowChannel(a2);
+            }
+            else if (const double ml = atof(argument); flow::calibrateTo(channel, ml)) {
+                Serial.print("calibrated ");
+                Serial.print(flow::channelName(channel));
+                Serial.print(": ");
+                Serial.print(flow::pulsesPerLitre(channel));
                 Serial.println(" pulses/litre");
             }
             else {
@@ -885,16 +1005,29 @@ namespace {
             }
         }
         else if (strcasecmp(command, "flowk") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+            flow::Channel channel = flow::kActiveChannel;
+
             if (argument == nullptr) {
-                Serial.print("calibration is ");
-                Serial.print(flow::pulsesPerLitre());
+                Serial.print(flow::channelName(flow::Channel::Flow1));
+                Serial.print(" is ");
+                Serial.print(flow::pulsesPerLitre(flow::Channel::Flow1));
+                Serial.print(" pulses/litre, ");
+                Serial.print(flow::channelName(flow::Channel::Flow2));
+                Serial.print(" is ");
+                Serial.print(flow::pulsesPerLitre(flow::Channel::Flow2));
                 Serial.println(" pulses/litre");
-                Serial.println("usage: flowk <pulses per litre>   (DM60 Nano is ~36000-49000)");
+                Serial.println("usage: flowk <pulses per litre> [flow1|flow2]");
+                Serial.println("       Gicar ~1965 measured, DM60 Nano ~36000-49000");
+            }
+            else if (!parseFlowChannel(a2, channel)) {
+                printUnknownFlowChannel(a2);
             }
             else {
-                flow::setPulsesPerLitre(static_cast<uint32_t>(atol(argument)));
-                Serial.print("calibration set to ");
-                Serial.print(flow::pulsesPerLitre());
+                flow::setPulsesPerLitre(channel, static_cast<uint32_t>(atol(argument)));
+                Serial.print(flow::channelName(channel));
+                Serial.print(" calibration set to ");
+                Serial.print(flow::pulsesPerLitre(channel));
                 Serial.println(" pulses/litre");
             }
         }
@@ -955,10 +1088,20 @@ namespace {
             }
         }
         else if (strcasecmp(command, "flowfast") == 0) {
-            flow::sampleFast(300);
+            if (flow::Channel channel; !parseFlowChannel(argument, channel)) {
+                printUnknownFlowChannel(argument);
+            }
+            else {
+                flow::sampleFast(channel, 300);
+            }
         }
         else if (strcasecmp(command, "flowwatch") == 0) {
-            flow::startWatch(20000);
+            if (flow::Channel channel; !parseFlowChannel(argument, channel)) {
+                printUnknownFlowChannel(argument);
+            }
+            else {
+                flow::startWatch(channel, 20000);
+            }
         }
         else if (strcasecmp(command, "i2c") == 0) {
             i2c::checkLines();
@@ -1012,6 +1155,27 @@ namespace {
      */
     void serviceAutoOff() {
         if (!haveActive) {
+            return;
+        }
+
+        // A SEQUENCE STARTING TAKES THE MACHINE BACK, straight away rather
+        // than whenever the console's timer happens to run out.
+        //
+        // commandOn() refuses to start a hold while something is running, but
+        // a hold can also be in progress when a shot begins - the brew switch,
+        // the panel and `shot start` do not consult this console. Leaving it
+        // alone would let the timer expire at an arbitrary moment during the
+        // shot, which is exactly the race the Diags hold was written to avoid.
+        //
+        // Releasing is the right answer for every channel. FILL and the cold
+        // inlet MUST close, since the fill is fed from the pump output and
+        // would otherwise steal water from the shot and have it counted as
+        // delivered volume. The group valve closing is harmless: the shot
+        // re-asserts it on its very next pass, a couple of milliseconds later,
+        // which no solenoid responds to.
+        if (shot::isBusy()) {
+            releaseActive("a sequence started");
+
             return;
         }
 

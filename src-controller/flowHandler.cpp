@@ -1,13 +1,21 @@
 /**
  * @file flowHandler.cpp
  *
- * @brief Digmesa DM60 Nano flow sensor: pulse counting, volume and flow rate
+ * @brief Flow sensing on two inputs: pulse counting, volume and flow rate
+ *
+ * The two channels are identical in everything but their pin, their compiled
+ * default calibration and their EEPROM address, so all the behaviour lives in
+ * one Sensor struct and there are two of them. The only thing that cannot be
+ * shared is the interrupt itself - attachInterrupt wants a plain function, so
+ * there is one trivial shim per channel and both call the same handler.
  */
 
 #include "flowHandler.h"
 
 #include <Arduino.h>
 #include <EEPROM.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "hardware/pinmapping.h"
 
@@ -16,70 +24,124 @@ namespace flow {
     namespace {
 
         /**
-         * Written by the interrupt, read by the main loop. Everything the ISR
-         * touches is volatile, and everything else is derived outside it - the
-         * interrupt does the least work that is correct and nothing more.
+         * One input's complete state.
+         *
+         * Everything the ISR touches is volatile, and everything else is
+         * derived outside it - the interrupt does the least work that is
+         * correct and nothing more.
          */
-        volatile uint32_t pulses = 0;
-        volatile uint32_t rejected = 0;
-        volatile uint32_t lastPulseUs = 0;
-        volatile uint32_t lastPulseMs = 0;
+        struct Sensor {
+                // --- Fixed at construction, never written afterwards --------
+                const char* name;
+                uint8_t pin;
+                uint32_t compiledPulsesPerLitre;
+                int eepromAddress;
 
-        uint32_t calibrationPulsesPerLitre = kDefaultPulsesPerLitre;
+                // --- Written by the interrupt -------------------------------
+                volatile uint32_t pulses;
+                volatile uint32_t rejected;
+                volatile uint32_t lastPulseUs;
+                volatile uint32_t lastPulseMs;
 
-        // Rate derivation, main-loop side only.
-        uint32_t lastRateCalcMs = 0;
-        uint32_t lastRatePulses = 0;
-        double currentRateMlPerSec = 0.0;
+                // --- Main-loop side only ------------------------------------
+                uint32_t calibrationPulsesPerLitre;
+                uint32_t lastRateCalcMs;
+                uint32_t lastRatePulses;
+                double currentRateMlPerSec;
+        };
 
         /**
-         * @brief Pulse interrupt.
-         *
-         * Falling edge: the sensor is open-collector, so it pulls the line down
-         * once per unit volume.
-         *
-         * Deliberately tiny. No arithmetic, no floating point, no logging - just
-         * a reject test and two counters. Volume and rate are derived in the main
-         * loop where taking time is harmless.
+         * The EEPROM record for Flow1 sits at 528, in the gap between the
+         * original flow record at 512-527 and the shot profiles at 576. Checked
+         * against the map in configStore.cpp before it was placed there - that
+         * map exists because two records were once put inside the config
+         * store's 128-337 block and every config save silently erased them.
          */
-        void onPulse() {
+        constexpr int kEepromAddressFlow2 = 512;
+        constexpr int kEepromAddressFlow1 = 528;
+
+        Sensor sensors[kChannelCount] = {
+            // Flow1: net FLOW1, FLOW_SENS1, the Gicar
+            {"FLOW1", PIN_FLOW_GICAR, kGicarPulsesPerLitre, kEepromAddressFlow1, 0, 0, 0, 0, kGicarPulsesPerLitre, 0, 0, 0.0},
+            // Flow2: net FLOW2, DIGMESA1, the DM60 Nano - and PIN_FLOW, the
+            // active channel
+            {"FLOW2", PIN_FLOW_DIGMESA, kDefaultPulsesPerLitre, kEepromAddressFlow2, 0, 0, 0, 0, kDefaultPulsesPerLitre, 0, 0, 0.0},
+        };
+
+        Sensor& at(const Channel channel) {
+            return sensors[static_cast<uint8_t>(channel)];
+        }
+
+        /**
+         * @brief The shared pulse handler.
+         *
+         * Falling edge: both sensors are open-collector, so they pull the line
+         * down once per unit volume.
+         *
+         * Deliberately tiny. No arithmetic, no floating point, no logging -
+         * just a reject test and two counters. Volume and rate are derived in
+         * the main loop where taking time is harmless. Marked always_inline so
+         * splitting one ISR into two shims costs nothing at run time.
+         */
+        inline __attribute__((always_inline)) void onPulse(Sensor& s) {
             const uint32_t now = micros();
 
             // Reject implausibly close edges. Genuine pulses cannot arrive this
             // fast at any flow this pump can produce, so anything closer is
             // noise or bounce.
-            if ((now - lastPulseUs) < kMinPulseIntervalUs) {
-                rejected++;
+            if ((now - s.lastPulseUs) < kMinPulseIntervalUs) {
+                s.rejected++;
 
                 return;
             }
 
-            lastPulseUs = now;
-            lastPulseMs = millis();
-            pulses++;
+            s.lastPulseUs = now;
+            s.lastPulseMs = millis();
+            s.pulses++;
+        }
+
+        void onPulseFlow1() {
+            onPulse(sensors[static_cast<uint8_t>(Channel::Flow1)]);
+        }
+
+        void onPulseFlow2() {
+            onPulse(sensors[static_cast<uint8_t>(Channel::Flow2)]);
         }
 
         /**
-         * @brief Read the pulse counter without tearing.
+         * @brief Read a pulse counter without tearing.
          *
          * A 32-bit read is a single instruction on this core, so it cannot tear
          * on its own - but reading several ISR-written values that must agree
          * with each other does need the interrupt held off briefly.
          */
-        uint32_t snapshotPulses() {
+        uint32_t snapshotPulses(const Sensor& s) {
             noInterrupts();
-            const uint32_t value = pulses;
+            const uint32_t value = s.pulses;
             interrupts();
 
             return value;
         }
 
-        double mlFromPulses(const uint32_t count) {
-            if (calibrationPulsesPerLitre == 0) {
+        /**
+         * @brief digitalReadFast on a pin chosen at run time.
+         *
+         * digitalReadFast only collapses to a single register read when the
+         * pin is a compile-time constant, and a Sensor's pin is a field. This
+         * branch gives the compiler two constant calls for the cost of one
+         * compare, which keeps sampleFast() sampling at megahertz - the whole
+         * reason that diagnostic exists is that it cannot miss a short edge.
+         */
+        inline int fastRead(const uint8_t pin) {
+            return (pin == PIN_FLOW_DIGMESA) ? digitalReadFast(PIN_FLOW_DIGMESA) : digitalReadFast(PIN_FLOW_GICAR);
+        }
+
+        double mlFromPulses(const Sensor& s, const uint32_t count) {
+            if (s.calibrationPulsesPerLitre == 0) {
                 return 0.0;
             }
 
-            return (static_cast<double>(count) * 1000.0) / static_cast<double>(calibrationPulsesPerLitre);
+            return (static_cast<double>(count) * 1000.0) / static_cast<double>(s.calibrationPulsesPerLitre);
         }
 
     } // namespace
@@ -96,15 +158,19 @@ namespace flow {
          * confidence. Exactly the failure the scale's own EEPROM record exists
          * to prevent, so this follows that file's pattern deliberately.
          *
-         * Address 512. NOT 192, which is inside the config store's 128-337
-         * record - that was the first attempt and every config save wiped
-         * it, which looked exactly like the value never being saved at all.
-         * Guarded by magic, version and checksum, and loaded ONLY if all three
-         * agree plus the value is sane. Unprogrammed EEPROM reads as 0xFF
-         * everywhere, which would otherwise look like a huge but plausible
-         * calibration.
+         * NOT inside 128-337, which is the config store - that was the first
+         * attempt and every config save wiped it, which looked exactly like the
+         * value never being saved at all. Guarded by magic, version and
+         * checksum, and loaded ONLY if all three agree plus the value is sane.
+         * Unprogrammed EEPROM reads as 0xFF everywhere, which would otherwise
+         * look like a huge but plausible calibration.
+         *
+         * Both channels share the magic. They cannot be confused for each other
+         * because each reads only its own address, and a record that somehow
+         * landed at the wrong one would still have to pass the range check - at
+         * which point it is a wrong calibration rather than a corrupt one, and
+         * no magic number could tell the difference.
          */
-        constexpr int kEepromAddress = 512;
         constexpr uint32_t kStoreMagic = 0xF10C0001; // "FLOC 0001"
         constexpr uint16_t kStoreVersion = 1;
 
@@ -120,6 +186,11 @@ namespace flow {
                 uint32_t checksum;
         };
 
+        static_assert(kEepromAddressFlow1 + static_cast<int>(sizeof(StoredCalibration)) <= 576,
+                      "the Flow1 calibration record overruns into the shot profiles at 576");
+        static_assert(kEepromAddressFlow2 + static_cast<int>(sizeof(StoredCalibration)) <= kEepromAddressFlow1,
+                      "the Flow2 calibration record overruns into the Flow1 record");
+
         uint32_t storeChecksum(const StoredCalibration& rec) {
             uint32_t sum = 0;
             const auto* bytes = reinterpret_cast<const uint8_t*>(&rec);
@@ -131,150 +202,192 @@ namespace flow {
             return sum;
         }
 
-        void saveCalibration() {
+        void saveCalibration(const Sensor& s) {
             StoredCalibration rec{};
 
             rec.magic = kStoreMagic;
             rec.version = kStoreVersion;
-            rec.pulsesPerLitre = calibrationPulsesPerLitre;
+            rec.pulsesPerLitre = s.calibrationPulsesPerLitre;
             rec.checksum = storeChecksum(rec);
 
-            EEPROM.put(kEepromAddress, rec);
+            EEPROM.put(s.eepromAddress, rec);
 
-            Serial.print("flow: calibration saved (");
-            Serial.print(calibrationPulsesPerLitre);
+            Serial.print("flow ");
+            Serial.print(s.name);
+            Serial.print(": calibration saved (");
+            Serial.print(s.calibrationPulsesPerLitre);
             Serial.println(" pulses/litre) - it will survive a reboot and a reflash");
         }
 
         /** @return true if a believable record was found and applied. */
-        bool loadCalibration() {
+        bool loadCalibration(Sensor& s) {
             StoredCalibration rec{};
-            EEPROM.get(kEepromAddress, rec);
+            EEPROM.get(s.eepromAddress, rec);
 
             if (rec.magic != kStoreMagic || rec.version != kStoreVersion) {
                 return false;
             }
 
             if (rec.checksum != storeChecksum(rec)) {
-                Serial.println("flow: stored calibration failed its checksum - ignoring it");
+                Serial.print("flow ");
+                Serial.print(s.name);
+                Serial.println(": stored calibration failed its checksum - ignoring it");
 
                 return false;
             }
 
             if (rec.pulsesPerLitre < kMinPulsesPerLitre || rec.pulsesPerLitre > kMaxPulsesPerLitre) {
-                Serial.println("flow: stored calibration is out of range - ignoring it");
+                Serial.print("flow ");
+                Serial.print(s.name);
+                Serial.println(": stored calibration is out of range - ignoring it");
 
                 return false;
             }
 
-            calibrationPulsesPerLitre = rec.pulsesPerLitre;
+            s.calibrationPulsesPerLitre = rec.pulsesPerLitre;
 
             return true;
+        }
+
+        void initSensor(Sensor& s, void (*isr)()) {
+            // INPUT_PULLUP covers both cases: the real board carries an external
+            // pull-up to 3.3 V for the open-collector sensor, and on a bare Teensy
+            // the internal one is enough for bench work or for a signal generator
+            // driving the pin actively.
+            pinMode(s.pin, INPUT_PULLUP);
+
+            attachInterrupt(digitalPinToInterrupt(s.pin), isr, FALLING);
+
+            if (loadCalibration(s)) {
+                Serial.print("flow ");
+                Serial.print(s.name);
+                Serial.print(": calibration restored, ");
+                Serial.print(s.calibrationPulsesPerLitre);
+                Serial.println(" pulses/litre");
+            }
+            else {
+                Serial.print("flow ");
+                Serial.print(s.name);
+                Serial.print(": no stored calibration, using the compiled ");
+                Serial.print(s.calibrationPulsesPerLitre);
+                Serial.println(" pulses/litre - run 'flowcal' against a measured volume");
+            }
+        }
+
+        void resetSensor(Sensor& s) {
+            noInterrupts();
+            s.pulses = 0;
+            s.rejected = 0;
+            interrupts();
+
+            s.lastRatePulses = 0;
+            s.lastRateCalcMs = millis();
+            s.currentRateMlPerSec = 0.0;
+        }
+
+        void loopSensor(Sensor& s) {
+            const uint32_t now = millis();
+
+            // Flow has stopped if nothing has arrived for a while. Checked
+            // before the window below so the rate drops promptly at the end of
+            // a shot rather than decaying over a whole window.
+            if ((now - s.lastPulseMs) > kFlowTimeoutMs) {
+                s.currentRateMlPerSec = 0.0;
+                s.lastRatePulses = snapshotPulses(s);
+                s.lastRateCalcMs = now;
+
+                return;
+            }
+
+            if ((now - s.lastRateCalcMs) < kRateWindowMs) {
+                return;
+            }
+
+            const uint32_t nowPulses = snapshotPulses(s);
+            const uint32_t deltaPulses = nowPulses - s.lastRatePulses;
+            const uint32_t deltaMs = now - s.lastRateCalcMs;
+
+            if (deltaMs > 0) {
+                s.currentRateMlPerSec = (mlFromPulses(s, deltaPulses) * 1000.0) / static_cast<double>(deltaMs);
+            }
+
+            s.lastRatePulses = nowPulses;
+            s.lastRateCalcMs = now;
         }
 
     } // namespace
 
     void init() {
-        // INPUT_PULLUP covers both cases: the real board carries an external
-        // pull-up to 3.3 V for the open-collector sensor, and on a bare Teensy
-        // the internal one is enough for bench work or for a signal generator
-        // driving the pin actively.
-        pinMode(PIN_FLOW, INPUT_PULLUP);
+        initSensor(at(Channel::Flow1), onPulseFlow1);
+        initSensor(at(Channel::Flow2), onPulseFlow2);
 
-        attachInterrupt(digitalPinToInterrupt(PIN_FLOW), onPulse, FALLING);
-
-        if (loadCalibration()) {
-            Serial.print("flow: calibration restored, ");
-            Serial.print(calibrationPulsesPerLitre);
-            Serial.println(" pulses/litre");
-        }
-        else {
-            Serial.print("flow: no stored calibration, using the compiled ");
-            Serial.print(calibrationPulsesPerLitre);
-            Serial.println(" pulses/litre - run 'flowcal' against a measured volume");
-        }
-
-        reset();
-    }
-
-    void reset() {
-        noInterrupts();
-        pulses = 0;
-        rejected = 0;
-        interrupts();
-
-        lastRatePulses = 0;
-        lastRateCalcMs = millis();
-        currentRateMlPerSec = 0.0;
+        reset(Channel::Flow1);
+        reset(Channel::Flow2);
     }
 
     void loop() {
-        const uint32_t now = millis();
-
-        // Flow has stopped if nothing has arrived for a while. Checked before
-        // the window below so the rate drops promptly at the end of a shot
-        // rather than decaying over a whole window.
-        if ((now - lastPulseMs) > kFlowTimeoutMs) {
-            currentRateMlPerSec = 0.0;
-            lastRatePulses = snapshotPulses();
-            lastRateCalcMs = now;
-
-            return;
-        }
-
-        if ((now - lastRateCalcMs) < kRateWindowMs) {
-            return;
-        }
-
-        const uint32_t nowPulses = snapshotPulses();
-        const uint32_t deltaPulses = nowPulses - lastRatePulses;
-        const uint32_t deltaMs = now - lastRateCalcMs;
-
-        if (deltaMs > 0) {
-            currentRateMlPerSec = (mlFromPulses(deltaPulses) * 1000.0) / static_cast<double>(deltaMs);
-        }
-
-        lastRatePulses = nowPulses;
-        lastRateCalcMs = now;
+        loopSensor(at(Channel::Flow1));
+        loopSensor(at(Channel::Flow2));
     }
 
-    double totalMl() {
-        return mlFromPulses(snapshotPulses());
+    const char* channelName(const Channel channel) {
+        return at(channel).name;
     }
 
-    double rateMlPerSec() {
-        return currentRateMlPerSec;
+    uint8_t channelPin(const Channel channel) {
+        return at(channel).pin;
     }
 
-    uint32_t pulseCount() {
-        return snapshotPulses();
+    //
+    // Per-channel accessors.
+    //
+
+    void reset(const Channel channel) {
+        resetSensor(at(channel));
     }
 
-    uint32_t rejectedCount() {
+    double totalMl(const Channel channel) {
+        Sensor& s = at(channel);
+
+        return mlFromPulses(s, snapshotPulses(s));
+    }
+
+    double rateMlPerSec(const Channel channel) {
+        return at(channel).currentRateMlPerSec;
+    }
+
+    uint32_t pulseCount(const Channel channel) {
+        return snapshotPulses(at(channel));
+    }
+
+    uint32_t rejectedCount(const Channel channel) {
         noInterrupts();
-        const uint32_t value = rejected;
+        const uint32_t value = at(channel).rejected;
         interrupts();
 
         return value;
     }
 
-    bool isFlowing() {
-        return (millis() - lastPulseMs) <= kFlowTimeoutMs;
+    bool isFlowing(const Channel channel) {
+        return (millis() - at(channel).lastPulseMs) <= kFlowTimeoutMs;
     }
 
-    uint32_t pulsesPerLitre() {
-        return calibrationPulsesPerLitre;
+    uint32_t pulsesPerLitre(const Channel channel) {
+        return at(channel).calibrationPulsesPerLitre;
     }
 
-    void setPulsesPerLitre(const uint32_t pulsesPerL) {
+    void setPulsesPerLitre(const Channel channel, const uint32_t pulsesPerL) {
         if (pulsesPerL > 0) {
-            calibrationPulsesPerLitre = pulsesPerL;
-            saveCalibration();
+            Sensor& s = at(channel);
+
+            s.calibrationPulsesPerLitre = pulsesPerL;
+            saveCalibration(s);
         }
     }
 
-    bool calibrateTo(const double actualMl) {
-        const uint32_t counted = snapshotPulses();
+    bool calibrateTo(const Channel channel, const double actualMl) {
+        Sensor& s = at(channel);
+        const uint32_t counted = snapshotPulses(s);
 
         // Too little to calibrate against. A handful of pulses would produce a
         // confident-looking number with a huge error, which is worse than
@@ -283,15 +396,56 @@ namespace flow {
             return false;
         }
 
-        calibrationPulsesPerLitre = static_cast<uint32_t>((static_cast<double>(counted) * 1000.0) / actualMl);
-        saveCalibration();
+        s.calibrationPulsesPerLitre = static_cast<uint32_t>((static_cast<double>(counted) * 1000.0) / actualMl);
+        saveCalibration(s);
 
         return true;
+    }
+
+    //
+    // The active channel.
+    //
+
+    void reset() {
+        reset(kActiveChannel);
+    }
+
+    double totalMl() {
+        return totalMl(kActiveChannel);
+    }
+
+    double rateMlPerSec() {
+        return rateMlPerSec(kActiveChannel);
+    }
+
+    uint32_t pulseCount() {
+        return pulseCount(kActiveChannel);
+    }
+
+    uint32_t rejectedCount() {
+        return rejectedCount(kActiveChannel);
+    }
+
+    bool isFlowing() {
+        return isFlowing(kActiveChannel);
+    }
+
+    uint32_t pulsesPerLitre() {
+        return pulsesPerLitre(kActiveChannel);
+    }
+
+    void setPulsesPerLitre(const uint32_t pulsesPerL) {
+        setPulsesPerLitre(kActiveChannel, pulsesPerL);
+    }
+
+    bool calibrateTo(const double actualMl) {
+        return calibrateTo(kActiveChannel, actualMl);
     }
 
     namespace {
 
         bool watching = false;
+        Channel watchChannel = kActiveChannel;
         uint32_t watchUntilMs = 0;
         uint32_t watchChanges = 0;
         int watchLastLevel = -1;
@@ -299,15 +453,20 @@ namespace flow {
 
     } // namespace
 
-    void startWatch(const uint32_t durationMs) {
+    void startWatch(const Channel channel, const uint32_t durationMs) {
+        const Sensor& s = at(channel);
+
         watching = true;
+        watchChannel = channel;
         watchUntilMs = millis() + durationMs;
         watchChanges = 0;
         watchLastLevel = -1;
-        watchStartPulses = pulseCount();
+        watchStartPulses = pulseCount(channel);
 
-        Serial.print("watching the flow signal on pin ");
-        Serial.print(PIN_FLOW);
+        Serial.print("watching ");
+        Serial.print(s.name);
+        Serial.print(" on pin ");
+        Serial.print(s.pin);
         Serial.print(" for ");
         Serial.print(durationMs / 1000);
         Serial.println("s - run water, or blow through the sensor.");
@@ -316,12 +475,17 @@ namespace flow {
         Serial.println("  changing   = signal is arriving");
     }
 
+    void startWatch(const uint32_t durationMs) {
+        startWatch(kActiveChannel, durationMs);
+    }
+
     void serviceWatch() {
         if (!watching) {
             return;
         }
 
-        const int level = digitalRead(PIN_FLOW);
+        const Sensor& s = at(watchChannel);
+        const int level = digitalRead(s.pin);
 
         if (level != watchLastLevel) {
             if (watchLastLevel >= 0) {
@@ -334,7 +498,9 @@ namespace flow {
         if (static_cast<int32_t>(millis() - watchUntilMs) >= 0) {
             watching = false;
 
-            Serial.print("flow watch finished: line is ");
+            Serial.print("flow watch finished on ");
+            Serial.print(s.name);
+            Serial.print(": line is ");
             Serial.print(level == HIGH ? "HIGH" : "LOW");
             Serial.print(", ");
             Serial.print(watchChanges);
@@ -343,7 +509,7 @@ namespace flow {
             // watch is running, which made this underflow and report
             // 4,294,967,279 pulses - a number so absurd it was obvious, but the
             // same wrap in any other arithmetic would not have been.
-            const uint32_t nowPulses = pulseCount();
+            const uint32_t nowPulses = pulseCount(watchChannel);
             const uint32_t pulsesSeen = (nowPulses >= watchStartPulses) ? (nowPulses - watchStartPulses) : nowPulses;
 
             Serial.print(pulsesSeen);
@@ -371,12 +537,16 @@ namespace flow {
                 Serial.println(level == HIGH ? "HIGH" : "LOW");
 
                 if (level == HIGH) {
-                    Serial.println("  The internal pull-up is holding it, so nothing is driving the");
-                    Serial.println("  pin. Check: signal wire actually on pin 10; the sensor has its");
-                    Serial.println("  own supply (an open-collector output cannot switch unpowered);");
-                    Serial.println("  and it shares a ground with the Teensy. Also check nothing");
-                    Serial.println("  ELSE is connected to the pin - a second driver wins over a");
-                    Serial.println("  pull-up and over an open-collector sensor both.");
+                    Serial.print("  The internal pull-up is holding it, so nothing is driving pin ");
+                    Serial.print(s.pin);
+                    Serial.println(".");
+                    Serial.print("  Check: the sensor is on the ");
+                    Serial.print(s.name);
+                    Serial.println(" connector and not the other one - there are TWO;");
+                    Serial.println("  the sensor has its own supply (an open-collector output cannot");
+                    Serial.println("  switch unpowered); and it shares a ground with the Teensy. Also");
+                    Serial.println("  check nothing ELSE is connected to the pin - a second driver");
+                    Serial.println("  wins over a pull-up and over an open-collector sensor both.");
                 }
                 else {
                     Serial.println("  Something is holding the line at ground and overriding the");
@@ -388,14 +558,18 @@ namespace flow {
         }
     }
 
-    void sampleFast(const uint32_t windowMs) {
+    void sampleFast(const Channel channel, const uint32_t windowMs) {
         // Bounded hard. This blocks, and the watchdog bites at 4 s.
         const uint32_t window = windowMs > 500 ? 500 : windowMs;
 
-        const uint32_t pulsesBefore = pulseCount();
+        const Sensor& s = at(channel);
+        const uint8_t pin = s.pin;
+        const uint32_t pulsesBefore = pulseCount(channel);
 
-        Serial.print("sampling pin ");
-        Serial.print(PIN_FLOW);
+        Serial.print("sampling ");
+        Serial.print(s.name);
+        Serial.print(" on pin ");
+        Serial.print(pin);
         Serial.print(" as fast as possible for ");
         Serial.print(window);
         Serial.println(" ms...");
@@ -405,10 +579,10 @@ namespace flow {
         uint32_t transitions = 0;
 
         const uint32_t began = millis();
-        int last = digitalReadFast(PIN_FLOW);
+        int last = fastRead(pin);
 
         while (millis() - began < window) {
-            const int now = digitalReadFast(PIN_FLOW);
+            const int now = fastRead(pin);
 
             ++samples;
 
@@ -422,7 +596,7 @@ namespace flow {
             }
         }
 
-        const uint32_t pulsesDuring = pulseCount() - pulsesBefore;
+        const uint32_t pulsesDuring = pulseCount(channel) - pulsesBefore;
         const float lowPct = samples ? (100.0f * static_cast<float>(lowSamples) / static_cast<float>(samples)) : 0.0f;
         const float rateMHz = samples ? (static_cast<float>(samples) / (static_cast<float>(window) * 1000.0f)) : 0.0f;
 
@@ -452,36 +626,57 @@ namespace flow {
         }
     }
 
-    void printStatus() {
-        const uint32_t counted = snapshotPulses();
+    void sampleFast(const uint32_t windowMs) {
+        sampleFast(kActiveChannel, windowMs);
+    }
 
-        Serial.print("  flow (pin ");
-        Serial.print(PIN_FLOW);
-        Serial.print(") : ");
-        Serial.print(totalMl(), 2);
+    void printStatus(const Channel channel) {
+        Sensor& s = at(channel);
+        const uint32_t counted = snapshotPulses(s);
+
+        // Padded to a fixed width so the two channels line up under each
+        // other. Ragged columns on a two-line readout are exactly where a
+        // misread happens at the bench.
+        char head[48];
+        snprintf(head, sizeof(head), "  flow %s (pin %u)%s", s.name, static_cast<unsigned>(s.pin),
+                 channel == kActiveChannel ? " ACTIVE" : "");
+        Serial.print(head);
+
+        for (size_t i = strlen(head); i < 30; ++i) {
+            Serial.print(' ');
+        }
+
+        Serial.print(": ");
+        Serial.print(mlFromPulses(s, counted), 2);
         Serial.print(" ml   rate ");
-        Serial.print(currentRateMlPerSec, 2);
+        Serial.print(s.currentRateMlPerSec, 2);
         Serial.print(" ml/s   ");
-        Serial.println(isFlowing() ? "FLOWING" : "idle");
+        Serial.println(isFlowing(channel) ? "FLOWING" : "idle");
 
         Serial.print("    pulses=");
         Serial.print(counted);
         Serial.print("  rejected=");
-        Serial.print(rejectedCount());
+        Serial.print(rejectedCount(channel));
         Serial.print("  calibration=");
-        Serial.print(calibrationPulsesPerLitre);
+        Serial.print(s.calibrationPulsesPerLitre);
         Serial.print(" pulses/litre");
 
-        if (calibrationPulsesPerLitre == kDefaultPulsesPerLitre) {
-            // Not "uncalibrated". 49,162 is the DM60's datasheet resolution for
-            // this exact part number, quoted to +/-2%, so it is a real figure
-            // rather than a placeholder. Saying otherwise would invite someone
-            // to distrust a number that is good enough to use.
-            Serial.println("  (datasheet value, +/-2%; 'flowcal' to beat it gravimetrically)");
+        if (s.calibrationPulsesPerLitre == s.compiledPulsesPerLitre) {
+            // Not "uncalibrated" for Flow2. 49,162 is the DM60's datasheet
+            // resolution for this exact part number, quoted to +/-2%, so it is
+            // a real figure rather than a placeholder. Saying otherwise would
+            // invite someone to distrust a number that is good enough to use.
+            // Flow1's 1,965 is better still - it was measured here.
+            Serial.println("  (compiled default; 'flowcal' to beat it gravimetrically)");
         }
         else {
             Serial.println();
         }
+    }
+
+    void printStatus() {
+        printStatus(Channel::Flow1);
+        printStatus(Channel::Flow2);
     }
 
 } // namespace flow
