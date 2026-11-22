@@ -108,6 +108,11 @@ namespace {
         Serial.println("  backflush         backflush: armed state, cycle, timings");
         Serial.println("  backflush on|off  arm or disarm (armed: a brew-switch press backflushes)");
         Serial.println("  backflush start|stop   run or abort a cycle");
+        Serial.println("  fill              boiler fill: state and settings");
+        Serial.println("  fill start|stop   fill the boiler (replaces the manual fill lever)");
+        Serial.println("  fill cap <ml>     volume to stop at - set it to the boiler's capacity");
+        Serial.println("  fill pump <%>     pump speed while filling");
+        Serial.println("  fill maxms <ms>   fill timeout, 10000-1800000, cannot be disabled");
         Serial.println("  flush             manual grouphead flush: state and settings");
         Serial.println("  flush start|stop  run or stop a flush (on the machine: hold brew switch)");
         Serial.println("  flush pump <%>    pump speed during a flush");
@@ -971,6 +976,60 @@ namespace {
         }
         else if (strcasecmp(command, "flow") == 0) {
             flow::printStatus();
+        }
+        else if (strcasecmp(command, "fill") == 0) {
+            char* a2 = strtok(nullptr, " \t");
+
+            if (argument == nullptr) {
+                shot::printBoilerFillStatus();
+            }
+            else if (strcasecmp(argument, "start") == 0) {
+                shot::startBoilerFill("console");
+            }
+            else if (strcasecmp(argument, "stop") == 0) {
+                shot::stopBoilerFill("console");
+            }
+            else if (strcasecmp(argument, "cap") == 0) {
+                if (a2 == nullptr) {
+                    Serial.println("usage: fill cap <millilitres the boiler holds>");
+                }
+                else if (shot::setMaxBoilerFillMl(atof(a2))) {
+                    Serial.print("fill cap set to ");
+                    Serial.print(shot::maxBoilerFillMl(), 0);
+                    Serial.println(" ml");
+                }
+                else {
+                    Serial.println("REFUSED: the cap must be greater than zero");
+                }
+            }
+            else if (strcasecmp(argument, "pump") == 0) {
+                if (a2 == nullptr) {
+                    Serial.println("usage: fill pump <0-100>");
+                }
+                else {
+                    shot::setBoilerFillPercent(atof(a2));
+                    Serial.print("fill pump speed ");
+                    Serial.print(shot::boilerFillPercent(), 0);
+                    Serial.println("%");
+                }
+            }
+            else if (strcasecmp(argument, "maxms") == 0) {
+                if (a2 == nullptr) {
+                    Serial.println("usage: fill maxms <10000-1800000>");
+                }
+                else if (shot::setMaxBoilerFillMs(static_cast<uint32_t>(atol(a2)))) {
+                    Serial.print("fill timeout ");
+                    Serial.print(shot::maxBoilerFillMs() / 1000);
+                    Serial.println(" s");
+                }
+                else {
+                    Serial.println("REFUSED: 10000 to 1800000 ms. It cannot be disabled -");
+                    Serial.println("         it is the only stop left if the flow meter dies.");
+                }
+            }
+            else {
+                Serial.println("usage: fill | fill start|stop | fill cap <ml> | fill pump <%> | fill maxms <ms>");
+            }
         }
         else if (strcasecmp(command, "flowreset") == 0) {
             if (flow::Channel channel; !parseFlowChannel(argument, channel)) {

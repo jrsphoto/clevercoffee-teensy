@@ -216,6 +216,18 @@ namespace shot {
         uint32_t maxFlushMs = kDefaultMaxFlushMs;
         const char* flushStopReason = "never run";
 
+        // --- Boiler fill ---------------------------------------------------
+        FillState boilerFill = FillState::Idle;
+
+        uint32_t boilerFillStartedMs = 0;
+        uint32_t boilerFillReportedMs = 0;
+        double boilerFillVolumeAtStart = 0.0;
+        double fillPercent = kDefaultBoilerFillPercent;
+        double maxFillMl = kDefaultMaxBoilerFillMl;
+        uint32_t maxFillMs = kDefaultMaxBoilerFillMs;
+        bool fillCapChosen = false;
+        const char* boilerFillStopReason = "never run";
+
 
         // --- Cooling flush -----------------------------------------------
         bool coolingEnabled = false;
@@ -270,11 +282,20 @@ namespace shot {
             hasFlowedSinceBoot = true;
         }
 
-        /** The three sequences that drive the group valve and the pump. */
+        /**
+         * The sequences that drive the pump and a water valve.
+         *
+         * The boiler fill uses the INLET and FILL channels rather than the
+         * group valve, so on paper it could overlap a shot. It must not: it
+         * shares the pump, and on this machine the boiler fill is fed from
+         * the pump outlet, so a fill during a shot steals water from the puck
+         * AND has the flow meter count it as delivered volume. Brief 9.17.
+         */
         enum class Sequence : uint8_t {
             Shot,
             Flush,
             Backflush,
+            BoilerFill,
         };
 
         /**
@@ -311,6 +332,10 @@ namespace shot {
 
             if (me != Sequence::Backflush && isBackflushing()) {
                 return "a backflush is running";
+            }
+
+            if (me != Sequence::BoilerFill && boilerFill != FillState::Idle) {
+                return "the boiler is filling";
             }
 
             return nullptr;
@@ -515,6 +540,21 @@ namespace shot {
         void allOff() {
             pump::stop();
             outputs::set(outputs::Channel::Valve, false);
+        }
+
+        /**
+         * @brief Everything the boiler fill touches, off.
+         *
+         * PUMP FIRST, THEN THE VALVES, and the order is not cosmetic. The
+         * MG304 is a positive displacement gear pump with no integral relief,
+         * and no relief valve is fitted in the plumbing yet. Closing the fill
+         * valve with the pump still turning dead-heads it. Same order as
+         * allOff() above, for the same reason.
+         */
+        void boilerFillAllOff() {
+            pump::stop();
+            outputs::set(outputs::Channel::Fill, false);
+            outputs::set(outputs::Channel::Inlet, false);
         }
 
         /** @brief Weight delivered so far, or a negative number if unknown. */
@@ -887,6 +927,10 @@ namespace shot {
             stopBackflush("fault latched");
         }
 
+        if (boilerFill == FillState::Running && safety::isFaulted()) {
+            stopBoilerFill("fault latched");
+        }
+
         // Disarming mid-cycle stops the cycle, as upstream does - its comment
         // reads "Force reset in case backflushOn is reset during backflush".
         if (isBackflushing() && !backflushIsArmed) {
@@ -912,6 +956,48 @@ namespace shot {
             else {
                 outputs::set(outputs::Channel::Valve, true);
                 pump::setSpeed(flushPercent);
+            }
+        }
+
+        // --- Boiler fill ---------------------------------------------------
+        //
+        // Three outputs re-asserted every pass, same rule as everything else
+        // here: a hang in this handler lets the pump's own 1.5 s command
+        // expiry stop it, which is the behaviour wanted.
+        //
+        // The time cap is tested BEFORE the volume cap on purpose. Volume
+        // depends on the flow meter still counting; the clock does not, and
+        // when the two disagree the one without a sensor behind it should
+        // win.
+        if (boilerFill == FillState::Running) {
+            const double delivered = flow::totalMl() - boilerFillVolumeAtStart;
+
+            if ((now - boilerFillStartedMs) >= maxFillMs) {
+                stopBoilerFill("MAXIMUM TIME - is the flow meter counting?");
+            }
+            else if (delivered >= maxFillMl) {
+                stopBoilerFill(fillCapChosen ? "volume cap reached"
+                                             : "placeholder volume cap - re-issue, or set 'fill cap <ml>'");
+            }
+            else {
+                outputs::set(outputs::Channel::Inlet, true);
+                outputs::set(outputs::Channel::Fill, true);
+                pump::setSpeed(fillPercent);
+
+                // Say where it is up to. Somebody is watching a sight glass
+                // with no level sensor in the machine, so the delivered
+                // volume is the only number they have.
+                if ((now - boilerFillReportedMs) >= kBoilerFillReportMs) {
+                    boilerFillReportedMs = now;
+
+                    Serial.print("fill: ");
+                    Serial.print(delivered, 0);
+                    Serial.print(" ml, ");
+                    Serial.print((now - boilerFillStartedMs) / 1000.0, 0);
+                    Serial.print(" s, ");
+                    Serial.print(flow::rateMlPerSec(), 1);
+                    Serial.println(" ml/s");
+                }
             }
         }
 
@@ -1154,6 +1240,187 @@ namespace shot {
         }
 
         return millis() - flushStartedMs;
+    }
+
+    // --- Boiler fill -----------------------------------------------------
+
+    bool startBoilerFill(const char* why) {
+        if (boilerFill == FillState::Running) {
+            return false;
+        }
+
+        if (const char* busy = otherSequenceRunning(Sequence::BoilerFill); busy != nullptr) {
+            Serial.print("fill: REFUSED - ");
+            Serial.println(busy);
+
+            return false;
+        }
+
+        if (safety::isFaulted()) {
+            Serial.print("fill: REFUSED - fault latched (");
+            Serial.print(safetyFaultName(safety::latchedFault));
+            Serial.println(")");
+
+            return false;
+        }
+
+        boilerFillStartedMs = millis();
+        boilerFillReportedMs = boilerFillStartedMs;
+        boilerFillVolumeAtStart = flow::totalMl();
+        boilerFill = FillState::Running;
+        boilerFillStopReason = "running";
+
+        // The actuators are not touched here. loop() asserts them on its next
+        // pass, so every valve-open and pump-on lives in one place and the
+        // re-assertion rule has no exception.
+        Serial.print("fill: START - ");
+        Serial.print(why);
+        Serial.print(", pump ");
+        Serial.print(fillPercent, 0);
+        Serial.print("%, stops at ");
+        Serial.print(maxFillMl, 0);
+        Serial.print(" ml");
+
+        if (!fillCapChosen) {
+            Serial.print(" (PLACEHOLDER cap - set it with 'fill cap <ml>')");
+        }
+
+        Serial.print(" or ");
+        Serial.print(maxFillMs / 60000.0, 0);
+        Serial.println(" min");
+        Serial.println("      WATCH THE SIGHT GLASS. 'fill stop' when the level is right.");
+
+        return true;
+    }
+
+    void stopBoilerFill(const char* why) {
+        if (boilerFill == FillState::Idle) {
+            return;
+        }
+
+        const double delivered = flow::totalMl() - boilerFillVolumeAtStart;
+        const uint32_t elapsed = millis() - boilerFillStartedMs;
+
+        boilerFillAllOff();
+        noteFlowEnded();
+
+        boilerFill = FillState::Idle;
+        boilerFillStopReason = why;
+
+        Serial.print("fill: STOPPED after ");
+        Serial.print(elapsed / 1000.0, 1);
+        Serial.print(" s and ");
+        Serial.print(delivered, 0);
+        Serial.print(" ml - ");
+        Serial.println(why);
+    }
+
+    FillState boilerFillState() {
+        return boilerFill;
+    }
+
+    bool isBoilerFilling() {
+        return boilerFill == FillState::Running;
+    }
+
+    uint32_t boilerFillElapsedMs() {
+        if (boilerFill == FillState::Idle) {
+            return 0;
+        }
+
+        return millis() - boilerFillStartedMs;
+    }
+
+    double boilerFillDeliveredMl() {
+        if (boilerFill == FillState::Idle) {
+            return 0.0;
+        }
+
+        return flow::totalMl() - boilerFillVolumeAtStart;
+    }
+
+    const char* lastBoilerFillStopReason() {
+        return boilerFillStopReason;
+    }
+
+    void setBoilerFillPercent(const double percent) {
+        fillPercent = percent < 0.0 ? 0.0 : (percent > 100.0 ? 100.0 : percent);
+    }
+
+    double boilerFillPercent() {
+        return fillPercent;
+    }
+
+    bool setMaxBoilerFillMl(const double ml) {
+        // A cap of zero would mean "stop immediately", and a negative one is
+        // meaningless. Refuse rather than clamp, so a typo is visible.
+        if (ml <= 0.0) {
+            return false;
+        }
+
+        maxFillMl = ml;
+        fillCapChosen = true;
+
+        return true;
+    }
+
+    double maxBoilerFillMl() {
+        return maxFillMl;
+    }
+
+    bool boilerFillCapSet() {
+        return fillCapChosen;
+    }
+
+    bool setMaxBoilerFillMs(const uint32_t ms) {
+        // Clamped, not disableable, for the same reason as the shot and flush
+        // limits: it is the only stop left if the flow meter stops counting.
+        if (ms < 10000 || ms > 1800000) {
+            return false;
+        }
+
+        maxFillMs = ms;
+
+        return true;
+    }
+
+    uint32_t maxBoilerFillMs() {
+        return maxFillMs;
+    }
+
+    void printBoilerFillStatus() {
+        Serial.print("  boiler fill    : ");
+
+        if (boilerFill == FillState::Running) {
+            Serial.print("RUNNING, ");
+            Serial.print(boilerFillDeliveredMl(), 0);
+            Serial.print(" ml in ");
+            Serial.print(boilerFillElapsedMs() / 1000.0, 1);
+            Serial.println(" s");
+        }
+        else {
+            Serial.print("idle (last: ");
+            Serial.print(boilerFillStopReason);
+            Serial.println(")");
+        }
+
+        Serial.print("    pump=");
+        Serial.print(fillPercent, 0);
+        Serial.print("%  cap=");
+        Serial.print(maxFillMl, 0);
+        Serial.print(" ml");
+
+        if (!fillCapChosen) {
+            Serial.print(" UNSET - placeholder, not this boiler's capacity");
+        }
+
+        Serial.print("  timeout=");
+        Serial.print(maxFillMs / 60000.0, 0);
+        Serial.println(" min");
+
+        if (!fillCapChosen) {
+            Serial.println("    Measure what the boiler holds, then 'fill cap <ml>'.");
+        }
     }
 
     const char* lastFlushStopReason() {
@@ -1564,7 +1831,7 @@ namespace shot {
      * tidy-up to ignore.
      */
     bool isBusy() {
-        return isRunning() || isFlushing() || isBackflushing();
+        return isRunning() || isFlushing() || isBackflushing() || isBoilerFilling();
     }
 
     void setSwitchControlEnabled(const bool enabled) {

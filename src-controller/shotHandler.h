@@ -224,6 +224,49 @@ namespace shot {
         Finished,
     };
 
+    /**
+     * @enum FillState
+     * @brief Filling the boiler. Net-new; upstream has no equivalent.
+     *
+     * This replaces the machine's manual fill lever, which the OEM manual
+     * describes as the way to get water into a DRY boiler before the element
+     * is ever energized - first installation, or after boiler maintenance.
+     * John is removing the lever, so this is the only remaining path to a
+     * first fill.
+     *
+     * WHY IT IS A SEQUENCE AND NOT THREE CONSOLE COMMANDS
+     *
+     * A fill needs the cold inlet open, the pump running and the boiler fill
+     * valve open, all at once, for minutes. Nothing already here can do that:
+     * the console runs one channel at a time with a 10 s auto-off, the Diags
+     * hold buttons lapse about a second after you let go, and pump commands
+     * expire after 1.5 s unless re-issued. Those limits are all deliberate and
+     * none of them should change, so a fill gets its own sequence with its own
+     * stop conditions instead.
+     *
+     * IT NEVER TOUCHES THE HEATER, which is the point. It has to work before
+     * the water-level probe circuit exists and while the dry-fire interlock is
+     * correctly refusing to heat. Filling a cold boiler needs no heat and no
+     * level sensor, only an operator watching the sight glass.
+     *
+     * HOW IT STOPS
+     *
+     *   by COMMAND  `fill stop`, which is the normal way - the operator is
+     *               watching the glass and that is the real level sensor until
+     *               the probe exists.
+     *   by VOLUME   the fill runs through the flow meter, so delivered volume
+     *               is known and capped. Better than the lever ever was.
+     *   by TIME     ALWAYS, and it is the backstop with no sensor behind it.
+     *               If the meter dies mid-fill the volume cap never trips, so
+     *               the clock has to.
+     *
+     * Same shape as the shot's three stop conditions and for the same reason.
+     */
+    enum class FillState : uint8_t {
+        Idle,
+        Running,
+    };
+
     // --- Defaults. All adjustable; none of them are safety limits except
     //     kDefaultMaxBrewMs, which is.
     // These two match upstream's PRE_INFUSION_TIME and PRE_INFUSION_PAUSE_TIME
@@ -394,6 +437,48 @@ namespace shot {
      * be less effective than a simple model suggests.
      */
     constexpr uint32_t kDefaultMinIdleForFlushMs = 120000; // 2 minutes, UNMEASURED
+
+    // --- Boiler fill -----------------------------------------------------
+
+    /**
+     * Pump speed while filling the boiler.
+     *
+     * Deliberately not the 100% every other sequence uses. A flush and a
+     * backflush want the water moved or the pressure up; a fill just wants
+     * water in the boiler, slowly enough that somebody watching the sight
+     * glass can call it before it goes past the mark. Comfortably above the
+     * ~10% the bridge needs to start from rest.
+     */
+    constexpr double kDefaultBoilerFillPercent = 50.0;
+
+    /**
+     * Volume cap, in millilitres. A PLACEHOLDER until somebody sets it.
+     *
+     * The real number is how much this boiler holds when empty, which is not
+     * in the manual section that describes the fill and is not something to
+     * invent - the same refusal as kDefaultFlushMsPerDegree below. One litre
+     * is small enough that it cannot overfill any boiler this machine might
+     * have, so the failure mode of the placeholder is a fill that stops early
+     * and has to be re-issued, which is merely annoying.
+     *
+     * Set it with `fill cap <ml>` once the boiler's capacity is known.
+     * printStatus() says UNSET until then.
+     */
+    constexpr double kDefaultMaxBoilerFillMl = 1000.0;
+
+    /**
+     * Hard ceiling on a fill, always enforced.
+     *
+     * This is the one stop condition with no sensor behind it. If the flow
+     * meter stops counting part way through a fill, the volume cap can never
+     * be reached and this is all that is left. Ten minutes at the fill rate is
+     * more water than the boiler holds, so a fill that ends on this has
+     * already gone wrong.
+     */
+    constexpr uint32_t kDefaultMaxBoilerFillMs = 600000;
+
+    /** How often the console reports progress during a fill. */
+    constexpr uint32_t kBoilerFillReportMs = 2000;
 
     /**
      * How many shot profiles exist.
@@ -637,6 +722,81 @@ namespace shot {
 
     /** @brief Pump speed during the fill stage, 0-100. */
     void setBackflushPercent(double percent);
+
+    // --- Boiler fill -----------------------------------------------------
+
+    /**
+     * @brief Start filling the boiler.
+     *
+     * Opens the cold inlet, runs the pump and opens the boiler fill valve,
+     * and holds all three until stopped. Refused while any other sequence is
+     * running and refused on a latched fault, like every other start here.
+     *
+     * NOT STARTED BY THE BREW SWITCH, and never will be. Every other sequence
+     * is on that switch because they are things you do while making coffee.
+     * This is a commissioning job done once with the panels off, and a switch
+     * that could flood the boiler by accident is a worse switch.
+     *
+     * The inlet valve is driven whether or not it is fitted. On the bench it
+     * is an unconnected ULN channel and this does nothing; on the finished
+     * machine it is the only thing letting water reach the pump.
+     *
+     * @return false if refused.
+     */
+    bool startBoilerFill(const char* why);
+
+    /**
+     * @brief Stop filling.
+     *
+     * Pump first, then the valves. Closing the fill valve while a positive
+     * displacement pump is still turning dead-heads it, and there is no
+     * relief valve fitted.
+     */
+    void stopBoilerFill(const char* why);
+
+    /** @brief Current fill stage. */
+    FillState boilerFillState();
+
+    /** @brief True while the boiler is filling. */
+    bool isBoilerFilling();
+
+    /** @brief Milliseconds since the fill started, 0 if not filling. */
+    uint32_t boilerFillElapsedMs();
+
+    /** @brief Millilitres delivered this fill, 0 if not filling. */
+    double boilerFillDeliveredMl();
+
+    /** @brief Why the last fill ended. */
+    const char* lastBoilerFillStopReason();
+
+    /** @brief Pump speed used while filling, 0-100. */
+    void setBoilerFillPercent(double percent);
+
+    /** @brief Current fill pump speed. */
+    double boilerFillPercent();
+
+    /**
+     * @brief Set the volume cap, in millilitres.
+     *
+     * Also marks the cap as deliberately chosen rather than the shipped
+     * placeholder, which is all that stops printStatus() saying UNSET.
+     */
+    bool setMaxBoilerFillMl(double ml);
+
+    /** @brief Current volume cap. */
+    double maxBoilerFillMl();
+
+    /** @brief True once the cap has been set from the real boiler capacity. */
+    bool boilerFillCapSet();
+
+    /** @brief Hard time cap. Cannot be disabled, for the reason in the header. */
+    bool setMaxBoilerFillMs(uint32_t ms);
+
+    /** @brief Current time cap. */
+    uint32_t maxBoilerFillMs();
+
+    /** @brief Print fill state and settings. */
+    void printBoilerFillStatus();
 
     /** @brief What the brew switch gesture machine currently thinks. */
     SwitchState switchState();
