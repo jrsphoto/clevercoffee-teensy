@@ -452,7 +452,7 @@ namespace shot {
     constexpr double kDefaultBoilerFillPercent = 50.0;
 
     /**
-     * Volume cap, in millilitres. A PLACEHOLDER until somebody sets it.
+     * How much water the boiler holds, in millilitres. A PLACEHOLDER.
      *
      * The real number is how much this boiler holds when empty, which is not
      * in the manual section that describes the fill and is not something to
@@ -461,10 +461,10 @@ namespace shot {
      * have, so the failure mode of the placeholder is a fill that stops early
      * and has to be re-issued, which is merely annoying.
      *
-     * Set it with `fill cap <ml>` once the boiler's capacity is known.
+     * Set it with `fill capacity <ml>` once the boiler has been measured.
      * printStatus() says UNSET until then.
      */
-    constexpr double kDefaultMaxBoilerFillMl = 1000.0;
+    constexpr double kDefaultBoilerCapacityMl = 1000.0;
 
     /**
      * Hard ceiling on a fill, always enforced.
@@ -776,18 +776,18 @@ namespace shot {
     double boilerFillPercent();
 
     /**
-     * @brief Set the volume cap, in millilitres.
+     * @brief Set the boiler's capacity, in millilitres.
      *
      * Also marks the cap as deliberately chosen rather than the shipped
      * placeholder, which is all that stops printStatus() saying UNSET.
      */
-    bool setMaxBoilerFillMl(double ml);
+    bool setBoilerCapacityMl(double ml);
 
     /** @brief Current volume cap. */
-    double maxBoilerFillMl();
+    double boilerCapacityMl();
 
     /** @brief True once the cap has been set from the real boiler capacity. */
-    bool boilerFillCapSet();
+    bool boilerCapacityKnown();
 
     /** @brief Hard time cap. Cannot be disabled, for the reason in the header. */
     bool setMaxBoilerFillMs(uint32_t ms);

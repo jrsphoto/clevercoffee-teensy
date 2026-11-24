@@ -223,9 +223,9 @@ namespace shot {
         uint32_t boilerFillReportedMs = 0;
         double boilerFillVolumeAtStart = 0.0;
         double fillPercent = kDefaultBoilerFillPercent;
-        double maxFillMl = kDefaultMaxBoilerFillMl;
+        double capacityMl = kDefaultBoilerCapacityMl;
         uint32_t maxFillMs = kDefaultMaxBoilerFillMs;
-        bool fillCapChosen = false;
+        bool capacityKnown = false;
         const char* boilerFillStopReason = "never run";
 
 
@@ -975,9 +975,9 @@ namespace shot {
             if ((now - boilerFillStartedMs) >= maxFillMs) {
                 stopBoilerFill("MAXIMUM TIME - is the flow meter counting?");
             }
-            else if (delivered >= maxFillMl) {
-                stopBoilerFill(fillCapChosen ? "volume cap reached"
-                                             : "placeholder volume cap - re-issue, or set 'fill cap <ml>'");
+            else if (delivered >= capacityMl) {
+                stopBoilerFill(capacityKnown ? "boiler capacity reached"
+                                             : "placeholder capacity - re-issue, or set the real one with 'fill capacity <ml>'");
             }
             else {
                 outputs::set(outputs::Channel::Inlet, true);
@@ -1278,11 +1278,11 @@ namespace shot {
         Serial.print(", pump ");
         Serial.print(fillPercent, 0);
         Serial.print("%, stops at ");
-        Serial.print(maxFillMl, 0);
+        Serial.print(capacityMl, 0);
         Serial.print(" ml");
 
-        if (!fillCapChosen) {
-            Serial.print(" (PLACEHOLDER cap - set it with 'fill cap <ml>')");
+        if (!capacityKnown) {
+            Serial.print(" (PLACEHOLDER - set the real boiler capacity with 'fill capacity <ml>')");
         }
 
         Serial.print(" or ");
@@ -1351,25 +1351,25 @@ namespace shot {
         return fillPercent;
     }
 
-    bool setMaxBoilerFillMl(const double ml) {
+    bool setBoilerCapacityMl(const double ml) {
         // A cap of zero would mean "stop immediately", and a negative one is
         // meaningless. Refuse rather than clamp, so a typo is visible.
         if (ml <= 0.0) {
             return false;
         }
 
-        maxFillMl = ml;
-        fillCapChosen = true;
+        capacityMl = ml;
+        capacityKnown = true;
 
         return true;
     }
 
-    double maxBoilerFillMl() {
-        return maxFillMl;
+    double boilerCapacityMl() {
+        return capacityMl;
     }
 
-    bool boilerFillCapSet() {
-        return fillCapChosen;
+    bool boilerCapacityKnown() {
+        return capacityKnown;
     }
 
     bool setMaxBoilerFillMs(const uint32_t ms) {
@@ -1406,20 +1406,20 @@ namespace shot {
 
         Serial.print("    pump=");
         Serial.print(fillPercent, 0);
-        Serial.print("%  cap=");
-        Serial.print(maxFillMl, 0);
+        Serial.print("%  boiler capacity=");
+        Serial.print(capacityMl, 0);
         Serial.print(" ml");
 
-        if (!fillCapChosen) {
-            Serial.print(" UNSET - placeholder, not this boiler's capacity");
+        if (!capacityKnown) {
+            Serial.print(" UNSET - a placeholder, not this boiler's real capacity");
         }
 
         Serial.print("  timeout=");
         Serial.print(maxFillMs / 60000.0, 0);
         Serial.println(" min");
 
-        if (!fillCapChosen) {
-            Serial.println("    Measure what the boiler holds, then 'fill cap <ml>'.");
+        if (!capacityKnown) {
+            Serial.println("    Measure what the boiler holds, then 'fill capacity <ml>'.");
         }
     }
 

@@ -1,0 +1,357 @@
+<title>Argenta Boot and Loop</title>
+<style>
+  :root{
+    --cma-red:#a51f16; --cma-deep:#7c140d;
+    --ink:#23201c; --ink-soft:#6a635a; --ink-faint:#8d8578;
+    --paper:#f6efdd; --box:#fbf7ec; --line:#c9bda0;
+    --pow:#8c1a12; --sig:#1f6a6a; --wat:#3a76a6; --int:#d1491f; --grn:#4a6b3d;
+    --sig-fill:#e4eeec; --wat-fill:#e3edf5; --int-fill:#fdeee4;
+    --red-fill:#f7e4e1; --grn-fill:#e8eee2;
+    --plate:2px 2px 0 rgba(35,32,28,.14);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:#4a4741; color:var(--ink);
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:14px; line-height:1.5;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact;
+  }
+  .wrap{max-width:1120px; margin:0 auto; padding:26px 18px 64px}
+
+  /* ---- masthead, matching the other sheets ---- */
+  .head{
+    background:var(--paper); border:1.5px solid var(--ink); border-top:6px solid var(--cma-red);
+    padding:18px 22px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+  }
+  .badge{
+    background:linear-gradient(180deg,var(--cma-red),var(--cma-deep)); color:#fff;
+    border-radius:6px; padding:8px 14px; text-align:center; flex:none;
+    box-shadow:inset 0 0 0 1.4px rgba(255,255,255,.35), inset 0 0 0 4px var(--cma-red);
+  }
+  .badge .mark{font-family:"Arial Narrow",Impact,sans-serif; font-weight:800; font-size:30px; line-height:.9; letter-spacing:.05em}
+  .badge .sub{font-size:8px; letter-spacing:.22em; margin-top:2px}
+  .head h1{margin:0; font-size:21px; letter-spacing:.06em; text-transform:uppercase; font-weight:800}
+  .head .s{margin:3px 0 0; font-size:12.5px; color:var(--ink-soft); letter-spacing:.04em; max-width:66ch}
+
+  .sheet{background:var(--paper); border:1.5px solid var(--ink); border-top:none; padding:20px 22px 26px}
+  .sheet + .sheet{border-top:none}
+
+  .shead{display:flex; align-items:center; gap:12px; margin:0 0 4px}
+  .num{
+    background:linear-gradient(180deg,var(--cma-red),var(--cma-deep)); color:#fff;
+    font-family:"Arial Narrow",Impact,sans-serif; font-weight:800; font-size:14px;
+    letter-spacing:.08em; padding:4px 9px; border-radius:3px; flex:none;
+  }
+  .shead h2{margin:0; font-size:13.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--cma-red); font-weight:800}
+  .snote{margin:8px 0 22px; font-size:13px; color:var(--ink-soft); max-width:72ch}
+  .rule{height:1px; background:var(--line); margin:0 0 20px}
+
+  /* ---- flow ---- */
+  .flow{display:flex; flex-direction:column; align-items:center}
+  .card{
+    width:100%; max-width:560px; background:var(--box); border:1.4px solid var(--ink);
+    border-radius:3px; padding:11px 14px; box-shadow:var(--plate); position:relative;
+  }
+  .card .t{font-weight:700; font-size:13.5px; letter-spacing:.01em}
+  .card .d{color:var(--ink-soft); font-size:12.5px; margin-top:3px; line-height:1.45}
+  .src{
+    display:inline-block; margin-top:7px; font-family:"Courier New",monospace; font-size:10.5px;
+    color:var(--ink-soft); border:1px solid var(--line); border-radius:2px; padding:1px 6px; background:#fff;
+  }
+  .sig{border-left:5px solid var(--sig)}
+  .int{border-left:5px solid var(--int); background:var(--int-fill)}  .int .t{color:#8a3310}
+  .wat{border-left:5px solid var(--wat); background:var(--wat-fill)}  .wat .t{color:#255druby}
+  .wat .t{color:#22557c}
+  .red{border-left:5px solid var(--cma-red); background:var(--red-fill)} .red .t{color:var(--cma-deep)}
+  .grn{border-left:5px solid var(--grn); background:var(--grn-fill)}   .grn .t{color:#35512a}
+  .term{
+    background:var(--ink); color:var(--paper); border-color:var(--ink); max-width:420px;
+    text-align:center; border-radius:3px;
+  }
+  .term .t{letter-spacing:.1em; text-transform:uppercase; font-size:12px}
+  .term .d{color:var(--paper); opacity:.72}
+  .ask{
+    max-width:520px; text-align:center; background:var(--paper);
+    border:1.6px dashed var(--cma-red); box-shadow:none;
+  }
+  .ask .t{color:var(--cma-deep); text-transform:uppercase; letter-spacing:.07em; font-size:12px}
+
+  .arrow{width:0; height:24px; border-left:1.6px solid var(--ink); position:relative; flex:none}
+  .arrow::after{
+    content:""; position:absolute; left:0; bottom:0; width:8px; height:8px;
+    border-right:1.6px solid var(--ink); border-bottom:1.6px solid var(--ink);
+    transform:translateX(-50%) rotate(45deg);
+  }
+  .branch{display:grid; grid-template-columns:1fr 1fr; gap:16px; width:100%; max-width:720px}
+  .chip{
+    display:inline-block; font-size:9.5px; font-weight:800; letter-spacing:.14em;
+    text-transform:uppercase; padding:2px 8px; margin-bottom:6px; border-radius:2px;
+    border:1.2px solid currentColor;
+  }
+  .chip.y{color:var(--grn)} .chip.n{color:var(--cma-red)} .chip.i{color:var(--ink-soft)}
+
+  /* ---- lanes ---- */
+  .lanes{display:grid; grid-template-columns:repeat(auto-fit,minmax(262px,1fr)); gap:16px}
+  .lane{background:var(--box); border:1.4px solid var(--ink); border-top:4px solid var(--cma-red); padding:15px 16px; box-shadow:var(--plate)}
+  .lane h3{margin:0 0 2px; font-size:12.5px; letter-spacing:.1em; text-transform:uppercase; font-weight:800}
+  .lane .when{font-family:"Courier New",monospace; font-size:10.5px; color:var(--ink-faint); margin-bottom:12px}
+  .mini{border:1.2px solid var(--line); border-radius:2px; padding:8px 11px; font-size:12.5px; background:#fff}
+  .mini+.mini{margin-top:8px}
+  .mini.ok{border-color:var(--grn); background:var(--grn-fill); color:#35512a}
+  .mini.bad{border-color:var(--cma-red); background:var(--red-fill); color:var(--cma-deep); font-weight:700}
+
+  /* ---- table ---- */
+  .tw{overflow-x:auto; border:1.4px solid var(--ink); background:var(--box); box-shadow:var(--plate)}
+  table{border-collapse:collapse; width:100%; min-width:740px; font-size:12.5px}
+  th{
+    text-align:left; font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:#fff;
+    background:var(--cma-red); font-weight:800; padding:9px 14px; white-space:nowrap;
+    border-right:1px solid rgba(255,255,255,.25);
+  }
+  th:last-child{border-right:none}
+  td{padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink-soft)}
+  tr:last-child td{border-bottom:0}
+  tr:nth-child(even) td{background:rgba(201,189,160,.13)}
+  td:first-child{color:var(--ink); font-weight:700}
+  td.moves{color:#22557c; font-weight:700}
+  td.none{color:var(--ink-faint)}
+
+  .panel{
+    margin-top:20px; background:var(--box); border:1.4px solid var(--ink);
+    border-left:5px solid var(--cma-red); padding:14px 16px; box-shadow:var(--plate);
+  }
+  .panel h4{margin:0 0 6px; font-size:11.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--cma-red); font-weight:800}
+  .panel p{margin:0; font-size:13px; color:var(--ink)}
+  .panel p+p{margin-top:9px}
+
+  .legend{display:flex; flex-wrap:wrap; gap:14px 22px; align-items:center; margin-top:16px;
+          background:var(--paper); border:1.5px solid var(--ink); padding:11px 15px}
+  .item{display:flex; align-items:center; gap:8px; font-size:12px}
+  .sw{width:22px; height:13px; border:1.4px solid; display:inline-block; border-radius:2px}
+  .sw.sig{border-color:var(--sig); background:var(--sig-fill)}
+  .sw.int{border-color:var(--int); background:var(--int-fill)}
+  .sw.wat{border-color:var(--wat); background:var(--wat-fill)}
+  .sw.red{border-color:var(--cma-red); background:var(--red-fill)}
+  .sw.grn{border-color:var(--grn); background:var(--grn-fill)}
+
+  .foot{background:var(--paper); border:1.5px solid var(--ink); border-top:none;
+        padding:13px 22px; font-size:11.5px; color:var(--ink-soft); letter-spacing:.03em}
+  @media (max-width:640px){ .branch{grid-template-columns:1fr} .head{gap:12px} }
+</style>
+
+<div class="wrap">
+
+  <div class="head">
+    <div class="badge"><div class="mark">C.M.A.</div><div class="sub">S.p.A. &middot; ITALIA</div></div>
+    <div>
+      <h1>Argenta SME &middot; Boot and Main Loop</h1>
+      <p class="s">Teensy 4.1 control firmware. Read out of <code>src-controller/main.cpp</code>, not from memory.
+      Every box says what the machine is doing, with the source file underneath.
+      None of this is test code: it is the ordinary work the firmware does on every pass.</p>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="shead"><span class="num">01</span><h2>Power on to idle</h2></div>
+    <p class="snote">Roughly two seconds, most of it waiting to see whether a PC is plugged into the USB port.</p>
+    <div class="rule"></div>
+
+    <div class="flow">
+      <div class="card term"><div class="t">Power on</div></div>
+      <div class="arrow"></div>
+
+      <div class="card red"><div class="t">Force every output off</div>
+        <div class="d">Heater, pump, both valves, cold inlet. The first line of setup, before the serial port exists. Nothing can print a banner about being safe before it is.</div>
+        <span class="src">safetyHandler</span></div>
+      <div class="arrow"></div>
+
+      <div class="card sig"><div class="t">Open the USB console</div>
+        <div class="d">Waits up to 1.5 s in case a PC is attached.</div></div>
+      <div class="arrow"></div>
+
+      <div class="card ask"><div class="t">Was a firmware update requested before the reboot?</div></div>
+      <div class="arrow"></div>
+      <div class="branch">
+        <div class="card red"><span class="chip n">Yes</span><div class="t">Sit in update mode</div>
+          <div class="d">Never returns. Nothing below this runs.</div><span class="src">updateMode</span></div>
+        <div class="card sig"><span class="chip i">No</span><div class="t">Carry on, print the banner</div>
+          <div class="d">Names the pins it has just forced safe.</div></div>
+      </div>
+      <div class="arrow"></div>
+
+      <div class="card sig"><div class="t">Bring the hardware up, in order</div>
+        <div class="d">Relay outputs, I2C bus, both temperature probes (taking one reading straight away), both flow meter inputs with their calibration, brew switch, scale, pump with both bridge inputs held low so it cannot creep, the heater's 10 ms timer, the three drink profiles, saved settings, and the link to the display.</div>
+        <span class="src">outputs &middot; i2cHandler &middot; tempHandler &middot; flowHandler &middot; switchHandler &middot; weightHandler &middot; pumpHandler &middot; heaterHandler &middot; shotHandler &middot; configStore &middot; commsHandler</span></div>
+      <div class="arrow"></div>
+
+      <div class="card ask"><div class="t">Does the knob answer on the I2C bus?</div></div>
+      <div class="arrow"></div>
+      <div class="branch">
+        <div class="card grn"><span class="chip y">Found</span><div class="t">Light it in the drink's colour</div></div>
+        <div class="card sig"><span class="chip i">Missing</span><div class="t">Carry on without it</div>
+          <div class="d">Not fatal. The brew switch still works.</div></div>
+      </div>
+      <div class="arrow"></div>
+
+      <div class="card ask"><div class="t">Start-up check &mdash; only two things are tested</div></div>
+      <div class="arrow"></div>
+      <div class="branch">
+        <div class="card red"><span class="chip n">Either fails</span><div class="t">Fault latched</div>
+          <div class="d">Last run ended in a watchdog reset, or the boiler probe gives no believable temperature. Every output stays off until somebody clears it by hand.</div></div>
+        <div class="card grn"><span class="chip y">Both pass</span><div class="t">Check passed</div>
+          <div class="d">Last run ended cleanly and the boiler probe reads sensibly.</div></div>
+      </div>
+      <div class="arrow"></div>
+
+      <div class="card red"><div class="t">Arm the watchdog</div>
+        <div class="d">From here, if the firmware hangs for 4 seconds the board resets itself.</div></div>
+      <div class="arrow"></div>
+
+      <div class="card term"><div class="t">Running, waiting for you</div>
+        <div class="d">Still cannot heat. No water probe exists, so the dry-fire interlock refuses.</div></div>
+    </div>
+
+    <div class="panel">
+      <h4>The start-up check is thinner than it looks</h4>
+      <p>Two tests: did the last run hang, and does the boiler probe read something believable. That is all.</p>
+      <p>Nothing checks the group probe, the flow meter, the scale, the knob, the link to the display, or whether the relay outputs actually work. <b>A dead group probe boots completely clean.</b></p>
+    </div>
+    <div class="panel">
+      <h4>Booted is not the same as ready to heat</h4>
+      <p>The dry-fire interlock has no water probe to ask, so it refuses. Correct behaviour, not a boot failure, but they are two different states and the machine looks identical in both.</p>
+    </div>
+
+    <div class="legend">
+      <span class="item"><span class="sw sig"></span>reads a sensor</span>
+      <span class="item"><span class="sw int"></span>heating</span>
+      <span class="item"><span class="sw wat"></span>moves something</span>
+      <span class="item"><span class="sw red"></span>safety / fault</span>
+      <span class="item"><span class="sw grn"></span>passed</span>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="shead"><span class="num">02</span><h2>The main loop</h2></div>
+    <p class="snote">The same list, in the same order, over and over. Worst single pass measured is 0.2 ms, so this runs thousands of times a second.</p>
+    <div class="rule"></div>
+
+    <div class="flow">
+      <div class="card term"><div class="t">Top of the loop</div></div>
+      <div class="arrow"></div>
+      <div class="card red"><div class="t">Tell the watchdog the firmware is alive</div>
+        <div class="d">If this stops happening, the board resets in 4 seconds.</div></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Read both temperature probes</div>
+        <div class="d">Boiler and group. A stale reading counts as no reading, never the last good value.</div><span class="src">tempHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Work out water flow and volume</div>
+        <div class="d">From the pulses counted since the last pass, on both meters.</div><span class="src">flowHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Read the brew switch</div>
+        <div class="d">Debounce it, and tell a tap from a hold.</div><span class="src">switchHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card int"><div class="t">Boiler temperature control</div>
+        <div class="d">Run the PID, check every safety gate, then allow or forbid heating. It does not switch the element itself.</div><span class="src">heaterHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card wat"><div class="t">Run whatever sequence is going</div>
+        <div class="d">Shot, flush, backflush or boiler fill. One at a time, never two. This is the thing that opens valves and calls for pump speed.</div><span class="src">shotHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card wat"><div class="t">Apply the pump speed that was asked for</div>
+        <div class="d">And stop if that request has gone stale.</div><span class="src">pumpHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Read the scale</div><span class="src">weightHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Read the knob</div>
+        <div class="d">Only if it has flagged that something happened.</div><span class="src">encoderHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Talk to the display</div>
+        <div class="d">Send readings out, take settings and requests in. Drives nothing in the control path.</div><span class="src">commsHandler</span></div>
+      <div class="arrow"></div>
+      <div class="card sig"><div class="t">Save any changed setting</div><span class="src">configStore</span></div>
+      <div class="arrow"></div>
+      <div class="card ask"><div class="t">Is a fault latched?</div></div>
+      <div class="arrow"></div>
+      <div class="branch">
+        <div class="card red"><span class="chip n">Yes</span><div class="t">Everything off, now</div><span class="src">safetyHandler</span></div>
+        <div class="card sig"><span class="chip i">No</span><div class="t">Handle anything typed at the console</div></div>
+      </div>
+      <div class="arrow"></div>
+      <div class="card term"><div class="t">Back to the top</div>
+        <div class="d">Once a second, if nothing is switched on, print a one-line status first.</div></div>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="shead"><span class="num">03</span><h2>What each step reads, decides and switches</h2></div>
+    <p class="snote">The last column is the one that matters. Only two rows have anything in it.</p>
+    <div class="rule"></div>
+    <div class="tw">
+      <table>
+        <thead><tr><th>What it does</th><th>Reads</th><th>Decides</th><th>Actually switches</th></tr></thead>
+        <tbody>
+          <tr><td>Read the temperature probes</td><td>both probes over SPI</td><td>healthy or stale; stale counts as <i>no</i> reading</td><td class="none">nothing</td></tr>
+          <tr><td>Work out flow</td><td>the two pulse counters</td><td>millilitres and ml per second</td><td class="none">nothing</td></tr>
+          <tr><td>Read the brew switch</td><td>the switch pin</td><td>debounce; tap versus hold</td><td class="none">nothing</td></tr>
+          <tr><td>Boiler temperature control</td><td>boiler temp, target, every safety gate</td><td>how hard to heat, and whether heating is allowed at all</td><td class="none">nothing directly; the 10 ms timer does it</td></tr>
+          <tr><td>Run the active sequence</td><td>switch taps, weight, volume, the clock</td><td>which sequence, which stage, when to stop</td><td class="moves">group valve, fill valve, cold inlet, pump speed</td></tr>
+          <tr><td>Apply pump speed</td><td>the speed last asked for</td><td>has that request gone stale</td><td class="moves">both pump bridge inputs</td></tr>
+          <tr><td>Read the scale</td><td>the two load cells</td><td>grams, and whether to trust them</td><td class="none">nothing</td></tr>
+          <tr><td>Read the knob</td><td>the knob, when it flags activity</td><td>turns and presses</td><td class="none">the knob's own light</td></tr>
+          <tr><td>Talk to the display</td><td>the serial link</td><td>what to send, what to accept</td><td class="none">nothing in the control path</td></tr>
+          <tr><td>Save settings</td><td>which settings changed</td><td>when to actually write to memory</td><td class="none">nothing</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h4>Only two of the ten move anything</h4>
+      <p>Boiler temperature control and the sequence runner. Everything above them turns sensors into numbers; everything below carries out instructions. When something physically misbehaves, those two are where to look first.</p>
+      <p>The fault check sits near the bottom, after every handler has already run. It is a backstop, not the mechanism: each handler refuses on its own when a fault is latched.</p>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="shead"><span class="num">04</span><h2>What happens outside the loop</h2></div>
+    <p class="snote">The loop does not switch the element. This is where the safety actually lives, and you cannot see it by reading the loop.</p>
+    <div class="rule"></div>
+    <div class="lanes">
+      <div class="lane">
+        <h3>The element's own timer</h3>
+        <div class="when">every 10 ms &middot; regardless of the loop</div>
+        <div class="mini">Has the loop allowed heating, and was that within the last <b>500 ms</b>?</div>
+        <div class="mini ok">Yes &rarr; switch the element on for its share of the window</div>
+        <div class="mini bad">No, or too old &rarr; element OFF</div>
+      </div>
+      <div class="lane">
+        <h3>The pump's speed request</h3>
+        <div class="when">expires after 1.5 s</div>
+        <div class="mini">Was a speed asked for again within <b>1.5 s</b>?</div>
+        <div class="mini ok">Yes &rarr; keep running</div>
+        <div class="mini bad">No &rarr; stop</div>
+      </div>
+      <div class="lane">
+        <h3>The watchdog</h3>
+        <div class="when">hardware &middot; 4 s</div>
+        <div class="mini">Has the firmware checked in within <b>4 s</b>?</div>
+        <div class="mini ok">Yes &rarr; carry on</div>
+        <div class="mini bad">No &rarr; RESET THE BOARD</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h4>Staying on requires constantly saying "still here"</h4>
+      <p>If the firmware hangs, the heater does not stay on. Permission to heat goes stale within 500 ms and the timer switches the element off; the pump stops at 1.5 s; the watchdog resets the board at 4 s. <b>The safe state is what you get by doing nothing.</b></p>
+      <p>The one stop with no sensor behind it is the shot's time limit. Weight and volume both rely on a sensor that can fail silently and never report the number being waited for. The clock cannot. Same reasoning for the flush cap, the backflush timings and the boiler fill's time cap.</p>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="shead"><span class="num">05</span><h2>The display, in one paragraph</h2></div>
+    <div class="rule"></div>
+    <p class="snote" style="margin-bottom:0">The ESP32-S3 starts up on its own, brings up the screen, joins WiFi, serves the web pages and sends its stored settings down to the Teensy. After that it reads the Teensy's status and redraws. It switches nothing and holds no safety: a touch is a request, and the Teensy decides. If either board reboots, the two notice and re-sync by themselves.</p>
+  </div>
+
+  <div class="foot">
+    STILL TO DRAW, SAME TREATMENT &middot; the shot sequence and its stop conditions &middot; the chain of gates the heater has to pass &middot; how faults latch and clear
+  </div>
+
+</div>

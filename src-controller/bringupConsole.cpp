@@ -110,7 +110,7 @@ namespace {
         Serial.println("  backflush start|stop   run or abort a cycle");
         Serial.println("  fill              boiler fill: state and settings");
         Serial.println("  fill start|stop   fill the boiler (replaces the manual fill lever)");
-        Serial.println("  fill cap <ml>     volume to stop at - set it to the boiler's capacity");
+        Serial.println("  fill capacity <ml>  how much water the boiler holds when full");
         Serial.println("  fill pump <%>     pump speed while filling");
         Serial.println("  fill maxms <ms>   fill timeout, 10000-1800000, cannot be disabled");
         Serial.println("  flush             manual grouphead flush: state and settings");
@@ -989,17 +989,17 @@ namespace {
             else if (strcasecmp(argument, "stop") == 0) {
                 shot::stopBoilerFill("console");
             }
-            else if (strcasecmp(argument, "cap") == 0) {
+            else if (strcasecmp(argument, "capacity") == 0) {
                 if (a2 == nullptr) {
-                    Serial.println("usage: fill cap <millilitres the boiler holds>");
+                    Serial.println("usage: fill capacity <millilitres the boiler holds when full>");
                 }
-                else if (shot::setMaxBoilerFillMl(atof(a2))) {
-                    Serial.print("fill cap set to ");
-                    Serial.print(shot::maxBoilerFillMl(), 0);
+                else if (shot::setBoilerCapacityMl(atof(a2))) {
+                    Serial.print("boiler capacity set to ");
+                    Serial.print(shot::boilerCapacityMl(), 0);
                     Serial.println(" ml");
                 }
                 else {
-                    Serial.println("REFUSED: the cap must be greater than zero");
+                    Serial.println("REFUSED: the capacity must be greater than zero");
                 }
             }
             else if (strcasecmp(argument, "pump") == 0) {
@@ -1028,7 +1028,7 @@ namespace {
                 }
             }
             else {
-                Serial.println("usage: fill | fill start|stop | fill cap <ml> | fill pump <%> | fill maxms <ms>");
+                Serial.println("usage: fill | fill start|stop | fill capacity <ml> | fill pump <%> | fill maxms <ms>");
             }
         }
         else if (strcasecmp(command, "flowreset") == 0) {
