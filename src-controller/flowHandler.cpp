@@ -61,10 +61,11 @@ namespace flow {
         constexpr int kEepromAddressFlow1 = 528;
 
         Sensor sensors[kChannelCount] = {
-            // Flow1: net FLOW1, FLOW_SENS1, the Gicar
+            // Flow1: net FLOW1, FLOW_SENS1, the Gicar on 10_CS_MQSR - and the
+            // ACTIVE channel since 2026-11-24. See kActiveChannel.
             {"FLOW1", PIN_FLOW_GICAR, kGicarPulsesPerLitre, kEepromAddressFlow1, 0, 0, 0, 0, kGicarPulsesPerLitre, 0, 0, 0.0},
-            // Flow2: net FLOW2, DIGMESA1, the DM60 Nano - and PIN_FLOW, the
-            // active channel
+            // Flow2: net FLOW2, DIGMESA1, the DM60 Nano on 9_OUT1C. Counted,
+            // but nothing reads it and nothing is wired to it on the bench.
             {"FLOW2", PIN_FLOW_DIGMESA, kDefaultPulsesPerLitre, kEepromAddressFlow2, 0, 0, 0, 0, kDefaultPulsesPerLitre, 0, 0, 0.0},
         };
 

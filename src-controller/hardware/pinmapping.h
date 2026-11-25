@@ -37,52 +37,51 @@
 #define PIN_BREWSWITCH      24 // BPSW_SW1; external 10k pull-DOWN (R9) + 100nF (C5)
                                // on the signal, so the finished board is ACTIVE HIGH.
                                // JP2 is gone - see teensy-pinout-review.md.
-#define PIN_WATERTANKSENSOR 26 // single boiler-level probe (AC-excited, opto-isolated),
-                               // NOT an external reservoir float switch.
+#define PIN_WATERTANKSENSOR 41 // W_SENS1, net WATER, on 41_A17. Single boiler-level
+                               // probe (AC-excited, opto-isolated), NOT an external
+                               // reservoir float switch. Moved off 26_A12_MOSI1 for
+                               // routing, 2026-11-24. Only ever digitalRead, so the
+                               // analog capability of either pin is incidental.
                                // See documents/boiler-level-probe-sensing.md
 // --- Flow: TWO sensors on the board, ONE counter in firmware so far -----
 //
-// Schematic 2026-11-17, read from a fresh kicad-cli netlist export:
+// FINAL PCB, 2026-11-24, read from a fresh kicad-cli netlist export:
 //
-//   FLOW1  FLOW_SENS1 (Gicar, 1/4" 3-wire open collector) -> 7_RX2_OUT1A
+//   FLOW1  FLOW_SENS1 (Gicar, 1/4" 3-wire open collector) -> 10_CS_MQSR
 //          own pull-up R10 4k7, own filter C14
-//   FLOW2  DIGMESA1   (Digmesa DM60 Nano, high resolution) -> 10_CS_MQSR
+//   FLOW2  DIGMESA1   (Digmesa DM60 Nano, high resolution) -> 9_OUT1C
 //          own pull-up R21 4k7, own filter C15
 //
 // Both connectors stay on the board deliberately - John, 2026-11-17. They
 // were briefly on one shared net while the Digmesa was being added; they are
 // not any more, and each sensor now has its own front end.
 //
-// WHY THE DIGMESA GOT 10_CS_MQSR. It is one of only eight Teensy 4.1 pins
-// with QuadTimer hardware input capture - 10, 11, 12, 13, 14, 15, 18, 19,
-// verified against the core's own pwm.c and FreqMeasureMulti tables - and
-// seven of those eight are already committed on this board (SPI 11/12/13,
-// boiler RTD CS 15, I2C 18/19, and 14 held for the heater monitor wire). The
-// 25x-higher-resolution sensor is the one that benefits from it.
-// 7_RX2_OUT1A is FlexPWM1_3_B and has no capture at all.
+// THE TWO SWAPPED PINS on 2026-11-24, for PCB routing, and that CHANGED WHICH
+// SENSOR IS THE ACTIVE ONE - see kActiveChannel in flowHandler.h, now Flow1.
 //
-// NOTHING USES THE CAPTURE HARDWARE YET. flowHandler counts PIN_FLOW with
-// attachInterrupt, which is ample for either sensor: the DM60 is about 98 Hz
-// at espresso flow and 740 Hz at a 15 ml/s flush, and the Gicar measured
-// 28.0 Hz at 80% pump on the analyser. Capture would buy jitter-free
-// per-pulse timing, which only matters if flow ever drives a control loop
-// instead of totalising.
-#define PIN_FLOW_GICAR    7 // FLOW1
-#define PIN_FLOW_DIGMESA 10 // FLOW2, the capture-capable one
+// The old arrangement put the Digmesa on 10_CS_MQSR for its QuadTimer input
+// capture, which only 10, 11, 12, 13, 14, 15, 18 and 19 have. That reasoning
+// no longer applies and nothing is lost by it: NOTHING USES THE CAPTURE
+// HARDWARE. flowHandler counts with attachInterrupt on a falling edge, which
+// works on any Teensy 4.1 digital pin and is ample for either sensor - the
+// DM60 is about 98 Hz at espresso flow and 740 Hz at a 15 ml/s flush, and the
+// Gicar measured 28.0 Hz at 80% pump on the analyser. Capture would buy
+// jitter-free per-pulse timing, which only matters if flow ever drives a
+// control loop instead of totalising.
+#define PIN_FLOW_GICAR   10 // FLOW1, and the ACTIVE channel
+#define PIN_FLOW_DIGMESA  9 // FLOW2, counted but nothing reads it
 
-// The single input the firmware actually counts today.
+// The pin the firmware actually counts, on the bench AND on the PCB.
 //
-// IT STAYS ON 10 AND THAT IS DELIBERATE. No PCB has been fabricated, so the
-// bench is hand-wired and the GICAR is physically on 10 right now - pointing
-// this at 7 would silently kill flow on the only hardware that exists. On the
-// finished board 10 is the Digmesa, so this define is right in both worlds
-// and only the calibration changes with the sensor.
+// 10_CS_MQSR in both worlds, and after the swap it is the GICAR in both: the
+// hand-wired bench has the Gicar physically on 10, and the finished board
+// routes FLOW1 there. That is simpler than what came before, where this pin
+// was the Gicar on the bench but the Digmesa on the board and only the
+// calibration differed - by 25x.
 //
-// THE CALIBRATION IS THE TRAP, NOT THE PIN. Gicar 1965 pulses/litre against
-// the DM60's 49162, 25x apart, and kDefaultPulsesPerLitre in flowHandler.h is
-// still the DM60's - so a full EEPROM erase on today's bench silently
-// restores a 25x error. That exact bug already cost a session; see
-// NOTES-HISTORY.md, the flow entry.
+// DOCUMENTATION ONLY. No code reads this define; flowHandler's sensor table
+// uses the two named defines above. It is here because several comments name
+// it, and because it records which pin carries the number that stops a shot.
 #define PIN_FLOW            10
 #define PIN_ENC_INT         25 // Duppa encoder INT, open-drain, R13 pull-up on board
 
@@ -102,23 +101,50 @@
                      // sits on the symbol pin whose name is 4_BCLK2, i.e. the
                      // pad printed 4. Normally closed means no power, no water.
 
-// --- Pump, a DRV8871 H-bridge: BOTH inputs are driven -------------------
+// --- Pump, a DRV8876 H-bridge: BOTH inputs are driven -------------------
+//
+// The driver became a DRV8876 board on 2026-11-23, the DRV8871 having died
+// with the second Teensy. In PWM mode its truth table is IDENTICAL - IN1=1/
+// IN2=0 forward, 1/1 brake, 0/1 reverse, 0/0 coast - so none of the drive
+// logic changed. PUMP1 grew from four pins to six; see CLAUDE.md for the
+// connector and NOTES-HISTORY.md for why.
 //
 // IN1 is held HIGH while running and IN2 carries the PWM, so the bridge
 // alternates between DRIVING and BRAKING rather than driving and coasting.
-// That is slow-decay drive, and it is what the DRV8871 datasheet asks for
-// when the point is speed control: coasting between pulses gives poor torque
-// at low duty, which on the bench meant nothing moved below about 56%.
+// That is slow-decay drive, and it is what the datasheet asks for when the
+// point is speed control: coasting between pulses gives poor torque at low
+// duty, which on the bench meant nothing moved below about 56%.
 //
 // The duty on IN2 is INVERTED - it is the braking fraction, so 0 on IN2 is
 // full speed. pumpHandler does that conversion.
 //
-// ORDER MATTERS. IN1 low with IN2 high is REVERSE on this chip, so IN2 is
+// ORDER MATTERS. IN1 low with IN2 high is REVERSE on this chip too, so IN2 is
 // always taken down before IN1, and IN1 is always raised before IN2 is
 // pulsed. Both low is coast, which is the safe state and what the board's
 // pulldowns give while the Teensy pins float at reset.
-#define PIN_PUMP_IN1 9 // -> PMP_IN1 -> DRV8871 IN1, held high while running
-#define PIN_PUMP_IN2 6 // -> PMP_IN2 -> DRV8871 IN2, carries the 20 kHz PWM
+#define PIN_PUMP_IN1  7 // -> PMP_IN1 -> EN/IN1, held high while running.
+                        // 7_RX2_OUT1A. Moved off 9_OUT1C for routing 2026-11-24.
+#define PIN_PUMP_IN2  6 // -> PMP_IN2 -> PH/IN2, carries the 20 kHz PWM.
+                        // 6_OUT1D, unmoved. FlexPWM2_2_A.
+
+// --- Pump feedback: NEITHER IS READ BY ANY FIRMWARE YET -----------------
+//
+// Both are new with the DRV8876 and exist only on the PCB, which has not been
+// fabricated. Nothing initialises or samples them; they are here so the pin
+// map is complete and so nobody allocates these pins to something else.
+//
+// PMP_FAULT is the driver's own nFAULT: open drain, pulled up to 3V3 on our
+// board, LOW when the chip has shut the bridge down for overcurrent, supply
+// undervoltage, charge-pump undervoltage or over-temperature. Unambiguous
+// only because R2 on the module is bridged to 0R - at its shipped 20k it
+// would also pulse on every current chop.
+//
+// PMP_CS is the driver's IPROPI current output into a resistor on the module:
+// 2.49 V per amp, with the chip's own hardware limit at 1.33 A, so the ADC's
+// full scale and the trip point coincide. Analog, hence 27_A13_SCK1 - most of
+// this board's free pins cannot read analog at all.
+#define PIN_PUMP_FAULT 28 // 28_RX7,      digital in, active LOW
+#define PIN_PUMP_CS    27 // 27_A13_SCK1, analog in, 2.49 V/A
 
 // --- Shared SPI: both MAX31865 RTD boards -------------------------------
 // The Teensy core's own pins_arduino.h already defines these three, with exactly
@@ -177,20 +203,27 @@
  */
 #define LINK_SERIAL Serial1
 
-// Spare, re-checked against the schematic 2026-11-17: D17, D20-D23, D27-D37,
-// D41 and the analog-only pins.
+// SPARE, read from a kicad-cli netlist export of the FINAL layout, 2026-11-24:
 //
-// Three corrections from that check, all of which this list previously got
-// wrong:
-//   D7  is NOT spare - it is FLOW1, the Gicar, as of 2026-11-17.
-//   D8  is NOT spare - 8_TX2_IN1 carries net LED into the 74AHCT1G125 (U1)
-//       and on to the LED1 connector. Serial2 is therefore NOT free either,
-//       since D7/D8 are its pair.
-//   D14 is free on the board but SPOKEN FOR in firmware as kPinHtrRlMonitor,
-//       the wire fitted by hand for ulntest and the heater duty measurement.
-//       Taking it costs that test. See BENCH.md.
+//   8_TX2_IN1, 14_A0_TX3_SPDIF_OUT, 17_A3_TX4_SDA1, 20_A6_TX5_LRCLK1,
+//   21_A7_RX5_BCLK1, 23_A9_CRX1_MCLK1, 26_A12_MOSI1, 29_TX7, 30_CRX3,
+//   31_CTX3
 //
-// D4 went to the cold inlet valve and D6 to the pump's second bridge input.
+// plus the GPIO1 header, which already breaks out 32_OUT1B, 33_MCLK2,
+// 34_RX8, 35_TX8, 36_CS and 37_CS.
+//
+// Two of those are not as free as they look:
+//   14_A0_TX3_SPDIF_OUT is unconnected on the board but SPOKEN FOR in
+//       firmware as kPinHtrRlMonitor (heaterHandler.h), the wire fitted by
+//       hand for ulntest and the heater duty measurement. Taking it costs
+//       that test. See BENCH.md.
+//   8_TX2_IN1 came free when net LED moved off it on 2026-11-24, and Serial2
+//       with it, since 7_RX2_OUT1A/8_TX2_IN1 are its pair - but 7_RX2_OUT1A
+//       is now PMP_IN1, so Serial2 is NOT usable as a UART.
+//
+// ANYTHING ANALOG MUST LAND ON 14-27 OR 38-41. Of the spares that means
+// 14, 17, 20, 21, 23 and 26 only; 29-37 are digital-only, the GPIO1 header
+// included. Drawing PMP_CS on 28_RX7 cost a round trip on 2026-11-23.
 
 #else
 

@@ -11,25 +11,28 @@
  * TWO INPUTS, NAMED AFTER THE NETS ON THE SCHEMATIC so the code and the KiCad
  * sheet use one vocabulary:
  *
- *   Channel::Flow1   net FLOW1, 7_RX2_OUT1A,  connector FLOW_SENS1 (Gicar)
- *   Channel::Flow2   net FLOW2, 10_CS_MQSR,   connector DIGMESA1   (DM60 Nano)
+ *   Channel::Flow1   net FLOW1, 10_CS_MQSR,  connector FLOW_SENS1 (Gicar)
+ *   Channel::Flow2   net FLOW2, 9_OUT1C,     connector DIGMESA1   (DM60 Nano)
+ *
+ * Those two pins SWAPPED on 2026-11-24 when John finished the PCB layout.
  *
  * Each has its own 4k7 pull-up and filter cap on the board, its own interrupt,
  * its own counters and its own stored calibration. They share nothing but this
  * file.
  *
- * ONE OF THEM IS THE ACTIVE ONE and it is Flow2, because that is PIN_FLOW - see
- * kActiveChannel below. Every function here that takes no Channel addresses the
- * active one, so brew-by-volume, telemetry and the console all behave exactly as
- * they did when this module knew about a single sensor. Pass a Channel only when
- * you specifically mean the other input.
+ * ONE OF THEM IS THE ACTIVE ONE and it is Flow1, the Gicar - see kActiveChannel
+ * below, which explains why the swap moved it. Every function here that takes no
+ * Channel addresses the active one, so brew-by-volume, telemetry and the console
+ * all behave exactly as they did when this module knew about a single sensor.
+ * Pass a Channel only when you specifically mean the other input.
  *
  * WHY THE SECOND ONE IS NOT CONNECTED TO ANYTHING YET. The board carries both
  * connectors deliberately, but no PCB has been fabricated and the bench is
- * hand-wired with the Gicar on pin 10 - physically the active channel. So Flow1
- * counts nothing today. Its pin sits at the internal pull-up with no sensor on
- * it, which produces no edges and costs nothing; if it ever starts counting on
- * an empty connector, something is driving that pin and that is worth knowing.
+ * hand-wired with only the Gicar, on pin 10 - physically the active channel. So
+ * Flow2 counts nothing today. Its pin sits at the internal pull-up with no
+ * sensor on it, which produces no edges and costs nothing; if it ever starts
+ * counting on an empty connector, something is driving that pin and that is
+ * worth knowing.
  *
  * THE CALIBRATIONS ARE 25x APART AND THAT IS THE REAL TRAP, not the pins. The
  * Gicar measures 1965 pulses/litre and the DM60 is 49162. Reading one sensor
@@ -114,12 +117,24 @@ namespace flow {
     /**
      * The channel every no-argument function below addresses.
      *
-     * Flow2, because that is PIN_FLOW. On the finished board that is the
-     * Digmesa, and on today's hand-wired bench it is where the Gicar is
-     * physically plugged in - so it is the right answer in both worlds and
+     * FLOW1, THE GICAR, SINCE 2026-11-24 - it was Flow2 until then and the
+     * change is not cosmetic. This is the number that stops a shot.
+     *
+     * The rule has always been "the active channel is whatever sits on
+     * 10_CS_MQSR", because that is where the Gicar is physically plugged in
+     * on the hand-wired bench. Flow2 satisfied that until John swapped FLOW1
+     * and FLOW2 for PCB routing; after the swap Flow2 is the Digmesa on
+     * 9_OUT1C, which nothing is wired to on the bench. Leaving this as Flow2
+     * would have counted an unconnected pin - no error, no pulses, every shot
+     * silently running to its time backstop instead of its volume target.
+     *
+     * Flow1 is now the Gicar on 10_CS_MQSR on the bench AND on the PCB, so
      * nothing that stops a shot has to know which board it is running on.
+     * It also retires an old trap: the two meters are 25x apart in pulses per
+     * litre, and the active channel's default is now kGicarPulsesPerLitre,
+     * the figure actually measured, rather than the DM60's.
      */
-    constexpr Channel kActiveChannel = Channel::Flow2;
+    constexpr Channel kActiveChannel = Channel::Flow1;
 
     /**
      * Pulses per litre for Flow2, from the sensor's own datasheet.
