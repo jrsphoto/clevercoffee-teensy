@@ -454,17 +454,45 @@ namespace shot {
     /**
      * How much water the boiler holds, in millilitres. A PLACEHOLDER.
      *
-     * The real number is how much this boiler holds when empty, which is not
-     * in the manual section that describes the fill and is not something to
-     * invent - the same refusal as kDefaultFlushMsPerDegree below. One litre
-     * is small enough that it cannot overfill any boiler this machine might
-     * have, so the failure mode of the placeholder is a fill that stops early
-     * and has to be re-issued, which is merely annoying.
+     * A BACKSTOP, NOT A TARGET, and deliberately BELOW the vessel's volume.
      *
-     * Set it with `fill capacity <ml>` once the boiler has been measured.
-     * printStatus() says UNSET until then.
+     * This is a HEAT EXCHANGER boiler: a steam boiler run only part full, with
+     * a steam headspace above the water and the brew exchanger passing through
+     * it. The manual gives the VESSEL as 5 litres for the JUNIOR (technical
+     * characteristics table, cross-checked against the 2000 W / 120 V figure in
+     * the same column - see ../documents/thermal-management.md) and gives the
+     * water volume NOWHERE. It only ever says to read the level-check window.
+     *
+     * So 5000 would be the wrong number to stop at. Filling past the correct
+     * level does not vent anywhere: the manual's fault table lists the symptom
+     * as "STEAM MIXED WITH WATER COMES OUT OF THE NOZZLES - the boiler level is
+     * too high". Too much water simply means too little steam space. The 2 bar
+     * safety valve only enters it if the boiler goes essentially solid, at
+     * which point water does not compress and pressure climbs on almost no
+     * extra volume. A stop set at the vessel's volume therefore fires only
+     * once the machine is already in the state it was meant to prevent.
+     *
+     * 4000 leaves roughly a litre of steam space. The two-thirds-to-three-
+     * quarters fill it assumes is general to heat exchanger boilers and is NOT
+     * from this manual, so treat it as a guard rail and nothing more. It is
+     * comfortably above any plausible real fill, so it cannot cut one short.
+     *
+     * Was 1000.0 until 2026-11-24 - chosen when no figure was known at all, on
+     * the reasoning that a litre could not overfill any boiler. Against a 5
+     * litre vessel that is several times short, so every real fill would have
+     * stopped early and needed re-issuing.
+     *
+     * Note the OEM guarded this with TIME, not volume: the manual's automatic
+     * fill cuts off after roughly 30 seconds, and says a first fill on a larger
+     * machine may legitimately exceed it. kDefaultMaxBoilerFillMs below is this
+     * firmware's equivalent and is the stop with no sensor behind it.
+     *
+     * THE REAL NUMBER COSTS NOTHING TO GET and does not need the boiler out of
+     * the machine: run `fill start`, watch the glass, `fill stop` when the
+     * level is right, and read off what the console reported. Then
+     * `fill capacity <ml>`. printStatus() says UNSET until that is done.
      */
-    constexpr double kDefaultBoilerCapacityMl = 1000.0;
+    constexpr double kDefaultBoilerCapacityMl = 4000.0;
 
     /**
      * Hard ceiling on a fill, always enforced.
